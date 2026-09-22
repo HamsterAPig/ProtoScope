@@ -1,6 +1,9 @@
 #include "script_host_internal.hpp"
+#include "control_properties.hpp"
+#include "control_data_binding.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <exception>
 #include <filesystem>
 #include <optional>
@@ -11,6 +14,45 @@
 namespace protoscope::scripting {
 
 namespace {
+
+    bool canReuseControlValue(const ControlDescriptor& previous,
+                              const ControlDescriptor& next,
+                              const ControlValue& value)
+    {
+        if (previous.type != next.type || !validateControlValue(next, value)) {
+            return false;
+        }
+        switch (next.type) {
+        case ControlType::Label:
+        case ControlType::Readout:
+        case ControlType::Indicator:
+        case ControlType::Progress:
+        case ControlType::Button:
+        case ControlType::ValueTable:
+        case ControlType::DataTable:
+            return false;
+        case ControlType::Combo:
+        case ControlType::RadioGroup: {
+            const auto index = std::get<int>(value);
+            return index >= 0 && static_cast<std::size_t>(index) < next.comboOptions.size() &&
+                   static_cast<std::size_t>(index) < previous.comboOptions.size() &&
+                   previous.comboOptions[index] == next.comboOptions[index];
+        }
+        case ControlType::InputFloat:
+            return std::isfinite(std::get<float>(value));
+        case ControlType::TxSequence:
+            // 发送字段的结构或选项变化后旧帧不再可信，整体回退到脚本默认值。
+            return previous.txSequenceFields.size() == next.txSequenceFields.size() &&
+                std::equal(previous.txSequenceFields.begin(), previous.txSequenceFields.end(),
+                           next.txSequenceFields.begin(), [](const auto& lhs, const auto& rhs) {
+                    return lhs.id == rhs.id && lhs.type == rhs.type && lhs.options.size() == rhs.options.size() &&
+                        std::equal(lhs.options.begin(), lhs.options.end(), rhs.options.begin(),
+                                   [](const auto& a, const auto& b) { return a.value == b.value; });
+                });
+        default:
+            return true;
+        }
+    }
 
     std::optional<std::filesystem::path> resolveScriptFilePath(const std::string& path, std::string& error)
     {
@@ -144,6 +186,8 @@ void ScriptHost::resetForScriptLoad(const std::string& path, const std::string& 
 
 void ScriptHost::configureLuaRuntimeForScriptLoad(Runtime& runtime, const std::string& protocolDirectory)
 {
+    runtime.data = std::make_unique<ScriptDataSession>(
+        storageRoot_, canonicalPath(protocolDirectory).generic_string(),storageConfig_);
     runtime.lua.open_libraries(sol::lib::base,
                                sol::lib::math,
                                sol::lib::package,
@@ -182,7 +226,7 @@ void ScriptHost::configureLuaRuntimeForScriptLoad(Runtime& runtime, const std::s
     auto proto = lua.create_named_table("proto");
 
     // 核心流程：所有脚本侧能力统一经由模块注册器挂到 proto.*，避免加载流程继续膨胀。
-    registerLuaApi(lua, proto);
+    registerLuaApi(runtime, proto);
 }
 
 std::unique_ptr<ScriptHost::LoadedScript> ScriptHost::loadScriptIntoRuntime(Runtime& runtime,
@@ -190,6 +234,7 @@ std::unique_ptr<ScriptHost::LoadedScript> ScriptHost::loadScriptIntoRuntime(Runt
                                                                             std::string& error)
 {
     auto& lua = runtime.lua;
+    LuaExecutionScope execution(lua.lua_state(), runtime.execution, *stopSignal_, executionConfig_.loadTimeoutMs);
     auto scriptResult = lua.safe_script_file(path, &sol::script_pass_on_error);
     if (!scriptResult.valid()) {
         error = "执行脚本失败: " + protectedCallError(scriptResult);
@@ -209,6 +254,13 @@ std::unique_ptr<ScriptHost::LoadedScript> ScriptHost::loadScriptIntoRuntime(Runt
         error = std::move(parseError);
         return nullptr;
     }
+    runtime.data->loadSchemas(lua);
+    validateControlBindings(*parsedDocks,runtime.data->schemas());
+    validateDataTables(*parsedDocks,runtime.data->schemas());
+    if (runtime.execution.failure != nullptr || stopSignal_->load(std::memory_order_relaxed)) {
+        error = runtime.execution.failure != nullptr ? runtime.execution.failure : "Lua execution stopped";
+        return nullptr;
+    }
 
     auto loadedScript = std::make_unique<LoadedScript>();
     loadedScript->streamSchema = std::move(streamSchema);
@@ -224,20 +276,33 @@ void ScriptHost::commitLoadedScript(std::unique_ptr<Runtime> runtime,
 {
     std::vector<ControlDescriptor> nextControls;
     std::unordered_map<std::string, ControlValue> nextControlValues;
-    for (const auto& dock : loadedScript->docks) {
-        for (const auto& control : dock.controls) {
+    for (auto& dock : loadedScript->docks) {
+        for (auto& control : dock.controls) {
+            control.runtimeGeneration = runtimeGeneration_ + 1;
             nextControls.push_back(control);
             const auto existing = previousControlValues.find(control.id);
-            nextControlValues[control.id] =
-                existing == previousControlValues.end() ? defaultValueFor(control) : existing->second;
+            const auto* previous = findControlDescriptor(controls_, control.id);
+            // 控件 ID 相同不足以复用；实测表值和发送运行状态属于当前运行时。
+            auto value = existing != previousControlValues.end() && previous != nullptr &&
+                         canReuseControlValue(*previous, control, existing->second)
+                ? existing->second : defaultValueFor(control);
+            if (auto* sequence = std::get_if<TxSequenceValue>(&value)) {
+                sequence->running = false;
+            }
+            nextControlValues[control.id] = std::move(value);
         }
     }
 
     runtime->stream = std::move(loadedScript->streamSchema);
     runtime_ = std::move(runtime);
+    ++runtimeGeneration_;
     docks_ = std::move(loadedScript->docks);
     controls_ = std::move(nextControls);
     controlValues_ = std::move(nextControlValues);
+    runtime_->tables=std::make_unique<DataTableSession>(controls_,*runtime_->data);
+    runtime_->data->setExportAuthorizer([this](const std::string& target){return authorizeRecordExport(target);});
+    runtime_->data->setImportAuthorizer([this](const std::string& target){return authorizeRecordImport(target);});
+    configureDataBindings();
     scriptPath_ = path;
     protocolDirectory_ = protocolDirectory;
     lastError_.clear();
@@ -255,7 +320,13 @@ bool ScriptHost::loadScriptFile(const std::string& path)
     }
 
     auto snapshot = captureLoadSnapshot();
+    auto* previousData=runtime_ ? runtime_->data.get():nullptr;
+    bool storageSuspended=false;
     auto restoreFailure = [&](std::string message) {
+        if (storageSuspended && runtime_ && runtime_->data.get()==previousData) {
+            try {previousData->resumeStorage();}
+            catch (const std::exception& error) {message+="; 恢复旧存储失败: "+std::string(error.what());}
+        }
         restoreLoadSnapshot(std::move(snapshot), std::move(message));
         return false;
     };
@@ -272,12 +343,17 @@ bool ScriptHost::loadScriptFile(const std::string& path)
             return restoreFailure(std::move(error));
         }
 
+        // 排空并关闭旧原生连接后才允许新会话取得写者资格；激活失败恢复旧回调和存储队列。
+        if (previousData) {storageSuspended=true;previousData->suspendStorage();}
+        nextRuntime->data->activate();
         commitLoadedScript(
             std::move(nextRuntime), std::move(loadedScript), snapshot.controlValues, path, nextProtocolDirectory);
         return true;
     } catch (const std::exception& ex) {
+        nextRuntime.reset();
         return restoreFailure(std::string("加载脚本异常: ") + ex.what());
     } catch (...) {
+        nextRuntime.reset();
         return restoreFailure("加载脚本异常: 未知异常");
     }
 }

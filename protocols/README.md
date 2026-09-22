@@ -777,7 +777,7 @@ proto.plot.setup({
   reset_history = true,
   channels = {
     { label = "CH1", unit = "V", color = "#4FC3F7", line_width = 2.5 },
-    { label = "CH2", unit = "raw", color = "#81C784", bit_display = { enabled = true, first_bit = 0, bit_count = 8 } },
+    { label = "CH2", unit = "raw", color = "#81C784", bit_display = { enabled = true, first_bit = 0, bit_count = 8, hover_readout = true } },
   },
 })
 
@@ -800,6 +800,10 @@ proto.plot.push(2, {
 
 `bit_display` 读取同一通道 `push()` 的原始 `y` 作为非负整数 bitfield；
 这些 bit 不会套用 `ratio`、`scale` 或 `offset`。
+`bit_display.hover_readout` 默认 `false`，省略、`nil` 或 `bit_display=true` 均不显示 bit 悬停读数。
+设置为 `true` 且全局“悬停读数”开启时，显示本 CH 的 `CH名.bit = 0/1` 标注。
+此选项在叠加、堆叠、分屏中一致生效，不影响游标吸附、测量或普通波形读数；
+仅修改此选项不会清空历史，旧录制缺少该字段时按 `false` 处理。
 
 ## 半双工 Modbus Schema Demo
 

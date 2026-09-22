@@ -102,16 +102,18 @@ namespace {
     }
 
     template <typename Writable>
-    std::pair<bool, std::string> writeBytes(Writable& writable,
+    std::pair<std::size_t, std::string> writeBytes(Writable& writable,
                                             std::mutex& mutex,
                                             const std::vector<std::uint8_t>& bytes)
     {
         try {
             std::lock_guard lock(mutex);
-            asio::write(writable, asio::buffer(bytes));
-            return {true, {}};
+            // error_code 重载保留异常前已写入的字节数，失败不能伪装成整包发送。
+            asio::error_code error;
+            const auto written = asio::write(writable, asio::buffer(bytes), error);
+            return {written, error ? error.message() : std::string{}};
         } catch (const std::exception& ex) {
-            return {false, ex.what()};
+            return {0, ex.what()};
         }
     }
 
@@ -210,12 +212,23 @@ std::uint64_t TransportBase::nowMs()
     return currentTimeMs();
 }
 
+void TransportBase::recordWrite(const ConnectionContext& context, const std::vector<std::uint8_t>& bytes,
+                                std::size_t written, std::string status)
+{
+    written = (std::min)(written, bytes.size());
+    auto copy = context;
+    copy.timestampMs = nowMs();
+    addTx(written);
+    pushEvent(TransportWriteEvent{copy, {bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(written)},
+                                 written == 0 ? "not_sent" : written < bytes.size() ? "partial" : std::move(status)});
+}
+
 bool TransportBase::enqueueSendCommon(
     TransportTxTask task,
     std::optional<ConnectionContext>& context,
     asio::io_context& ioContext,
     std::atomic<bool>& stopping,
-    std::function<std::pair<bool, std::string>(const std::vector<std::uint8_t>&)> writeBytes)
+    std::function<std::pair<std::size_t, std::string>(const std::vector<std::uint8_t>&)> writeBytes)
 {
     if (state() != TransportState::Open || !context.has_value()) {
         return false;
@@ -225,7 +238,8 @@ bool TransportBase::enqueueSendCommon(
                         std::move(task),
                         [this, &context, writeBytes = std::move(writeBytes)](TransportTxTask txTask) mutable {
                             const auto writeStartedAtMs = nowMs();
-                            const auto [ok, error] = writeBytes(txTask.payload);
+                            const auto [written, error] = writeBytes(txTask.payload);
+                            const bool ok = error.empty() && written == txTask.payload.size();
                             const auto finishedAtMs = nowMs();
 
                             TransportTxState txState = TransportTxState::Sent;
@@ -238,19 +252,20 @@ bool TransportBase::enqueueSendCommon(
                                 }
                                 txState = TransportTxState::Rejected;
                             } else {
-                                addTx(txTask.payload.size());
                                 if (txTask.timeoutMs > 0 && finishedAtMs > writeStartedAtMs &&
                                     finishedAtMs - writeStartedAtMs > txTask.timeoutMs) {
                                     txState = TransportTxState::Timeout;
                                 }
                             }
 
+                            if (context) recordWrite(*context, txTask.payload, written,
+                                txState == TransportTxState::Timeout ? "written_timeout" : "sent");
                             pushEvent(TransportTxEvent{
                                 .requestId = txTask.requestId,
                                 .kind = txTask.kind,
                                 .state = txState,
                                 .error = error,
-                                .bytes = txTask.payload.size(),
+                                .bytes = written,
                                 .queuedAtMs = txTask.queuedAtMs,
                                 .finishedAtMs = finishedAtMs,
                             });
@@ -493,9 +508,9 @@ bool TcpClientTransport::send(std::vector<std::uint8_t> bytes)
         return false;
     }
 
-    const auto [ok, error] = writeBytes(runtime_->socket, runtime_->socketMutex, bytes);
-    if (ok) {
-        addTx(bytes.size());
+    const auto [written, error] = writeBytes(runtime_->socket, runtime_->socketMutex, bytes);
+    recordWrite(*context_, bytes, written, "sent");
+    if (error.empty() && written == bytes.size()) {
         return true;
     }
 
@@ -680,9 +695,9 @@ bool TcpServerTransport::send(std::vector<std::uint8_t> bytes)
         return false;
     }
 
-    const auto [ok, error] = writeBytes(runtime_->clientSocket, runtime_->socketMutex, bytes);
-    if (ok) {
-        addTx(bytes.size());
+    const auto [written, error] = writeBytes(runtime_->clientSocket, runtime_->socketMutex, bytes);
+    recordWrite(*clientContext_, bytes, written, "sent");
+    if (error.empty() && written == bytes.size()) {
         return true;
     }
 
@@ -815,9 +830,9 @@ bool SerialTransport::send(std::vector<std::uint8_t> bytes)
         return false;
     }
 
-    const auto [ok, error] = writeBytes(runtime_->serialPort, runtime_->portMutex, bytes);
-    if (ok) {
-        addTx(bytes.size());
+    const auto [written, error] = writeBytes(runtime_->serialPort, runtime_->portMutex, bytes);
+    recordWrite(*context_, bytes, written, "sent");
+    if (error.empty() && written == bytes.size()) {
         return true;
     }
 

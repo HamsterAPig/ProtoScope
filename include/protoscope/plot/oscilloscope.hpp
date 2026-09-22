@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include "protoscope/plot/wave_query.hpp"
 
 namespace protoscope::plot {
 
@@ -29,6 +30,7 @@ struct BitDisplaySpec {
     std::size_t firstBit{0};
     std::size_t bitCount{8};
     double yOffset{0.0};
+    bool hoverReadout{false};
 
     bool operator==(const BitDisplaySpec&) const = default;
 };
@@ -87,6 +89,7 @@ struct BitLaneReadout {
     std::size_t laneIndex{0};
     bool value{false};
     double y{0.0};
+    bool edge{false};
 };
 
 struct CursorReadout {
@@ -162,6 +165,7 @@ struct ChannelView {
     std::size_t visibleEnd{0};
     const WaveSample* samples{nullptr};
     WaveStats stats{};
+    const WaveSummaryIndex* summaryIndex{nullptr};
 };
 
 float resolveChannelLineWidth(const ChannelView& channel);
@@ -199,9 +203,16 @@ public:
     std::optional<ChannelSpec> channelSpec(std::size_t channelIndex) const;
     const ViewConfig& viewConfig() const;
     std::uint64_t dataRevision() const;
+    std::uint64_t analysisRevision() const { return analysisRevision_; }
+    std::uint64_t historyEpoch() const { return historyEpoch_; }
     std::optional<double> latestTime() const;
 
     bool append(std::size_t channelIndex, WaveAppendRequest request);
+    bool appendImported(std::size_t channelIndex, const std::vector<WaveSample>& samples,
+                        std::size_t sampleIndexOffset = 0);
+    void setImportedLabelsReadOnly(bool readOnly) { importedLabelsReadOnly_ = readOnly; }
+    bool importedLabelsReadOnly() const { return importedLabelsReadOnly_; }
+    void setImportedSource(std::string source) { source_ = std::move(source); }
     WaveSnapshot snapshot(double visibleMinTime, double visibleMaxTime, bool computeStats = true) const;
     EnvelopeView buildEnvelope(std::size_t channelIndex,
                                double visibleMinTime,
@@ -224,6 +235,7 @@ private:
         ChannelSpec spec{};
         std::vector<WaveSample> samples;
         std::size_t sampleIndexOffset{0};
+        WaveSummaryIndex summary;
     };
 
     ChannelBuffer& ensureChannel(std::size_t channelIndex);
@@ -244,10 +256,13 @@ private:
     ViewConfig config_{};
     std::vector<ChannelBuffer> channels_;
     std::uint64_t dataRevision_{0};
+    std::uint64_t analysisRevision_{0};
+    std::uint64_t historyEpoch_{0};
     std::size_t preservedHistoryLimit_{0};
     std::size_t maxTotalSamples_{0};
     bool resetHistoryOnTimeReset_{true};
     bool historyTrimSuspended_{false};
+    bool importedLabelsReadOnly_{false};
 };
 
 } // namespace protoscope::plot

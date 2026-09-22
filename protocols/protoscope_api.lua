@@ -9,7 +9,7 @@ ProtoScope 脚本 API 定义文件。
 
 -- 基础枚举：覆盖日志、控件、停靠、传输和弹窗状态。
 ---@alias ProtoLogLevel 'trace'|'debug'|'info'|'warn'|'error'
----@alias ProtoControlType 'button'|'input_text'|'input_int'|'input_float'|'checkbox'|'combo'|'elf_symbol_combo'|'value_table'|'tx_sequence'
+---@alias ProtoControlType 'button'|'input_text'|'input_int'|'input_float'|'checkbox'|'combo'|'elf_symbol_combo'|'value_table'|'tx_sequence'|'label'|'readout'|'indicator'|'progress'|'slider_int'|'slider_float'|'radio_group'|'text_area'|'data_table'
 ---@alias ProtoControlShortType 'btn'|'text'|'int'|'float'|'check'|'select'|'symbol'|'values'
 ---@alias ProtoDockAnchor 'left'|'left_bottom'|'right_top'|'right_mid'|'right_bottom'|'main_bottom'
 ---@alias ProtoControlValue boolean|integer|number|string|ProtoElfSymbolValue|ProtoValueTableUpdate|ProtoValueTableSnapshot|ProtoTxSequenceValue|nil
@@ -50,7 +50,7 @@ function ProtoBuffer:bytes(max_bytes) end
 -- Layout Tree：精确写法使用 type + children/rows；语法糖允许字符串 control、字符串数组 flow，以及省略 type 的 column 容器。
 ---@alias ProtoControlLabelPosition 'left'|'right'
 ---@alias ProtoLayoutStringArray string[]
----@alias ProtoLayoutNode string|ProtoLayoutStringArray|ProtoColumnLayoutNode|ProtoFlowLayoutNode|ProtoInlineGroupLayoutNode|ProtoTableLayoutNode|ProtoGroupLayoutNode|ProtoCollapseLayoutNode|ProtoControlLayoutNode|ProtoTextLayoutNode|ProtoSeparatorLayoutNode|ProtoSpacerLayoutNode
+---@alias ProtoLayoutNode string|ProtoLayoutStringArray|ProtoColumnLayoutNode|ProtoFlowLayoutNode|ProtoInlineGroupLayoutNode|ProtoTableLayoutNode|ProtoGroupLayoutNode|ProtoCollapseLayoutNode|ProtoTabsLayoutNode|ProtoControlLayoutNode|ProtoTextLayoutNode|ProtoSeparatorLayoutNode|ProtoSpacerLayoutNode
 ---@alias ProtoInlineGroupChildNode ProtoControlLayoutNode|ProtoTextLayoutNode
 
 ---@class ProtoColumnLayoutNode
@@ -100,6 +100,16 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field max_width? number @控件最大宽度约束，必须为正数；同时设置时要求 min_width <= max_width。
 ---@field fill_width? boolean @在 flow 中作为行尾填充项，吃掉当前行剩余宽度。
 
+---@class ProtoTabsLayoutNode
+---@field type 'tabs'
+---@field id string @选择器全局唯一 ID，通过 get_control/set_control/on_control 读写页 ID。
+---@field default? string @默认页 ID，省略时选择第一页。
+---@field pages ProtoTabPage[] @固定 1..64 页，运行时不能增删。
+---@class ProtoTabPage
+---@field id string @容器内唯一且稳定的页 ID。
+---@field title string
+---@field children ProtoLayoutNode[]
+
 ---@class ProtoTextLayoutNode
 ---@field type? 'text'
 ---@field text string
@@ -133,7 +143,32 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field compact_label_below? number @布局宽度低于该正数阈值且 short_label 存在时显示短标签。
 ---@field default? ProtoControlValue
 ---@field options? string[]
----@field rows? ProtoValueTableRowEntry[] @value_table 行定义；普通行可用 id 或 { id, label, unit }，bit 行用 id+bits，range 行用 start_id+len。
+---@field rows? ProtoValueTableRowEntry[]|integer @value_table 行定义；text_area 可见行数，默认 5，范围 2..40。
+---@field visible? boolean @默认 true。
+---@field disabled? boolean
+---@field read_only? boolean
+---@field tooltip? string
+---@field min? number
+---@field max? number
+---@field commit_mode? 'change'|'commit' @滑块和多行文本默认 commit，旧输入默认 change。
+---@field unit? string @readout 单位。
+---@field precision? integer @readout/slider_float 小数位，默认 2，范围 0..12。
+---@field stale_after_ms? integer @readout 过期阈值，0 禁用，最大 86400000。
+---@field show_update_time? boolean @readout 显示更新时间。
+---@field on_text? string @indicator 为 true 时的状态文字。
+---@field off_text? string @indicator 为 false 时的状态文字。
+---@field indeterminate? boolean @progress 不确定进度。
+---@field max_length? integer @文本 UTF-8 字节上限，范围 1..262144。
+---@field wrap? boolean @text_area 自动换行，默认 true。
+---@field binding? ProtoControlFieldBinding @仅实测输出控件，可选设备筛选。
+---@field dataset? string @data_table 必填，数据集 ID。
+---@field device? string @data_table 固定设备筛选。
+---@field mode? 'live'|'history' @data_table 默认 live。
+---@field columns? (string|ProtoDataTableColumn)[] @data_table 默认数据集字段，最多 32 列。
+---@field max_rows? integer @实时表保留行数，默认 200，范围 1..1000。
+---@field max_bytes? integer @实时表数据预算，默认 4MiB，范围 1KiB..16MiB；不是进程 RSS。
+---@field page_size? integer @data_table 默认 200，范围 1..1000。
+---@field visible_rows? integer @data_table 固定视口行数，默认 10，范围 3..40。
 ---@field fields? ProtoTxSequenceField[] @tx_sequence 字段列定义。
 ---@field interval_ms? integer @tx_sequence 全局帧间隔，单位毫秒。
 ---@field loop? boolean @tx_sequence 是否循环发送。
@@ -144,6 +179,17 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field [1] ProtoControlType|ProtoControlShortType
 ---@field [2] string
 ---@field [3] string
+
+---@class ProtoControlFieldBinding
+---@field dataset string
+---@field field string
+---@field device? string @省略时接收该数据集任意设备的最新发布。
+
+---@class ProtoDataTableColumn
+---@field field string
+---@field label? string
+---@field unit? string
+---@field precision? integer @double 显示精度，默认 3，范围 0..12。
 
 -- ElfStaticView 静态地址候选：value 使用十六进制字符串，避免 64 位地址精度丢失。
 ---@class ProtoElfSymbolValue
@@ -235,6 +281,7 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field first_bit? integer @起始 bit，默认 0，范围 0..63。
 ---@field bit_count? integer @显示 bit 数，默认 8，范围 1..64，且 first_bit + bit_count 不超过 64。
 ---@field y_offset? number @bit 轨道组纵向偏移，默认 0。
+---@field hover_readout? boolean @默认 false；与全局悬停读数同时开启时显示本通道 bit 的 0/1 标注，不影响游标吸附和测量。
 
 -- 波形通道描述：定义曲线显示名称、单位、缩放、颜色和可选 bit 显示。
 ---@class ProtoPlotChannel
@@ -627,6 +674,11 @@ function on_error(ctx, message) end
 ---@param value ProtoControlValue
 function on_control(ctx, id, value) end
 
+---@param ctx ProtoConnectionContext
+---@param id string
+---@param checked boolean @普通命令为 false，勾选项为点击后的状态。
+function on_menu(ctx, id, checked) end
+
 -- 可选流解析 schema：定义后由宿主负责组帧、CRC 和字段解码。
 ---@return ProtoStreamSchema|nil
 function stream() end
@@ -662,3 +714,203 @@ function on_dialog(ctx, evt) end
 ---@param ctx ProtoConnectionContext
 ---@param evt ProtoFileDialogEvent
 function on_file_dialog(ctx, evt) end
+
+---@class ProtoDataField
+---@field name string
+---@field type 'int64'|'double'|'bool'|'string'|'bytes'
+---@field nullable? boolean
+---@class ProtoDataSchema
+---@field id string
+---@field fields ProtoDataField[]
+---@class ProtoDataRow
+---@field dataset string
+---@field device? string
+---@field device_time_us? integer
+---@field received_at_us? integer
+---@field schema_version? integer
+---@field record_id? integer @历史查询记录 ID；data_table 选择值使用其十进制字符串。
+---@field values table<string, any>
+---@class ProtoRecordQuery
+---@field dataset? string
+---@field device? string
+---@field from_us? integer
+---@field to_us? integer
+---@field offset? integer
+---@field limit? integer
+---@field snapshot? integer @不透明跨卷快照令牌；过期或重启后必须刷新。
+---@field conditions? ProtoFieldCondition[] @最多 16 个条件，全部满足才匹配。
+---@field sort? ProtoFieldSort @在分页前对完整查询结果排序。
+---@class ProtoFieldCondition
+---@field field string
+---@field op 'eq'|'ne'|'lt'|'le'|'gt'|'ge'|'contains'|'is_null'|'not_null'
+---@field value? any @类型必须匹配字段；空值测试不提供 value。
+---@class ProtoFieldSort
+---@field field string
+---@field descending? boolean
+---@class ProtoRecordExport : ProtoRecordQuery
+---@field path string @遵循 file_io 授权，不能指向记录或 KV 目录。
+---@field format? 'psrec'|'csv' @默认 psrec。
+---@field overwrite? boolean @默认 false；提交时原子检查，不覆盖竞争者的新文件。
+---@class ProtoRecordImport
+---@field path string @遵循 file_io 读取授权和 max_file_size_bytes。
+---@field format? 'psrec'|'csv'|'mapped_csv' @默认 psrec；csv 是类型化工具格式。
+---@field mapping? ProtoCsvImportMapping @仅 mapped_csv 使用。
+---@class ProtoCsvImportMapping
+---@field dataset string @必须引用当前 data() 声明。
+---@field fields table<string,string> @字段名到 CSV 列名，未映射字段沿用同名列。
+---@field device? string
+---@field received_column? string @默认 received_at_us。
+---@field device_column? string
+---@field device_time_column? string
+---@field null_token? string @显式空值标记；默认空字符串仍为字符串。
+---@class ProtoStorageEvent
+---@field status table
+---@field task integer
+---@field operation string
+---@field ok boolean
+---@field error string
+---@field records ProtoDataRow[]
+---@field snapshot? integer @固定卷集合及已提交范围，不是记录 ID。
+---@field more boolean
+---@field processed integer @导入或导出成功记录数；失败为 0。
+---@field path? string @导入源或导出目标。
+---@class ProtoRecordStatus
+---@field recording boolean
+---@field recovered boolean
+---@field faulted boolean
+---@field received integer
+---@field queued integer
+---@field committed integer
+---@field failed integer
+---@field queue_bytes integer
+---@field last_committed_id integer @最近已提交实时记录位置。
+---@field session_id integer @持久化记录会话编号，主动停止后再启动递增。
+---@field run_id integer @存储运行次数，包含协议重载。
+---@field unclean_recovery boolean @本次打开前没有已提交的正常退出标记。
+---@field abnormal_runs integer @保留的异常退出次数。
+---@field last_committed_time_us? integer
+---@field interrupted_from_us? integer @最近记录故障的接收时间范围，已提交后可跨重启恢复。
+---@field interrupted_to_us? integer
+---@field error string
+
+-- 数据集声明在加载期间执行，不允许访问运行期存储 API。
+---@return ProtoDataSchema[]
+function data() end
+proto.data = {}
+---@type userdata
+proto.data.null = nil
+---@param value any
+---@return boolean
+function proto.data.is_null(value) end
+---@param raw string
+---@return ProtoBuffer
+function proto.data.bytes(raw) end
+---@param row ProtoDataRow
+---@return boolean
+function proto.data.publish(row) end
+---@param rows ProtoDataRow[]
+---@return boolean
+function proto.data.publish_batch(rows) end
+---@param dataset string
+---@return ProtoDataRow?
+function proto.data.latest(dataset) end
+
+proto.kv = {}
+---@param key string
+---@return any
+function proto.kv.get(key) end
+---@param key string
+---@param value any
+---@return integer task
+function proto.kv.set(key, value) end
+---@param key string
+---@return integer task
+function proto.kv.delete(key) end
+---@return integer task
+function proto.kv.flush() end
+
+proto.record = {}
+---@return integer task
+function proto.record.start() end
+---@return integer task
+function proto.record.stop() end
+---@return ProtoRecordStatus
+function proto.record.status() end
+---@param options ProtoRecordQuery
+---@return integer task
+function proto.record.query(options) end
+-- 导出全部匹配记录，保留 snapshot/conditions/sort，忽略 offset/limit。
+---@param options ProtoRecordExport
+---@return integer task
+function proto.record.export(options) end
+-- 完整校验后登记独立历史卷，不触发实时发布或设备业务回调。
+---@param options ProtoRecordImport
+---@return integer task
+function proto.record.import(options) end
+---@param task integer
+function proto.record.cancel(task) end
+---@param ctx ProtoConnectionContext
+---@param evt ProtoStorageEvent
+function on_record(ctx, evt) end
+---@param ctx ProtoConnectionContext
+---@param evt ProtoStorageEvent
+function on_kv(ctx, evt) end
+
+---@class ProtoControlPatch
+---@field value? any
+---@field label? string
+---@field visible? boolean
+---@field disabled? boolean
+---@field read_only? boolean
+---@field tooltip? string
+---@field min? number|false
+---@field max? number|false
+---@field options? string[]
+---@field max_length? integer
+---@field wrap? boolean
+---@field indeterminate? boolean
+---@param id string
+---@param patch ProtoControlPatch
+---@return boolean? ok
+---@return string? error
+function proto.ui.update_control(id, patch) end
+---@param patches table<string, ProtoControlPatch>
+---@return boolean? ok
+---@return string? error
+function proto.ui.update_controls(patches) end
+---@class ProtoSelectedTableRow: ProtoDataRow
+---@field row_id string @与 on_control 传递的选中行 ID 相同。
+---@param id string @data_table 控件 ID。
+---@return ProtoSelectedTableRow? row @当前页没有有效选中行时返回 nil；返回独立副本。
+function proto.ui.get_selected_row(id) end
+
+---@class ProtoMenuItem
+---@field id? string @非分隔项必填，全菜单树唯一。
+---@field label? string @非分隔项必填。
+---@field separator? boolean
+---@field tooltip? string
+---@field visible? boolean
+---@field disabled? boolean
+---@field checkable? boolean @仅叶子命令支持。
+---@field checked? boolean
+---@field children? ProtoMenuItem[] @子菜单，不得为空。
+---@class ProtoMenuPatch
+---@field label? string
+---@field tooltip? string
+---@field visible? boolean
+---@field disabled? boolean
+---@field checked? boolean
+---@param items ProtoMenuItem[] @最多 256 项，深度 8；空数组清除业务菜单。
+---@return boolean? ok
+---@return string? error
+function proto.ui.set_menu(items) end
+---@param id string
+---@param patch ProtoMenuPatch
+---@return boolean? ok
+---@return string? error
+function proto.ui.update_menu(id, patch) end
+---@param id string @ui() 声明的 Lua Dock ID，不接管内置窗口。
+---@param visible boolean
+---@return boolean? ok
+---@return string? error
+function proto.ui.show_dock(id, visible) end

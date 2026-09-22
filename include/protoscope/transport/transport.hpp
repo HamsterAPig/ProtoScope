@@ -139,8 +139,15 @@ struct TransportTxEvent {
     std::uint64_t finishedAtMs{0};
 };
 
+struct TransportWriteEvent {
+    ConnectionContext context;
+    std::vector<std::uint8_t> bytes;
+    std::string status;
+};
+
 using TransportEvent =
-    std::variant<TransportOpenEvent, TransportCloseEvent, TransportErrorEvent, TransportBytesEvent, TransportTxEvent>;
+    std::variant<TransportOpenEvent, TransportCloseEvent, TransportErrorEvent, TransportBytesEvent, TransportTxEvent,
+                 TransportWriteEvent>;
 
 class ITransport {
 public:
@@ -171,12 +178,14 @@ protected:
     void setState(TransportState next);
     void addTx(std::size_t size);
     void addRx(std::size_t size);
+    void recordWrite(const ConnectionContext& context, const std::vector<std::uint8_t>& bytes,
+                     std::size_t written, std::string status);
     static std::uint64_t nowMs();
     bool enqueueSendCommon(TransportTxTask task,
                            std::optional<ConnectionContext>& context,
                            asio::io_context& ioContext,
                            std::atomic<bool>& stopping,
-                           std::function<std::pair<bool, std::string>(const std::vector<std::uint8_t>&)> writeBytes);
+                           std::function<std::pair<std::size_t, std::string>(const std::vector<std::uint8_t>&)> writeBytes);
 
 private:
     mutable std::mutex eventsMutex_;

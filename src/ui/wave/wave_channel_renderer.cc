@@ -33,7 +33,8 @@ std::size_t clampRenderConfig(const std::size_t value, const std::size_t fallbac
 
 std::size_t estimateVerticesPerPoint(const bool glowEnabled)
 {
-    return glowEnabled ? 16 : 6;
+    // AddLine 的抗锯齿宽线和三层 Glow、包络连接线均计入预算。
+    return glowEnabled ? 64 : 12;
 }
 
 RenderBudget makeRenderBudget(const plot::WaveViewState& view,
@@ -47,8 +48,10 @@ RenderBudget makeRenderBudget(const plot::WaveViewState& view,
         view.adaptiveMaxRenderPointsPerChannel.value_or(view.maxRenderPointsPerChannel), 1200);
     const std::size_t configuredVertexLimit =
         clampRenderConfig(view.adaptiveMaxRenderVertices.value_or(view.maxRenderVertices), 60000);
+    // 主图与概览共用顶点上限：概览桶预留四顶点，另留一成给坐标轴、标签和交互覆盖物。
+    const auto contentVertices = configuredVertexLimit - configuredVertexLimit / 10;
     const std::size_t pointsByVertexBudget =
-        (std::max)(std::size_t{1}, configuredVertexLimit / (safeChannelCount * estimatedVerticesPerPoint));
+        (std::max)(std::size_t{1}, contentVertices / (safeChannelCount * (estimatedVerticesPerPoint + 4)));
     // 核心流程：每通道最终点数同时受像素宽度、用户配置和 16-bit 顶点预算约束，避免单帧 DrawList 溢出。
     const std::size_t pointsPerChannel =
         (std::max)(std::size_t{1}, (std::min)({pixelWidth, configuredPointLimit, pointsByVertexBudget}));
@@ -80,33 +83,26 @@ ImVec4 withAlpha(ImVec4 color, const float alphaScale)
 
 ImVec4 fallbackChannelColor(const std::size_t channelIndex)
 {
-    constexpr std::array<ImVec4, 8> kPalette{{
-        {0.216F, 0.886F, 0.478F, 1.0F},
-        {0.200F, 0.780F, 1.000F, 1.0F},
-        {1.000F, 0.761F, 0.278F, 1.0F},
-        {0.714F, 0.427F, 1.000F, 1.0F},
-        {1.000F, 0.365F, 0.365F, 1.0F},
-        {0.333F, 0.914F, 0.886F, 1.0F},
-        {1.000F, 0.561F, 0.220F, 1.0F},
-        {0.620F, 0.800F, 1.000F, 1.0F},
-    }};
-    return kPalette[channelIndex % kPalette.size()];
+    const auto& palette = activeWaveStyleTokens().channelPalette;
+    return palette[channelIndex % palette.size()];
 }
 
 ImVec4 channelColor(const plot::ChannelSpec& spec, const std::size_t channelIndex)
 {
     if (!spec.color.has_value()) {
-        return fallbackChannelColor(channelIndex);
+        return displayColor(fallbackChannelColor(channelIndex), activeWaveStyleTokens().plotBackground);
     }
-    return {(*spec.color)[0], (*spec.color)[1], (*spec.color)[2], (*spec.color)[3]};
+    return displayColor({(*spec.color)[0], (*spec.color)[1], (*spec.color)[2], (*spec.color)[3]},
+                        activeWaveStyleTokens().plotBackground);
 }
 
 ImVec4 channelColor(const plot::ChannelView& channel, const std::size_t channelIndex)
 {
     if (!channel.color.has_value()) {
-        return fallbackChannelColor(channelIndex);
+        return displayColor(fallbackChannelColor(channelIndex), activeWaveStyleTokens().plotBackground);
     }
-    return {(*channel.color)[0], (*channel.color)[1], (*channel.color)[2], (*channel.color)[3]};
+    return displayColor({(*channel.color)[0], (*channel.color)[1], (*channel.color)[2], (*channel.color)[3]},
+                        activeWaveStyleTokens().plotBackground);
 }
 
 WavePhosphorStrokeStyle wavePhosphorStrokeStyle(const plot::ChannelView& channel, const std::size_t channelIndex)

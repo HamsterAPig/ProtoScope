@@ -303,7 +303,7 @@ bool operator==(const WaveFftCacheKey& lhs, const WaveFftCacheKey& rhs)
 {
     return lhs.dataRevision == rhs.dataRevision && lhs.viewMinTime == rhs.viewMinTime &&
            lhs.viewMaxTime == rhs.viewMaxTime && lhs.sampleFrequencyHz == rhs.sampleFrequencyHz &&
-           lhs.config == rhs.config && lhs.channelEnabled == rhs.channelEnabled;
+           lhs.config == rhs.config && lhs.channelEnabled == rhs.channelEnabled && lhs.channelRatios == rhs.channelRatios;
 }
 
 std::size_t fftPointCountValue(WaveFftPointCount pointCount)
@@ -554,10 +554,10 @@ WaveFftFrame buildWaveFftFrame(const WaveSnapshot& snapshot,
 
         const auto& displayChannel = displayData.channels[channelIndex];
         auto values = collectVisibleFiniteFftValues(displayChannel, viewMinTime, viewMaxTime);
-        result.visibleSampleCount = values.size();
+        result.visibleSampleCount = displayChannel.analysisSampleCount.value_or(values.size());
         frame.visibleSampleCount = (std::max)(frame.visibleSampleCount, result.visibleSampleCount);
 
-        const std::size_t pointCount = resolveWaveFftPointCount(config, values.size());
+        const std::size_t pointCount = resolveWaveFftPointCount(config, result.visibleSampleCount);
         if (pointCount < kMinFftPointCount || values.size() < pointCount) {
             result.message = "当前可视区样本不足";
             frame.channels.push_back(std::move(result));

@@ -279,6 +279,10 @@ bool scriptTimeUsable(const ChannelView& channel, std::size_t begin, std::size_t
     if (channel.samples == nullptr || begin >= end) {
         return false;
     }
+    if (channel.summaryIndex != nullptr) {
+        return channel.summaryIndex->query({channel.samples, channel.totalSamples},
+            channel.sampleIndexOffset, begin, end).timeIncreasing;
+    }
     double previous = channel.samples[begin].time;
     if (!std::isfinite(previous)) {
         return false;
@@ -301,6 +305,9 @@ namespace {
         for (auto& channel : data.channels) {
             channel.samples.clear();
             channel.actualValues.clear();
+            channel.source.reset();
+            channel.sourceIndices.clear();
+            channel.analysisSampleCount.reset();
         }
     }
 
@@ -399,6 +406,63 @@ WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFreq
     return data;
 }
 
+WaveDisplayChannel extractDisplayWindow(const WaveDisplayChannel& channel, double minTime, double maxTime, bool guards)
+{
+    if (!channel.source) return channel;
+    WaveDisplayChannel result;
+    const WaveQueryView query(*channel.source, channel.axis, channel.frequency, channel.formula);
+    const auto [begin, end] = query.range(minTime, maxTime, guards);
+    result.samples.reserve(end - begin);
+    result.actualValues.reserve(end - begin);
+    result.sourceIndices.reserve(end - begin);
+    for (auto i = begin; i < end; ++i) {
+        result.samples.push_back(query.sample(i));
+        result.actualValues.push_back(query.actual(i));
+        result.sourceIndices.push_back(i);
+    }
+    return result;
+}
+
+void buildQueryDisplayDataInto(const WaveSnapshot& snapshot, double sampleFrequencyHz,
+                               std::size_t pointBudget, WaveDisplayData& data,
+                               std::optional<std::pair<double, double>> timeRange, WaveDownsampleMode mode)
+{
+    resetDisplayDataChannels(data, snapshot.channels.size());
+    // Buffer 已保证时间递增；避免为判定时间轴每次重新遍历整个窗口。
+    const bool frequency = std::isfinite(sampleFrequencyHz) && sampleFrequencyHz > 0;
+    bool script = false;
+    for (const auto& channel : snapshot.channels) {
+        if (channel.samples && channel.totalSamples > 0) {
+            script = scriptTimeUsable(channel, channel.visibleBegin, channel.visibleEnd);
+            if (script) break;
+        }
+    }
+    data.axisSource = frequency ? WaveTimeAxisSource::SampleFrequency :
+        script ? WaveTimeAxisSource::ScriptTime : WaveTimeAxisSource::SampleIndex;
+    data.timeUnit = frequency ? "s" : script ? (snapshot.config.timeUnit.empty() ? "s" : snapshot.config.timeUnit) : "sample";
+    for (std::size_t i = 0; i < snapshot.channels.size(); ++i) {
+        const auto& source = snapshot.channels[i];
+        auto& output = data.channels[i];
+        output.source = source;
+        output.axis = data.axisSource;
+        output.frequency = sampleFrequencyHz;
+        output.formula = snapshot.config.displayFormula;
+        const auto [begin, end] = displaySampleRange(source);
+        if (begin == end) continue;
+        WaveQueryView query(source, data.axisSource, sampleFrequencyHz, snapshot.config.displayFormula);
+        // 旧路径以快照可见范围为分桶端点，保留当时的边界邻点选择。
+        // 数字通道仍沿用当前路径，其专用数字渲染算法不受模拟降采样选项影响。
+        const auto channelMode = source.bitDisplay.enabled ? WaveDownsampleMode::StableEdges : mode;
+        output.sourceIndices = timeRange && channelMode == WaveDownsampleMode::StableEdges
+            ? query.traceIndices(timeRange->first, timeRange->second, pointBudget, nullptr, true, channelMode)
+            : query.traceIndices(query.time(begin), query.time(end - 1), pointBudget, nullptr, false, channelMode);
+        for (const auto index : output.sourceIndices) {
+            output.samples.push_back(query.sample(index));
+            output.actualValues.push_back(query.actual(index));
+        }
+    }
+}
+
 void applySampleFrequencyVisibleRange(WaveSnapshot& snapshot, double minTime, double maxTime, double sampleFrequencyHz)
 {
     if (sampleFrequencyHz <= 0.0 || !std::isfinite(sampleFrequencyHz)) {
@@ -438,6 +502,24 @@ std::optional<CursorReadout> findNearestDisplayByTime(const WaveDisplayData& dis
         return std::nullopt;
     }
     const auto& channel = displayData.channels[channelIndex];
+    if (channel.source && std::isfinite(time) && std::isfinite(maxTimeDistance) && maxTimeDistance >= 0) {
+        const auto& source = *channel.source;
+        WaveQueryView query(source, channel.axis, channel.frequency, channel.formula);
+        const auto [begin, end] = query.range(time, time);
+        std::optional<CursorReadout> result;
+        double distance = maxTimeDistance;
+        for (auto i = (std::max)(begin, source.visibleBegin); i < (std::min)(end, source.visibleEnd); ++i) {
+            const auto point = query.sample(i);
+            const auto d = std::abs(point.time - time);
+            if (d <= distance && (!result || d < distance)) {
+                distance = d;
+                result = CursorReadout{.valid = true, .channelIndex = channelIndex,
+                    .sampleIndex = i - source.visibleBegin, .time = point.time,
+                    .value = query.actual(i), .displayValue = point.value};
+            }
+        }
+        return result;
+    }
     const auto& samples = channel.samples;
     if (samples.empty() || !std::isfinite(time) || !std::isfinite(maxTimeDistance) || maxTimeDistance < 0.0) {
         return std::nullopt;
@@ -586,6 +668,24 @@ void finalizeDisplayBounds(WaveDataBounds& bounds)
     }
 }
 
+void includeQueryBounds(WaveDataBounds& bounds, const WaveDisplayChannel& channel)
+{
+    const auto& source = *channel.source;
+    const WaveQueryView query(source, channel.axis, channel.frequency, channel.formula);
+    const auto s = query.summary(source.visibleBegin, source.visibleEnd);
+    if (s.count == 0) return;
+    const auto min = query.sample(s.minimum - source.sampleIndexOffset).value;
+    const auto max = query.sample(s.maximum - source.sampleIndexOffset).value;
+    bounds.minTime = (std::min)(bounds.minTime, query.time(s.first - source.sampleIndexOffset));
+    bounds.maxTime = (std::max)(bounds.maxTime, query.time(s.last - source.sampleIndexOffset));
+    bounds.minValue = (std::min)({bounds.minValue, min, max});
+    bounds.maxValue = (std::max)({bounds.maxValue, min, max});
+    const auto step = channel.axis == WaveTimeAxisSource::SampleFrequency ? 1.0 / channel.frequency :
+        channel.axis == WaveTimeAxisSource::SampleIndex ? 1.0 : s.minStep;
+    if (step > 0) bounds.minStep = (std::min)(bounds.minStep, step);
+    bounds.valid = true;
+}
+
 WaveDataBounds computeDisplayBounds(const WaveDisplayData& data, double fallbackStep)
 {
     WaveDataBounds bounds{};
@@ -596,6 +696,7 @@ WaveDataBounds computeDisplayBounds(const WaveDisplayData& data, double fallback
     bounds.minStep = (std::max)(fallbackStep, kEpsilon);
 
     for (const auto& channel : data.channels) {
+        if (channel.source) { includeQueryBounds(bounds, channel); continue; }
         for (std::size_t index = 0; index < channel.samples.size(); ++index) {
             includeSampleInBounds(bounds, channel.samples, index);
         }
@@ -621,6 +722,7 @@ WaveDataBounds computeDisplayBoundsForChannels(const WaveDisplayData& data,
             continue;
         }
         const auto& channel = data.channels[channelIndex];
+        if (channel.source) { includeQueryBounds(bounds, channel); continue; }
         for (std::size_t sampleIndex = 0; sampleIndex < channel.samples.size(); ++sampleIndex) {
             includeSampleInBounds(bounds, channel.samples, sampleIndex);
         }
@@ -849,6 +951,24 @@ WaveViewport zoomViewport(const WaveViewport& viewport,
     return next;
 }
 
+double cursorFrequencyHz(double delta, WaveTimeAxisSource axisSource, std::string_view timeUnit)
+{
+    const auto invalid = std::numeric_limits<double>::quiet_NaN();
+    if (axisSource == WaveTimeAxisSource::SampleIndex || !std::isfinite(delta) || delta == 0)
+        return invalid;
+    // A/B 与 T 共用时间单位换算；未知单位不得隐式当作秒。
+    double secondsPerUnit = 0;
+    if (timeUnit == "s") secondsPerUnit = 1;
+    else if (timeUnit == "ms") secondsPerUnit = 1e-3;
+    else if (timeUnit == "us" || timeUnit == "\xC2\xB5s" || timeUnit == "\xCE\xBCs") secondsPerUnit = 1e-6;
+    else if (timeUnit == "ns") secondsPerUnit = 1e-9;
+    else if (timeUnit == "ps") secondsPerUnit = 1e-12;
+    if (secondsPerUnit == 0) return invalid;
+    const auto seconds = std::abs(delta) * secondsPerUnit;
+    const auto frequency = 1.0 / seconds;
+    return seconds > 0 && std::isfinite(seconds) && std::isfinite(frequency) ? frequency : invalid;
+}
+
 CursorIntervalText makeCursorIntervalText(const CursorReadout& left,
                                           const CursorReadout& right,
                                           WaveTimeAxisSource axisSource,
@@ -857,15 +977,23 @@ CursorIntervalText makeCursorIntervalText(const CursorReadout& left,
     if (!left.valid || !right.valid) {
         return {};
     }
-    const double delta = std::abs(right.time - left.time);
+    return makeCursorIntervalText(left.time, right.time, axisSource, timeUnit);
+}
+
+CursorIntervalText makeCursorIntervalText(double leftTime,
+                                          double rightTime,
+                                          WaveTimeAxisSource axisSource,
+                                          std::string_view timeUnit)
+{
+    const double delta = std::abs(rightTime - leftTime);
     if (!std::isfinite(delta)) {
         return {};
     }
     CursorIntervalText text{
         .valid = true,
-        .showFrequency = axisSource != WaveTimeAxisSource::SampleIndex && delta > kEpsilon,
+        .showFrequency = axisSource != WaveTimeAxisSource::SampleIndex,
         .delta = delta,
-        .frequencyHz = delta > kEpsilon ? 1.0 / delta : 0.0,
+        .frequencyHz = cursorFrequencyHz(delta, axisSource, timeUnit),
         .deltaUnit = std::string(timeUnit.empty() ? "sample" : timeUnit),
     };
     if (axisSource == WaveTimeAxisSource::SampleIndex) {
@@ -883,6 +1011,16 @@ std::optional<CursorReadout> findStrongestEdgeNearTime(const WaveDisplayData& di
         return std::nullopt;
     }
     const auto& channel = displayData.channels[channelIndex];
+    if (channel.source) {
+        WaveDisplayData exact;
+        exact.channels.resize(channelIndex + 1);
+        exact.channels[channelIndex] = extractDisplayWindow(channel, centerTime - maxTimeDistance,
+                                                            centerTime + maxTimeDistance, true);
+        auto result = findStrongestEdgeNearTime(exact, channelIndex, centerTime, maxTimeDistance);
+        if (result) result->sampleIndex = exact.channels[channelIndex].sourceIndices[result->sampleIndex] -
+            channel.source->visibleBegin;
+        return result;
+    }
     const auto& samples = channel.samples;
     if (samples.size() < 2 || !std::isfinite(centerTime) || !std::isfinite(maxTimeDistance) || maxTimeDistance <= 0.0) {
         return std::nullopt;
@@ -936,6 +1074,16 @@ std::optional<CursorReadout> findLocalExtremeNearTime(const WaveDisplayData& dis
         return std::nullopt;
     }
     const auto& channel = displayData.channels[channelIndex];
+    if (channel.source) {
+        WaveDisplayData exact;
+        exact.channels.resize(channelIndex + 1);
+        exact.channels[channelIndex] = extractDisplayWindow(channel, centerTime - maxTimeDistance,
+                                                            centerTime + maxTimeDistance, true);
+        auto result = findLocalExtremeNearTime(exact, channelIndex, centerTime, maxTimeDistance, kind);
+        if (result) result->sampleIndex = exact.channels[channelIndex].sourceIndices[result->sampleIndex] -
+            channel.source->visibleBegin;
+        return result;
+    }
     const auto& samples = channel.samples;
     if (samples.empty() || !std::isfinite(centerTime) || !std::isfinite(maxTimeDistance) || maxTimeDistance <= 0.0) {
         return std::nullopt;
@@ -1063,6 +1211,10 @@ bool shiftMeasurementCursorsForViewportScroll(WaveViewState& view,
         // 核心流程：跟随滚动只平移时间；下一帧主图按时间重绑定读数，避免旧 Y 锚点失效。
         view.measurementCursorReadoutRefreshPending = true;
     }
+    for (auto& cursor : view.auxiliaryCursors.items) {
+        cursor.time += deltaTime;
+        shifted = true;
+    }
     return shifted;
 }
 
@@ -1128,6 +1280,7 @@ bool resetChannelConfigToDefault(WaveDockState& wave,
         wave.channelOverrides.resize(channelIndex + 1);
     }
     auto& overrideState = wave.channelOverrides[channelIndex];
+    if (wave.buffer.importedLabelsReadOnly()) updated.label = currentSpec->label;
     overrideState.labelOverridden = updated.label != defaultSpec.label;
     overrideState.ratioOverridden = std::abs(updated.ratio - defaultSpec.ratio) > kEpsilon;
     overrideState.scaleOverridden = std::abs(updated.scale - defaultSpec.scale) > kEpsilon;

@@ -13,11 +13,7 @@
 namespace protoscope::ui {
 namespace {
 
-    struct MetricChip {
-        std::string label;
-        std::string value;
-    };
-
+    using MetricChip = WaveMetricChip;
     using MetricChips = std::vector<MetricChip>;
 
     void addChip(MetricChips& chips, std::string label, std::string value)
@@ -29,7 +25,7 @@ namespace {
 
     void addMetricChip(MetricChips& chips, const char* label, double value, const char* unit = nullptr)
     {
-        addChip(chips, label, formatMetricText(value, unit));
+        addChip(chips, label, std::isfinite(value) ? formatMetricText(value, unit) : "N/A");
     }
 
     void addOptionalMetricChip(MetricChips& chips,
@@ -37,7 +33,7 @@ namespace {
                                const std::optional<double>& value,
                                const char* unit = nullptr)
     {
-        addChip(chips, label, value.has_value() ? formatMetricText(*value, unit) : "N/A");
+        addChip(chips, label, value.has_value() && std::isfinite(*value) ? formatMetricText(*value, unit) : "N/A");
     }
 
     const char* safeUnit(const std::string& unit)
@@ -87,7 +83,7 @@ namespace {
         return size;
     }
 
-    void drawMetricChip(ImDrawList* drawList,
+    void drawMetricChip(const plot::WaveViewState& view, ImDrawList* drawList,
                         ImVec2 pos,
                         const MetricChip& chip,
                         ImU32 bgColor,
@@ -101,6 +97,12 @@ namespace {
         constexpr float labelValueGap = 6.0F;
 
         const ImVec2 chipSize = calcChipSize(chip, padX, padY);
+        if (chip.label.starts_with("A·") || chip.label.starts_with("B·")) {
+            const std::size_t identity = chip.label.starts_with("A·") ? 0 : 1;
+            labelColor = valueColor = ImGui::ColorConvertFloat4ToU32(cursorLabelText(view, identity, identity));
+            bgColor = ImGui::ColorConvertFloat4ToU32(cursorLabelBackground(view));
+            borderColor = ImGui::ColorConvertFloat4ToU32(measurementCursorColor(view, identity));
+        }
         const ImVec2 chipMax(pos.x + chipSize.x, pos.y + chipSize.y);
 
         const ImVec2 labelSize = ImGui::CalcTextSize(chip.label.c_str());
@@ -116,7 +118,7 @@ namespace {
         drawList->AddText(ImVec2(valueX, textY), valueColor, chip.value.c_str());
     }
 
-    void drawChipGrid(ImDrawList* drawList,
+    void drawChipGrid(const plot::WaveViewState& view, ImDrawList* drawList,
                       ImVec2 pos,
                       const MetricChips& chips,
                       float maxWidth,
@@ -144,7 +146,7 @@ namespace {
                 rowHeight = 0.0F;
             }
 
-            drawMetricChip(drawList,
+            drawMetricChip(view, drawList,
                            ImVec2(x, y),
                            chip,
                            chipBgColor,
@@ -167,69 +169,87 @@ namespace {
                            const PlotRenderResult& result)
     {
         const auto& selection = view.measurement;
-        const bool bitMode = result.bitMeasurementActive;
 
         if (!view.showCursors) {
             return;
         }
 
-        if (selection.cursorA && result.cursorReadouts[0].has_value()) {
-            const auto& cursor = *result.cursorReadouts[0];
-            const auto& channel = snapshot.channels[cursor.channelIndex];
-
-            addChip(chips, "A·t", formatMetricText(cursor.time, displayData.timeUnit.c_str()));
-            if (bitMode && cursor.bit.has_value()) {
-                addChip(chips, "A·val", cursor.bit->value ? "1" : "0");
-            } else {
-                addChip(chips, "A·y", formatMetricText(cursor.value, safeUnit(channel.unit)));
+        const auto cursorTime = [&](std::size_t cursorIndex) -> std::optional<double> {
+            const auto& readout = result.cursorReadouts[cursorIndex];
+            if (readout.has_value() && readout->valid && readout->channelIndex < snapshot.channels.size() &&
+                std::isfinite(readout->time)) {
+                return readout->time;
             }
+            const auto& cursor = view.cursors[cursorIndex];
+            return cursor.enabled && std::isfinite(cursor.time) ? std::optional<double>(cursor.time) : std::nullopt;
+        };
+
+        const auto appendCursorValue = [&](std::size_t cursorIndex, const char* valueLabel) {
+            const auto& readout = result.cursorReadouts[cursorIndex];
+            if (!readout.has_value() || !readout->valid || readout->channelIndex >= snapshot.channels.size()) {
+                const auto channelIndex = view.cursors[cursorIndex].channelIndex;
+                const bool bit = channelIndex < snapshot.channels.size() &&
+                    bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay);
+                addChip(chips, bit ? (cursorIndex == 0U ? "A·val" : "B·val") : valueLabel, "N/A");
+                return;
+            }
+            const auto& channel = snapshot.channels[readout->channelIndex];
+            if (readout->bit.has_value()) {
+                addChip(chips, cursorIndex == 0U ? "A·val" : "B·val", readout->bit->value ? "1" : "0");
+            } else {
+                addMetricChip(chips, valueLabel, readout->value, safeUnit(channel.unit));
+            }
+        };
+
+        if (selection.cursorA && view.cursors[0].enabled) {
+            addOptionalMetricChip(chips, "A·t", cursorTime(0), displayData.timeUnit.c_str());
+            appendCursorValue(0, "A·y");
         }
 
-        if (selection.cursorB && result.cursorReadouts[1].has_value()) {
-            const auto& cursor = *result.cursorReadouts[1];
-            const auto& channel = snapshot.channels[cursor.channelIndex];
-
-            addChip(chips, "B·t", formatMetricText(cursor.time, displayData.timeUnit.c_str()));
-            if (bitMode && cursor.bit.has_value()) {
-                addChip(chips, "B·val", cursor.bit->value ? "1" : "0");
-            } else {
-                addChip(chips, "B·y", formatMetricText(cursor.value, safeUnit(channel.unit)));
-            }
+        if (selection.cursorB && view.cursors[1].enabled) {
+            addOptionalMetricChip(chips, "B·t", cursorTime(1), displayData.timeUnit.c_str());
+            appendCursorValue(1, "B·y");
         }
 
-        if (!result.cursorReadouts[0].has_value() || !result.cursorReadouts[1].has_value()) {
+        const auto leftTime = cursorTime(0);
+        const auto rightTime = cursorTime(1);
+        if (!view.cursors[0].enabled || !view.cursors[1].enabled) {
             return;
         }
-
-        const auto delta = plot::OscilloscopeBuffer::makeDelta(*result.cursorReadouts[0], *result.cursorReadouts[1]);
-
-        const auto intervalText = plot::makeCursorIntervalText(
-            *result.cursorReadouts[0], *result.cursorReadouts[1], displayData.axisSource, displayData.timeUnit);
-
-        if (!intervalText.valid) {
-            return;
-        }
+        // 时间差为零仍是有效读数；只有倒数频率不可用。
+        const bool showFrequency = displayData.axisSource != plot::WaveTimeAxisSource::SampleIndex;
+        const double deltaTime = leftTime && rightTime ? std::abs(*rightTime - *leftTime)
+                                                      : std::numeric_limits<double>::quiet_NaN();
 
         if (selection.deltaTime) {
-            addChip(chips,
-                    intervalText.showFrequency ? "Δt" : "ΔS",
-                    formatMetricText(
-                        intervalText.showFrequency ? delta.deltaTime : intervalText.delta,
-                        intervalText.showFrequency ? displayData.timeUnit.c_str() : intervalText.deltaUnit.c_str()));
+            addMetricChip(chips, showFrequency ? "Δt" : "ΔS", deltaTime,
+                          showFrequency ? displayData.timeUnit.c_str() : "sample");
         }
 
-        if (selection.deltaValue) {
-            if (!bitMode) {
-                addChip(chips, "Δy", formatMetricText(delta.deltaValue, nullptr));
+        const bool bitMode = result.bitMeasurementActive ||
+            (result.cursorReadouts[0] && result.cursorReadouts[0]->bit) ||
+            (result.cursorReadouts[1] && result.cursorReadouts[1]->bit) ||
+            (view.measurementChannelIndex < snapshot.channels.size() &&
+             bitDisplayEnabled(snapshot.channels[view.measurementChannelIndex].bitDisplay));
+        if (selection.deltaValue && !bitMode) {
+            std::optional<double> deltaValue;
+            if (result.cursorReadouts[0] && result.cursorReadouts[1] &&
+                result.cursorReadouts[0]->channelIndex < snapshot.channels.size() &&
+                result.cursorReadouts[1]->channelIndex < snapshot.channels.size()) {
+                const auto delta =
+                    plot::OscilloscopeBuffer::makeDelta(*result.cursorReadouts[0], *result.cursorReadouts[1]);
+                if (delta.valid) deltaValue = delta.deltaValue;
             }
+            addOptionalMetricChip(chips, "Δy", deltaValue);
         }
 
-        if (selection.frequency && intervalText.showFrequency) {
-            addChip(chips, "Freq", formatMetricText(intervalText.frequencyHz, "Hz"));
+        if (selection.frequency && showFrequency) {
+            addMetricChip(chips, "Freq",
+                plot::cursorFrequencyHz(deltaTime, displayData.axisSource, displayData.timeUnit), "Hz");
         }
 
-        if (selection.period && intervalText.showFrequency) {
-            addChip(chips, "T", formatMetricText(std::abs(delta.deltaTime), displayData.timeUnit.c_str()));
+        if (selection.period && showFrequency) {
+            addMetricChip(chips, "T", deltaTime, displayData.timeUnit.c_str());
         }
     }
 
@@ -241,13 +261,20 @@ namespace {
     {
         const auto& selection = view.measurement;
 
-        if (!view.showCursors || !result.measurement.has_value() || !result.measurement->valid) {
+        if (!view.showCursors || result.bitMeasurementActive ||
+            cursorPairUsesBitLanes(result.cursorReadouts) ||
+            (view.measurementChannelIndex < snapshot.channels.size() &&
+             bitDisplayEnabled(snapshot.channels[view.measurementChannelIndex].bitDisplay))) {
             return {};
         }
 
-        const auto& m = *result.measurement;
-        const auto& channel = snapshot.channels[m.channelIndex];
-        const char* unit = safeUnit(channel.unit);
+        const plot::MeasurementReadout unavailable{};
+        const auto& m = result.measurement ? *result.measurement : unavailable;
+        const bool available = m.valid && m.sampleCount > 0 && m.channelIndex < snapshot.channels.size();
+        const auto channelIndex = available ? m.channelIndex : view.measurementChannelIndex;
+        const auto* channel = channelIndex < snapshot.channels.size() ? &snapshot.channels[channelIndex] : nullptr;
+        const char* unit = channel ? safeUnit(channel->unit) : nullptr;
+        const auto firstMeasurementChip = chips.size();
 
         if (selection.sampleCount) {
             addChip(chips, "N", std::to_string(m.sampleCount));
@@ -318,10 +345,34 @@ namespace {
         if (selection.bias)
             addOptionalMetricChip(chips, "Bias", m.bias, unit);
 
-        return channel.label;
+        // 选中项决定悬浮窗结构，计算失败或尚未就绪只降级数值，不移除项目。
+        if (!available) {
+            for (auto i = firstMeasurementChip; i < chips.size(); ++i) chips[i].value = "N/A";
+        }
+        return channel ? channel->label : std::string{};
     }
 
 } // namespace
+
+std::vector<WaveMetricChip> buildCursorMetricChips(const plot::WaveViewState& view,
+                                                   const plot::WaveSnapshot& snapshot,
+                                                   const plot::WaveDisplayData& displayData,
+                                                   const PlotRenderResult& result)
+{
+    MetricChips chips;
+    appendCursorChips(chips, view, snapshot, displayData, result);
+    return chips;
+}
+
+std::vector<WaveMetricChip> buildMeasurementMetricChips(const plot::WaveViewState& view,
+                                                        const plot::WaveSnapshot& snapshot,
+                                                        const plot::WaveDisplayData& displayData,
+                                                        const PlotRenderResult& result)
+{
+    MetricChips chips;
+    static_cast<void>(appendMeasurementChips(chips, view, snapshot, displayData, result));
+    return chips;
+}
 
 float resolveMeasurementSafeRightX(float contentLeftX,
                                    float contentWidth,
@@ -447,7 +498,7 @@ void drawMeasurementOverlay(const plot::WaveViewState& view,
 
     cursor.y += ImGui::GetTextLineHeight() + headerGap;
 
-    drawChipGrid(drawList,
+    drawChipGrid(view, drawList,
                  cursor,
                  chips,
                  overlayWidth - padding * 2.0F,

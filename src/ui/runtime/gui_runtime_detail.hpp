@@ -11,6 +11,7 @@
 #include "protoscope/ui/icons.hpp"
 #include "protoscope/ui/protocol_ui_state.hpp"
 #include "protoscope/ui/update_check.hpp"
+#include "protoscope/ui/ui_theme.hpp"
 
 #if defined(_WIN32)
 #include <shellapi.h>
@@ -236,7 +237,8 @@ namespace {
         bool saveDialog,
         bool pickFolder,
         const wchar_t* defaultExtension,
-        std::string& error)
+        std::string& error,
+        const std::filesystem::path* suggestedFileName = nullptr)
     {
         // 核心流程：Windows 文件与目录选择统一走 Common Item Dialog，避免同一应用出现两套系统对话框体验。
         const ScopedComInitializer com;
@@ -284,7 +286,13 @@ namespace {
         if (defaultExtension != nullptr && *defaultExtension != L'\0') {
             dialog->SetDefaultExtension(defaultExtension);
         }
-        setNativeDialogDefaultPath(dialog, defaultPath, pickFolder);
+        if (suggestedFileName != nullptr) {
+            // 内置入口明确传入目录与文件名，不靠目录是否存在猜测路径类型。
+            setNativeDialogDefaultPath(dialog, defaultPath, true);
+            if (!suggestedFileName->empty()) dialog->SetFileName(suggestedFileName->c_str());
+        } else {
+            setNativeDialogDefaultPath(dialog, defaultPath, pickFolder);
+        }
 
         result = dialog->Show(nativeWindowHandle(window));
         if (result == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
@@ -440,6 +448,16 @@ namespace {
     [[maybe_unused]] const char* controlTypeName(scripting::ControlType type)
     {
         switch (type) {
+            case scripting::ControlType::Label: return "label";
+            case scripting::ControlType::Readout: return "readout";
+            case scripting::ControlType::Indicator: return "indicator";
+            case scripting::ControlType::Progress: return "progress";
+            case scripting::ControlType::SliderInt: return "slider_int";
+            case scripting::ControlType::SliderFloat: return "slider_float";
+            case scripting::ControlType::RadioGroup: return "radio_group";
+            case scripting::ControlType::TextArea: return "text_area";
+            case scripting::ControlType::TabSelection: return "tabs";
+            case scripting::ControlType::DataTable: return "data_table";
             case scripting::ControlType::Button:
                 return "button";
             case scripting::ControlType::InputText:
@@ -465,6 +483,9 @@ namespace {
     [[maybe_unused]] bool isPersistedControlType(scripting::ControlType type)
     {
         return type == scripting::ControlType::Checkbox || type == scripting::ControlType::InputText ||
+               type == scripting::ControlType::SliderInt || type == scripting::ControlType::SliderFloat ||
+               type == scripting::ControlType::RadioGroup || type == scripting::ControlType::TextArea ||
+               type == scripting::ControlType::TabSelection ||
                type == scripting::ControlType::Combo || type == scripting::ControlType::InputInt ||
                type == scripting::ControlType::InputFloat || type == scripting::ControlType::TxSequence;
     }
@@ -561,8 +582,9 @@ namespace {
     [[maybe_unused]] std::optional<scripting::ControlValue> readControlValue(const YAML::Node& node,
                                                                              scripting::ControlType type)
     {
+        if (scripting::isOutputControl(type)) return std::nullopt;
         try {
-            switch (type) {
+            switch (scripting::controlValueKind(type)) {
                 case scripting::ControlType::Checkbox:
                     if (node.IsScalar()) {
                         return node.as<bool>();
@@ -592,6 +614,7 @@ namespace {
                     break;
                 case scripting::ControlType::TxSequence:
                     return std::nullopt;
+                default: break;
             }
         } catch (const std::exception&) {
             return std::nullopt;
@@ -601,7 +624,8 @@ namespace {
 
     [[maybe_unused]] void writeControlValue(YAML::Node node, const scripting::ControlSnapshot& control)
     {
-        switch (control.descriptor.type) {
+        if (scripting::isOutputControl(control.descriptor.type)) return;
+        switch (scripting::controlValueKind(control.descriptor.type)) {
             case scripting::ControlType::Checkbox:
                 node = std::get<bool>(control.value);
                 break;
@@ -626,6 +650,7 @@ namespace {
                     node = writeTxSequenceValue(*sequence);
                 }
                 break;
+            default: break;
         }
     }
 
@@ -691,54 +716,28 @@ namespace {
 
     [[maybe_unused]] LogRowPalette paletteForRow(const dock::ReceiveRow& row)
     {
+        const auto& tokens = activeUiStyleTokens();
+        ImVec4 accent = tokens.textMuted;
         switch (dock::classifyReceiveRow(row)) {
             case dock::ReceiveRowVisualKind::Rx:
-                return {ImVec4(0.22F, 0.78F, 0.62F, 1.0F),
-                        ImVec4(0.08F, 0.34F, 0.28F, 1.0F),
-                        ImVec4(0.70F, 1.0F, 0.88F, 1.0F),
-                        ImVec4(0.05F, 0.22F, 0.17F, 0.28F)};
+                accent = tokens.success; break;
             case dock::ReceiveRowVisualKind::Tx:
-                return {ImVec4(1.0F, 0.63F, 0.20F, 1.0F),
-                        ImVec4(0.40F, 0.23F, 0.06F, 1.0F),
-                        ImVec4(1.0F, 0.88F, 0.58F, 1.0F),
-                        ImVec4(0.26F, 0.15F, 0.04F, 0.32F)};
+                accent = tokens.warning; break;
             case dock::ReceiveRowVisualKind::Error:
-                return {ImVec4(1.0F, 0.30F, 0.34F, 1.0F),
-                        ImVec4(0.42F, 0.10F, 0.13F, 1.0F),
-                        ImVec4(1.0F, 0.78F, 0.80F, 1.0F),
-                        ImVec4(0.30F, 0.05F, 0.08F, 0.32F)};
+                accent = tokens.danger; break;
             case dock::ReceiveRowVisualKind::Warn:
-                return {ImVec4(1.0F, 0.78F, 0.24F, 1.0F),
-                        ImVec4(0.43F, 0.32F, 0.08F, 1.0F),
-                        ImVec4(1.0F, 0.92F, 0.62F, 1.0F),
-                        ImVec4(0.28F, 0.21F, 0.05F, 0.28F)};
+                accent = tokens.warning; break;
             case dock::ReceiveRowVisualKind::Event:
-                return {ImVec4(0.66F, 0.48F, 1.0F, 1.0F),
-                        ImVec4(0.26F, 0.18F, 0.48F, 1.0F),
-                        ImVec4(0.86F, 0.78F, 1.0F, 1.0F),
-                        ImVec4(0.16F, 0.10F, 0.30F, 0.30F)};
             case dock::ReceiveRowVisualKind::ScriptLog:
-                return {ImVec4(0.36F, 0.66F, 1.0F, 1.0F),
-                        ImVec4(0.10F, 0.25F, 0.50F, 1.0F),
-                        ImVec4(0.75F, 0.88F, 1.0F, 1.0F),
-                        ImVec4(0.06F, 0.15F, 0.30F, 0.28F)};
-            case dock::ReceiveRowVisualKind::Debug:
-                return {ImVec4(0.56F, 0.58F, 0.70F, 1.0F),
-                        ImVec4(0.20F, 0.21F, 0.28F, 1.0F),
-                        ImVec4(0.82F, 0.84F, 0.92F, 1.0F),
-                        ImVec4(0.12F, 0.13F, 0.18F, 0.26F)};
             case dock::ReceiveRowVisualKind::Info:
-                return {ImVec4(0.30F, 0.70F, 1.0F, 1.0F),
-                        ImVec4(0.08F, 0.28F, 0.46F, 1.0F),
-                        ImVec4(0.72F, 0.88F, 1.0F, 1.0F),
-                        ImVec4(0.05F, 0.16F, 0.27F, 0.26F)};
+                accent = tokens.accent; break;
+            case dock::ReceiveRowVisualKind::Debug:
             case dock::ReceiveRowVisualKind::Other:
             default:
-                return {ImVec4(0.54F, 0.60F, 0.68F, 1.0F),
-                        ImVec4(0.20F, 0.24F, 0.30F, 1.0F),
-                        ImVec4(0.86F, 0.90F, 0.96F, 1.0F),
-                        ImVec4(0.13F, 0.15F, 0.18F, 0.24F)};
+                break;
         }
+        return {displayColor(accent, tokens.panelBackground, 1.F, 4.5F),
+                tokens.panelBackgroundAlt, tokens.textStrong, tokens.panelBackground};
     }
 
     [[maybe_unused]] void drawFilledBadge(
@@ -771,7 +770,8 @@ namespace {
         const std::string timestamp = showTimestamps ? formatShortLogTimestamp(row.timestampMs) : std::string{};
         const std::string copyLine = dock::formatReceiveRowSingleLine(row, showTimestamps, showHex);
         const ImVec2 contentSize = ImGui::CalcTextSize(content.c_str());
-        const float rowHeight = ImGui::GetTextLineHeightWithSpacing() + style.FramePadding.y * 1.8F;
+        // 固定为整像素，避免离屏负坐标与正坐标截断方向不同，使首行测量相差一像素。
+        const float rowHeight = std::ceil(ImGui::GetTextLineHeightWithSpacing() + style.FramePadding.y * 1.8F);
         const float leftPadding = style.FramePadding.x + 6.0F;
         const float badgeWidth = 66.0F;
         const float gap = style.ItemSpacing.x + 8.0F;
@@ -819,8 +819,8 @@ namespace {
                         badgeWidth);
 
         float cursorX = rowMin.x + leftPadding + badgeWidth + gap;
-        const ImU32 mutedText = ImGui::ColorConvertFloat4ToU32(ImVec4(0.68F, 0.72F, 0.78F, 1.0F));
-        const ImU32 endpointText = ImGui::ColorConvertFloat4ToU32(ImVec4(0.82F, 0.86F, 0.92F, 1.0F));
+        const ImU32 mutedText = ImGui::ColorConvertFloat4ToU32(activeUiStyleTokens().textMuted);
+        const ImU32 endpointText = ImGui::ColorConvertFloat4ToU32(activeUiStyleTokens().textStrong);
         const ImU32 contentText = ImGui::ColorConvertFloat4ToU32(ImGui::GetStyleColorVec4(ImGuiCol_Text));
         if (showTimestamps) {
             drawList->AddText(ImVec2(cursorX, textY), mutedText, timestamp.c_str());
@@ -857,13 +857,15 @@ namespace {
             if (rows.empty()) {
                 ImGui::TextDisabled("%s", emptyText.c_str());
             } else {
-                const float rowHeight = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().FramePadding.y * 1.8F;
                 ImGuiListClipper clipper;
-                clipper.Begin(static_cast<int>(rows.size()), rowHeight);
+                // 实测首行布局步长，包含 ItemSpacing 和像素取整，避免虚拟高度与实际行布局漂移。
+                clipper.Begin(static_cast<int>(rows.size()));
                 while (clipper.Step()) {
                     for (int rowIndex = clipper.DisplayStart; rowIndex < clipper.DisplayEnd; ++rowIndex) {
                         const auto* row = rows[static_cast<std::size_t>(rowIndex)];
                         if (row == nullptr) {
+                            ImGui::Dummy(ImVec2(0, std::ceil(ImGui::GetTextLineHeightWithSpacing() +
+                                                      ImGui::GetStyle().FramePadding.y * 1.8F)));
                             continue;
                         }
                         // 核心流程：日志历史可能很长，只绘制当前视口内的行，避免停流后每帧重画全部历史。

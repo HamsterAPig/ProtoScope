@@ -465,17 +465,17 @@ namespace {
     {
         drawTopToolbarSeparator();
         if (drawTopToolbarButton("叠加", view.viewMode == plot::WaveViewMode::Overlay, "多通道共用同一个波形区域。")) {
-            view.viewMode = plot::WaveViewMode::Overlay;
+            setWaveViewMode(view, plot::WaveViewMode::Overlay);
         }
         ImGui::SameLine();
         if (drawTopToolbarButton(
                 "堆叠", view.viewMode == plot::WaveViewMode::Stacked, "按通道纵向错开显示，不修改原始采样。")) {
-            view.viewMode = plot::WaveViewMode::Stacked;
+            setWaveViewMode(view, plot::WaveViewMode::Stacked);
         }
         ImGui::SameLine();
         if (drawTopToolbarButton(
                 "分屏", view.viewMode == plot::WaveViewMode::Split, "每个可见通道使用独立子图，共享时间轴。")) {
-            view.viewMode = plot::WaveViewMode::Split;
+            setWaveViewMode(view, plot::WaveViewMode::Split);
         }
     }
 
@@ -525,6 +525,17 @@ namespace {
                                    const plot::WaveDisplayData& displayData)
     {
         drawTopToolbarSeparator();
+        const bool fullSpectrum = view.fft.enabled && view.fft.displayMode == plot::WaveFftDisplayMode::FullSpectrum;
+        protoscope::ui::beginDisabled(fullSpectrum);
+        if (drawTopToolbarButton("+T", false, "添加辅助游标")) {
+            std::vector<double> occupied;
+            if (view.showCursors)
+                for (const auto& cursor : view.cursors)
+                    if (cursor.enabled) occupied.push_back(cursor.time);
+            view.auxiliaryCursors.add(view.viewMinTime, view.viewMaxTime, occupied);
+        }
+        protoscope::ui::endDisabled();
+        ImGui::SameLine();
         if (drawTopToolbarButton(
                 "A",
                 view.cursors[0].enabled,
@@ -613,6 +624,7 @@ namespace {
                                  wave.overviewCollapsed ? "概览图已折叠；点击后显示全局时间轴概览。"
                                                         : "概览图已显示；点击后折叠概览区域。")) {
             wave.overviewCollapsed = !wave.overviewCollapsed;
+            if (wave.overviewCollapsed) releaseOverviewDrag(wave);
         }
         ImGui::SameLine();
         if (drawTopToolbarButton(
@@ -791,7 +803,8 @@ void recordMainPlotLimits(plot::WaveViewState& view, const ImPlotRect& limits)
     view.viewMaxTime = limits.X.Max;
     view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, minVisibleTimeSpan);
     view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
-    if (!view.lockVerticalRange) {
+    // 堆叠视图的 Y 范围只在进入或解除锁定时适配一次，横向交互不再回写共享 Y 状态。
+    if (!view.lockVerticalRange && view.viewMode == plot::WaveViewMode::Overlay) {
         view.viewMinValue = limits.Y.Min;
         view.viewMaxValue = limits.Y.Max;
     }
@@ -803,8 +816,9 @@ bool syncAutoFitAxisLimits(plot::WaveViewState& view, const ImPlotRect& limits)
     constexpr double kLimitEpsilon = 1e-9;
     const bool xChanged = std::abs(limits.X.Min - view.viewMinTime) > kLimitEpsilon ||
                           std::abs(limits.X.Max - view.viewMaxTime) > kLimitEpsilon;
-    const bool yChanged = !view.lockVerticalRange && (std::abs(limits.Y.Min - view.viewMinValue) > kLimitEpsilon ||
-                                                      std::abs(limits.Y.Max - view.viewMaxValue) > kLimitEpsilon);
+    const bool yChanged = !view.lockVerticalRange && view.viewMode != plot::WaveViewMode::Stacked &&
+                          (std::abs(limits.Y.Min - view.viewMinValue) > kLimitEpsilon ||
+                           std::abs(limits.Y.Max - view.viewMaxValue) > kLimitEpsilon);
     if (!xChanged && !yChanged) {
         return false;
     }
@@ -943,42 +957,10 @@ bool applyYAxisSingleSideScaleToChannels(plot::WaveDockState& wave,
     bool changed = false;
     const auto targets = yAxisSingleSideScaleTargets(wave, snapshot, visibleChannelIndices);
     for (const std::size_t channelIndex : targets) {
-        if (channelIndex >= snapshot.channels.size()) {
-            continue;
+        // 主图自动适配统一居中并写入 scale/offset，兼容字段不再引入另一套变换语义。
+        if (!channelHiddenByLegendState(wave, channelIndex)) {
+            changed = fitChannelDisplayRange(wave, snapshot, channelIndex, viewCenter, targetHeight) || changed;
         }
-        const auto& channel = snapshot.channels[channelIndex];
-        if (bitDisplayEnabled(channel.bitDisplay) || channel.samples == nullptr) {
-            continue;
-        }
-        const auto currentSpec = wave.buffer.channelSpec(channelIndex);
-        if (!currentSpec.has_value()) {
-            continue;
-        }
-
-        const auto actual = visibleActualRangeForChannel(channel, *currentSpec);
-        if (!actual.has_value()) {
-            continue;
-        }
-
-        auto updated = *currentSpec;
-        const double sign = updated.scale < 0.0 ? -1.0 : 1.0;
-        const double targetMagnitude = targetHeight / actual->span;
-        if (!std::isfinite(targetMagnitude) || targetMagnitude <= 1e-12) {
-            continue;
-        }
-        updated.scale = sign * targetMagnitude;
-
-        if (wave.view.yAxisDoubleClickAdjustOffset) {
-            // 显式开启兼容模式时同步反推 offset，让实际值区间落在当前 Y 视口内部目标区间。
-            if (wave.view.displayFormula == plot::WaveDisplayFormula::ScaleThenOffset) {
-                updated.offset = viewCenter - actual->center * updated.scale;
-            } else {
-                updated.offset = viewCenter / updated.scale - actual->center;
-            }
-        }
-        applyChannelTransformOverride(
-            wave, channelIndex, updated, channelDefaultSpec(wave, channelIndex, *currentSpec));
-        changed = true;
     }
     return changed;
 }
@@ -1196,6 +1178,11 @@ bool startViewportAnimation(plot::WaveViewState& view,
     }
 
     applyAutoFollowPausePolicy(view, policy);
+    // Y 目标在本帧转换为通道参数，动画只插值 X，避免后续帧再叠加隐式纵向缩放。
+    if (!view.lockVerticalRange) {
+        view.viewMinValue = target.minValue;
+        view.viewMaxValue = target.maxValue;
+    }
     view.viewportAnimation.active = true;
     view.viewportAnimation.start = currentViewport(view);
     view.viewportAnimation.target = target;
@@ -1314,6 +1301,39 @@ namespace {
 
 } // namespace
 
+bool applyFitVisibleWaveforms(plot::WaveDockState& wave,
+                              const plot::WaveSnapshot& fullSnapshot,
+                              const plot::WaveDisplayData& displayData,
+                              const std::vector<std::size_t>& visibleChannelIndices)
+{
+    auto& view = wave.view;
+    if (!view.fitVisibleWaveformsRequested) {
+        return false;
+    }
+    const auto baseline = currentViewport(view);
+    std::size_t row = 0;
+    for (auto index : visibleChannelIndices) {
+        if (channelHiddenByLegendState(wave, index) || index >= fullSnapshot.channels.size() ||
+            bitDisplayEnabled(fullSnapshot.channels[index].bitDisplay)) {
+            continue;
+        }
+        const bool stacked = view.viewMode == plot::WaveViewMode::Stacked;
+        fitChannelDisplayRange(wave, fullSnapshot, index,
+                               stacked ? static_cast<double>(row) * 1.6
+                                       : (baseline.minValue + baseline.maxValue) * 0.5,
+                               stacked ? 1.0 : (baseline.maxValue - baseline.minValue) /
+                                                    (std::max)(view.verticalAutoFitMultiplier, 1.0));
+        ++row;
+    }
+    // 保留全历史 X 首尾语义；Y 适配已写回参数，仅为 X 保留动画。
+    const bool result = applyFitVisibleWaveforms(view, fullSnapshot, displayData, visibleChannelIndices);
+    view.viewMinValue = baseline.minValue;
+    view.viewMaxValue = baseline.maxValue;
+    view.viewportAnimation.start.minValue = view.viewportAnimation.target.minValue = baseline.minValue;
+    view.viewportAnimation.start.maxValue = view.viewportAnimation.target.maxValue = baseline.maxValue;
+    return result;
+}
+
 bool applyFitVisibleWaveforms(plot::WaveViewState& view,
                               const plot::WaveSnapshot& fullSnapshot,
                               const plot::WaveDisplayData& displayData,
@@ -1422,7 +1442,6 @@ ZoomSelectionResult handleMainPlotZoomSelection(plot::WaveViewState& view, bool 
 
 bool handleActiveWaveformDoubleClickOffsetReset(plot::WaveDockState& wave,
                                                 const plot::WaveSnapshot& snapshot,
-                                                const BitLaneLayout& bitLayout,
                                                 const plot::WaveDisplayData& displayData,
                                                 const std::vector<std::size_t>& visibleChannelIndices,
                                                 const ImPlotPoint& mousePos,
@@ -1440,7 +1459,6 @@ bool handleActiveWaveformDoubleClickOffsetReset(plot::WaveDockState& wave,
         if (view.measurementChannelIndex != waveform->channelIndex) {
             // 核心流程：双击非当前模拟波形只切换激活 CH，不顺手复位用户配置。
             view.measurementChannelIndex = waveform->channelIndex;
-            view.activeBitLane = {};
             return true;
         }
 
@@ -1448,30 +1466,10 @@ bool handleActiveWaveformDoubleClickOffsetReset(plot::WaveDockState& wave,
         if (!plot::resetChannelOffsetToDefault(wave, view.measurementChannelIndex)) {
             return false;
         }
-        view.activeBitLane = {};
         invalidateWaveDisplayCaches(wave);
         return true;
     }
-
-    if (const auto bitLane = findBitLaneAtPlotValue(bitLayout, mousePos.y, valueSnapDistance)) {
-        return resetBitLaneYOffsetFromHit(wave, bitLane->lane);
-    }
-
     return false;
-}
-
-bool resetBitLaneYOffsetFromHit(plot::WaveDockState& wave, const BitLaneLayoutEntry& lane)
-{
-    auto& view = wave.view;
-    // 核心流程：bit lane 双击不依赖预先选中，也不受 Y offset 拖动模式影响。
-    view.measurementChannelIndex = lane.parentChannelIndex;
-    view.activeBitLane = {
-        .active = true,
-        .parentChannelIndex = lane.parentChannelIndex,
-        .bitIndex = lane.bitIndex,
-        .laneIndex = lane.laneIndex,
-    };
-    return resetChannelBitYOffsetToZero(wave, lane.parentChannelIndex);
 }
 
 const char* axisSourceName(plot::WaveTimeAxisSource source)
@@ -1596,17 +1594,20 @@ public:
                     ? plot::computeDisplayBoundsForChannels(
                           *frame.overviewDisplayData, derivedChannelIndices, minVisibleTimeSpan)
                     : plot::computeDisplayBounds(*frame.overviewDisplayData, minVisibleTimeSpan);
-            drawOverviewWindow(view,
+            drawOverviewWindow(wave,
                                config,
                                *frame.fullSnapshot,
                                *frame.overviewDisplayData,
                                overviewBounds,
                                derivedChannelIndices,
                                frame.renderBudget);
+        } else {
+            releaseOverviewDrag(wave);
         }
         ImGui::SetCursorPos(overviewPanelCursor);
         if (ImGui::Button(wave.overviewCollapsed ? "v" : "^", ImVec2(20.0F, 18.0F))) {
             wave.overviewCollapsed = !wave.overviewCollapsed;
+            if (wave.overviewCollapsed) releaseOverviewDrag(wave);
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip(wave.overviewCollapsed ? "展开概览图" : "折叠概览图");
@@ -2056,7 +2057,9 @@ void WaveDockRenderer::drawOverlay(bool fullscreenActive, bool* fullscreenToggle
 {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);
-    ImGui::SetNextWindowSize(viewport->WorkSize);
+    const float bottom = (std::min)(viewport->WorkPos.y + viewport->WorkSize.y,
+                                    viewport->Pos.y + viewport->Size.y - kStatusBarHeight);
+    ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, (std::max)(1.0F, bottom - viewport->WorkPos.y)));
     ImGui::SetNextWindowViewport(viewport->ID);
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                                    ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking |

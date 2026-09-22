@@ -2,6 +2,7 @@
 #include "protoscope/plot/raw_capture_file.hpp"
 #include "protoscope/protocol_utils/codec.hpp"
 #include "protoscope/session/session_package.hpp"
+#include "protoscope/ui/elf_static_address_file_watch.hpp"
 
 #include "test_helpers.hpp"
 #include "test_registry.hpp"
@@ -863,7 +864,19 @@ void test_application_refreshes_selected_elf_symbol_controls_silently()
                                    });
     const auto beforeEvents = countScriptEvents(application.docks().scriptState(), "symbol");
 
+    protoscope::ui::ElfStaticAddressFileWatchState watch;
+    watch.path = elfPath;
+    watch.watching = true;
+    std::error_code watchError;
+    static_cast<void>(protoscope::ui::pollElfStaticAddressFileWatchState(watch, 1000, watchError));
     writeElfSymbolDump(elfPath, 0x20000044ULL, "uint64_t");
+    // 从普通文件变更触发稳定等待，再串联应用加载和已选控件刷新。
+    const auto timestamp = std::filesystem::last_write_time(elfPath);
+    std::filesystem::last_write_time(elfPath, timestamp + std::chrono::seconds(2));
+    require(!protoscope::ui::pollElfStaticAddressFileWatchState(watch, 1500, watchError).shouldReload,
+            "写入后应等待稳定");
+    const auto reload = protoscope::ui::pollElfStaticAddressFileWatchState(watch, 2500, watchError);
+    require(!watchError && reload.shouldReload && reload.clearComboCache, "普通覆盖应触发自动重载链路");
     require(application.loadElfStaticAddressFile(elfPath, error), "更新后的 ELF 数据应可加载");
     application.refreshSelectedElfSymbolControls();
 
@@ -881,6 +894,31 @@ void test_application_refreshes_selected_elf_symbol_controls_silently()
     refreshed = findElfSymbolControl(application, "target");
     require(refreshed != nullptr && refreshed->value == "0x20000044" && refreshed->type == "uint64_t",
             "label 消失时旧地址和类型应保持不变");
+    require(application.docks().configState().statusMessage.find("未找到变量，旧地址未更新: global.target") !=
+                std::string::npos,
+            "变量消失应报告完整变量名称及旧地址保留警告");
+
+    {
+        std::ofstream output(elfPath, std::ios::binary | std::ios::trunc);
+        output << "invalid symbol data";
+    }
+    const auto revision = application.elfStaticAddressRevision();
+    require(!application.loadElfStaticAddressFile(elfPath, error), "解析失败应返回失败");
+    require(!error.empty() && application.elfStaticAddressRevision() == revision, "加载失败应保留模型版本并说明原因");
+    refreshed = findElfSymbolControl(application, "target");
+    require(refreshed && refreshed->label == "global.target" && refreshed->value == "0x20000044" &&
+                refreshed->type == "uint64_t",
+            "加载失败应保留全部控件值");
+
+    auto config = application.captureConfig();
+    config.gui.elfSymbolCombo.autoRefreshSelectedAddress = false;
+    require(application.applyConfig(config), "应可关闭已选符号自动刷新");
+    writeElfSymbolDump(elfPath, 0x20000088ULL, "uint16_t");
+    require(application.loadElfStaticAddressFile(elfPath, error), "失败后应可重新加载");
+    application.refreshSelectedElfSymbolControls();
+    refreshed = findElfSymbolControl(application, "target");
+    require(refreshed && refreshed->value == "0x20000044" && refreshed->type == "uint64_t",
+            "关闭自动刷新应保留旧地址及类型");
 
     application.shutdown();
 }
@@ -951,6 +989,8 @@ void test_application_failed_protocol_reload_keeps_previous_runtime()
     require(application.reloadProtocolDirectory("protocols/lua_waveform_demo", true), "Lua 波形演示脚本应可加载");
 
     const auto before = application.docks().luaState();
+    auto& auxiliary = application.docks().waveState().view.auxiliaryCursors;
+    auxiliary.add(0, 1);
     require(!application.reloadProtocolDirectory("tests/fixtures/protocols/invalid_controls", true),
             "非法协议脚本应加载失败");
 
@@ -960,6 +1000,9 @@ void test_application_failed_protocol_reload_keeps_previous_runtime()
     require(after.scriptPath == before.scriptPath, "加载失败后不应改写当前入口脚本路径");
     require(!after.controlStates.empty(), "加载失败后应保留上一份动态控件快照");
     require(!after.lastError.empty(), "加载失败后应保留错误信息供界面展示");
+    require(auxiliary.items.size() == 1, "加载失败应保留当前会话辅助游标");
+    require(application.reloadProtocolDirectory("protocols/templates/default_protocol", true), "应能切换有效协议");
+    require(auxiliary.items.empty(), "切换协议应清空辅助游标");
 
     application.shutdown();
 }
@@ -1664,12 +1707,17 @@ void test_application_wave_legend_visibility_config_roundtrip()
     config.gui.interactionFeedback.enabled = true;
     config.gui.wave.showChannelLegend = false;
     config.gui.wave.showFftLegend = false;
+    config.gui.wave.cursorAutoColor = false;
     config.gui.wave.cursorFftHighlightRgba = {0.11F, 0.22F, 0.33F, 0.44F};
     config.gui.wave.hiddenChannelPolicy = protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews;
     config.gui.wave.legendOverlayDoubleClickAutoCollapse = false;
     config.gui.wave.interactionAnimationEnabled = false;
     require(application.applyConfig(config), "图例显示配置应用失败");
 
+    require(!application.docks().waveState().view.cursorAutoColor && !application.captureConfig().gui.wave.cursorAutoColor,
+            "应用配置与回收应保留手动游标色");
+    application.docks().waveState().view.cursorAutoColor = true;
+    require(application.captureConfig().gui.wave.cursorAutoColor, "应用回收不得覆盖 Dock 实时游标色开关");
     require(!application.docks().waveState().view.showChannelLegend, "应用配置后应隐藏图例");
     require(!application.docks().waveState().view.showFftLegend, "应用配置后应隐藏 FFT 图例");
     require(std::abs(application.docks().waveState().view.cursorFftHighlightRgba[3] - 0.44F) < 1e-6F,
@@ -1797,9 +1845,11 @@ void test_application_reset_wave_history_restores_default_viewport()
     wave.view.visibleDuration = 2.0;
     wave.view.viewMinTime = 5.0;
     wave.view.viewMaxTime = 7.0;
+    wave.view.auxiliaryCursors.add(5, 7);
 
     application.resetWaveHistory();
 
+    require(wave.view.auxiliaryCursors.items.empty(), "清空历史应立即清空辅助游标");
     require(wave.view.autoFollowLatest, "清空历史后应恢复自动跟随");
     require(wave.view.defaultViewportPending, "清空历史后应等待按真实宽度应用默认视口");
     require(!wave.view.initialized, "清空历史后应重新初始化视口");
@@ -2061,6 +2111,34 @@ void test_application_plot_setup_reset_history_preserves_channel_overrides()
     application.shutdown();
 }
 
+void test_application_bit_hover_setup_preserves_history()
+{
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+    auto first = makePlotSetupEvent(false);
+    first.plotSetup.channels[0].bitDisplay.enabled = true;
+    auto second = first;
+    second.timestampMs = first.timestampMs + 100;
+    second.plotSetup.channels[0].bitDisplay.hoverReadout = true;
+    const auto& lua = application.docks().luaState();
+    const protoscope::plot::RawCaptureFileData capture{
+        .protocolName = lua.protocolName,
+        .protocolDir = lua.protocolDir,
+        .events = {first, second},
+    };
+    std::string error;
+    require(application.loadRawCaptureReplayTimeline(capture, error), "悬停配置回放应可载入");
+    require(application.stepRawCaptureReplay(error), "首次 setup 应成功");
+    auto& wave = application.docks().waveState();
+    wave.buffer.append(0, {.samples = {{0.0, 42.0}}});
+    wave.view.defaultViewportPending = false;
+    require(application.stepRawCaptureReplay(error), "悬停开关 setup 应成功");
+    require(wave.buffer.channelSpec(0)->bitDisplay.hoverReadout, "回放应更新悬停开关");
+    require(wave.buffer.snapshot(0, 1).channels[0].totalSamples == 1, "仅修改悬停开关不能清空历史");
+    require(!wave.view.defaultViewportPending, "仅修改悬停开关不能重置视口");
+    application.shutdown();
+}
+
 void test_application_logging_filters_script_and_host()
 {
     const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-logging-test"));
@@ -2271,11 +2349,15 @@ void test_application_session_package_export_contains_replay_assets()
     protoscope::app::Application importedApplication;
     require(importedApplication.initialize(), "导入应用初始化失败");
     importedApplication.setGuiTheme(protoscope::config::GuiTheme::DebugHighContrast);
+    importedApplication.rememberFileDialogPreferences({"local-import", "local-export"});
     require(importedApplication.importSessionPackage(packagePath, error), "导入现场会话包应成功");
     const auto& importedLua = importedApplication.docks().luaState();
     require(importedLua.protocolDir.find("ProtoScope-session-protocol-") != std::string::npos,
             "导入现场包应使用释放出的临时协议目录");
     const auto importedConfig = importedApplication.captureConfig();
+    require(importedConfig.gui.fileDialogs.lastImportDirectory == "local-import" &&
+                importedConfig.gui.fileDialogs.lastExportDirectory == "local-export",
+            "现场包导入不应覆盖本机目录偏好");
     require(importedConfig.gui.theme == protoscope::config::GuiTheme::DebugHighContrast,
             "现场包导入不应覆盖本机全局主题偏好");
     require(importedConfig.protocol.selectedDir.find("ProtoScope-session-protocol-") == std::string::npos,
@@ -3233,6 +3315,49 @@ void test_application_raw_capture_import_replays_stream_in_chunks()
             "导入回放应按分块解析全部 stream 帧，而不是只保留尾部数据");
 }
 
+void test_application_raw_capture_import_batches_small_rx_events()
+{
+    constexpr const char* protocolDir = "tests/fixtures/protocols/raw_import_chunked_stream";
+    constexpr std::size_t frameCount = 1024;
+    constexpr std::size_t eventBytes = 3;
+
+    protoscope::app::Application application;
+    require(application.initialize(), "应用应可初始化默认 Lua 工作区");
+    require(application.reloadProtocolDirectory(protocolDir, true), "分块导入 stream 协议应可加载");
+
+    const auto payload = makeRawImportStreamPayload(frameCount);
+    protoscope::plot::RawCaptureFileData capture{
+        .protocolName = "raw_import_chunked_stream",
+        .protocolDir = protocolDir,
+        .sampleFrequencyHz = 1000.0,
+        .capturedAtMs = 123,
+        .payload = payload,
+        .events = {},
+    };
+    capture.events.reserve((payload.size() + eventBytes - 1U) / eventBytes);
+    for (std::size_t offset = 0; offset < payload.size(); offset += eventBytes) {
+        const auto end = (std::min)(payload.size(), offset + eventBytes);
+        capture.events.push_back(protoscope::plot::RawCaptureEvent{
+            .type = protoscope::plot::RawCaptureEventType::RxBytes,
+            .timestampMs = capture.capturedAtMs + capture.events.size(),
+            .bytes = std::vector<std::uint8_t>(payload.begin() + static_cast<std::ptrdiff_t>(offset),
+                                               payload.begin() + static_cast<std::ptrdiff_t>(end)),
+            .profile = {},
+            .plotSetup = {},
+        });
+    }
+
+    std::string error;
+    require(application.importWaveRawCapture(capture, error), "大量小 RX 事件导入应成功");
+    const auto importedSnapshot = application.docks().waveState().buffer.snapshot(
+        -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+    require(!importedSnapshot.channels.empty(), "合批导入后应生成波形通道");
+    require(importedSnapshot.channels.front().totalSamples == frameCount, "跨事件合批导入应按顺序解析全部 stream 帧");
+    require(application.docks().receiveState().rows.size() == capture.events.size(),
+            "跨事件合批导入不应丢失原始接收记录");
+    application.shutdown();
+}
+
 void test_application_raw_capture_import_updates_last_pump_diagnostics()
 {
     constexpr const char* protocolDir = "tests/fixtures/protocols/raw_import_chunked_stream";
@@ -3577,9 +3702,12 @@ void test_application_large_rx_event_drains_by_byte_budget()
 
     require(application.pumpOnce(), "第一轮 pump 应快速转交大 RX 到脚本 worker");
 
-    for (int attempt = 0; attempt < 10 && application.docks().receiveState().frameRows.size() < frameCount; ++attempt) {
+    // 帧展示与脚本解析由不同队列推进，必须同时等待两者完成，不能用可见行数推断 worker 已空闲。
+    require(waitUntil([&] {
         application.pumpOnce();
-    }
+        return application.docks().receiveState().frameRows.size() == frameCount &&
+               application.docks().commState().pendingRxBytes == 0U;
+    }), "worker 应在超时前 drain 大 RX 事件");
     require(application.docks().receiveState().frameRows.size() == frameCount, "worker 应异步 drain 大 RX 事件");
     require(application.docks().commState().pendingRxBytes == 0U, "worker drain 完成后不应残留 pending 字节");
 }
@@ -3736,12 +3864,16 @@ void test_application_complete_disconnect_keeps_realtime_backlog()
     application.closeTransport();
     require(application.docks().commState().state == protoscope::transport::TransportState::Closed,
             "complete 断开后通讯状态也应立即关闭");
-    require(application.docks().commState().pendingRxBytes == 0U, "complete 模式不应保留已转交 worker 的 RX 字节");
+    require(application.docks().commState().rxInputQueueBytes == 0U,
+            "complete 模式不应在主线程队列保留已转交 worker 的 RX 字节");
     require(application.docks().commState().pendingTransferFrameRows > 0U, "complete 断开后应保留 pending 逐帧行");
 
-    for (int attempt = 0; attempt < 20 && application.docks().receiveState().frameRows.size() < frameCount; ++attempt) {
+    // pendingRxBytes 包含 worker 尚未解析的字节，断开不会同步等待 worker。
+    require(waitUntil([&]() {
         application.pumpOnce();
-    }
+        return application.docks().receiveState().frameRows.size() == frameCount &&
+               application.docks().commState().pendingRxBytes == 0U;
+    }), "complete 模式断开后应异步处理完 RX 字节");
     require(application.docks().receiveState().frameRows.size() == frameCount,
             "complete 模式应在后续 pump 小步补完逐帧 backlog");
     require(application.docks().commState().state == protoscope::transport::TransportState::Closed,

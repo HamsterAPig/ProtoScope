@@ -7,6 +7,10 @@
 #include <string>
 
 #include <imgui.h>
+#if defined(_WIN32)
+#include <windows.h>
+#include <shellapi.h>
+#endif
 
 namespace protoscope::ui {
 
@@ -22,16 +26,6 @@ namespace {
         {.label = "信息", .level = config::LogLevel::Info},
         {.label = "警告", .level = config::LogLevel::Warn},
         {.label = "错误", .level = config::LogLevel::Error},
-    };
-
-    struct ThemeMenuItem {
-        const char* label;
-        config::GuiTheme theme;
-    };
-
-    constexpr ThemeMenuItem kThemeMenuItems[] = {
-        {.label = "专业深色", .theme = config::GuiTheme::ProfessionalDark},
-        {.label = "仪器深黑（高对比）", .theme = config::GuiTheme::DebugHighContrast},
     };
 
     bool menuItemWithHelp(
@@ -68,37 +62,12 @@ void GuiRuntime::drawFileMenu()
     if (ImGui::MenuItem("打开 ELF/ElfStaticView 数据文件...", shortcutLabel(ShortcutAction::OpenElfDataFile).data())) {
         openElfStaticAddressDialog();
     }
-    if (menuItemWithHelp(
-            "导入现场会话包...", nullptr, "打开 .pssession，恢复协议与现场上下文，并在时间轴起点暂停等待回放。")) {
-        openSessionPackageImportDialog();
-    }
-    if (menuItemWithHelp("导入原始波形...",
-                         shortcutLabel(ShortcutAction::ImportRawWave).data(),
-                         "打开 .psraw 快照，重建当前可查看的原始波形缓存。")) {
-        openRawCaptureImportDialog();
-    }
-    if (ImGui::MenuItem("导入 CSV 数据...")) {
-        openCsvDataImportDialog();
-    }
-    if (menuItemWithHelp(
-            "载入原始回放时间轴...", nullptr, "打开 .psraw 完整事件流，用原始时间戳按时间轴复现采集过程。")) {
-        openRawCaptureReplayTimelineDialog();
-    }
-    ImGui::Separator();
-    if (menuItemWithHelp("导出现场会话包...", nullptr, "保存 .pssession，打包当前协议、原始缓存和复现证据。")) {
-        openSessionPackageExportDialog();
-    }
-    if (menuItemWithHelp("导出当前缓存快照...",
-                         shortcutLabel(ShortcutAction::ExportRawWave).data(),
-                         "导出当前可回放窗口内的 .psraw 原始字节和必要配置快照。")) {
-        openRawCaptureExportDialog();
-    }
-    if (ImGui::MenuItem("导出波形 CSV...")) {
-        openWaveCsvExportDialog();
-    }
-    if (ImGui::MenuItem("导出原始事件 CSV...")) {
-        openRawCaptureCsvExportDialog();
-    }
+    protoscope::ui::beginDisabled(application_.dataTransferStatus().active);
+    if (ImGui::MenuItem("导入数据...")) openUnifiedDataImport();
+    if (ImGui::MenuItem("导出数据...")) openUnifiedDataExport();
+    if (ImGui::MenuItem("使用上次配置导出", nullptr, false,
+                        application_.runtimeConfig().gui.lastDataExport.valid)) openUnifiedDataExport(-1, true);
+    protoscope::ui::endDisabled();
     if (ImGui::MenuItem("导出波形分析报告...")) {
         openWaveAnalysisExportDialog();
     }
@@ -255,14 +224,38 @@ void GuiRuntime::drawSettingsMenu()
     }
     if (ImGui::BeginMenu("主题")) {
         const auto currentTheme = application_.runtimeConfig().gui.theme;
-        for (const auto& item : kThemeMenuItems) {
-            const bool selected = currentTheme == item.theme;
-            if (ImGui::MenuItem(item.label, nullptr, selected) && !selected) {
-                application_.setGuiTheme(item.theme);
-                applyUiTheme(item.theme);
-                application_.setStatusMessage(std::string("主题已切换为：") + item.label, true);
+        std::string error;
+        for (const auto& item : themeManager_.themes()) {
+            const bool selected = currentTheme == item.id;
+            ImGui::PushID(item.id.c_str());
+            if (ImGui::MenuItem(item.name.c_str(), nullptr, selected) && !selected) {
+                if (themeManager_.request(item.id, error)) application_.setGuiTheme(item.id);
             }
+            ImGui::PopID();
         }
+        ImGui::Separator();
+        if (ImGui::MenuItem("重载主题")) {
+            themeManager_.setConfigPath(application_.docks().configState().loadedFromPath);
+            if (themeManager_.reload(error)) themeManager_.request(currentTheme, error);
+        }
+        if (ImGui::MenuItem("导出当前主题")) {
+            const auto path = themeManager_.directory() / ("exported_" + std::to_string(nowMs()) + ".yaml");
+            if (themeManager_.exportCurrent(path, error))
+                application_.setStatusMessage("主题已导出: " + path.string(), false);
+        }
+        if (ImGui::MenuItem("打开主题目录")) {
+            std::error_code ec;
+            std::filesystem::create_directories(themeManager_.directory(), ec);
+            if (ec) error = ec.message();
+#if defined(_WIN32)
+            else if (reinterpret_cast<std::intptr_t>(ShellExecuteW(nullptr, L"open",
+                         std::filesystem::absolute(themeManager_.directory()).c_str(), nullptr, nullptr, SW_SHOWNORMAL)) <= 32)
+                error = "无法打开主题目录";
+#else
+            else error = "主题目录: " + std::filesystem::absolute(themeManager_.directory()).string();
+#endif
+        }
+        if (!error.empty()) application_.setStatusMessage(error, false);
         ImGui::EndMenu();
     }
     ImGui::EndMenu();
@@ -282,6 +275,7 @@ void GuiRuntime::drawMainMenu()
     drawSettingsMenu();
 
     drawLuaViewMenu();
+    drawBusinessMenu();
     drawHelpMenu();
 
     ImGui::EndMainMenuBar();

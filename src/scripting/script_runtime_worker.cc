@@ -51,6 +51,7 @@ namespace {
         bool currentRunning{false};
         bool targetRunning{false};
         std::shared_ptr<std::promise<bool>> result;
+        std::uint64_t runtimeGeneration{0};
     };
 
     struct ClearRealtimeOutputsCommand {
@@ -86,10 +87,22 @@ namespace {
         transport::ConnectionContext context;
         std::string id;
         ControlValue value;
+        std::uint64_t runtimeGeneration{0};
     };
 
     struct TickCommand {
         std::uint64_t currentMs{0};
+    };
+    struct MenuCommand {
+        transport::ConnectionContext context;
+        std::string id;
+        bool checked{false};
+        std::uint64_t generation{0};
+        std::uint64_t revision{0};
+    };
+    struct DataTableCommand {
+        transport::ConnectionContext context;
+        DataTableEvent event;
     };
 
     struct TxEventCommand {
@@ -128,6 +141,8 @@ namespace {
                                        ErrorCommand,
                                        BytesCommand,
                                        ControlCommand,
+                                       MenuCommand,
+                                       DataTableCommand,
                                        TickCommand,
                                        TxEventCommand,
                                        DialogEventCommand,
@@ -145,6 +160,7 @@ namespace {
             .controls = host.controlsSnapshot(),
             .controlStates = host.controlStatesSnapshot(),
             .docks = host.dockSnapshots(),
+            .businessUi = host.businessUiSnapshot(),
             .streamBuffer = host.streamBufferDefinition(),
             .streamFrames = host.streamFrameDefinitions(),
             .nextWakeupAtMs = host.nextWakeupAtMs(),
@@ -157,6 +173,7 @@ namespace {
             .outputQueueSize = outputQueueSize,
             .postprocessWorkerThreads = postprocessWorkerThreads,
             .lastTransportStats = host.lastTransportStats(),
+            .runtimeGeneration = host.runtimeGeneration(),
         };
     }
 
@@ -263,7 +280,9 @@ struct ScriptRuntimeWorker::Impl {
     bool rxBackpressureWarningActive{false};
     bool outputQueueWarningActive{false};
     bool stopping{false};
+    bool executing{false};
     std::atomic_bool failed{false};
+    std::shared_ptr<std::atomic_bool> stopSignal{std::make_shared<std::atomic_bool>(false)};
     std::thread thread;
     std::condition_variable rxBackpressureChanged;
 
@@ -286,6 +305,8 @@ struct ScriptRuntimeWorker::Impl {
 
     void stop()
     {
+        // 停止信号直接被 Lua 指令钩子读取，不排在可能卡住的业务回调之后。
+        stopSignal->store(true, std::memory_order_relaxed);
         bool shouldNotify = false;
         {
             std::lock_guard lock(mutex);
@@ -315,7 +336,7 @@ struct ScriptRuntimeWorker::Impl {
         signalCommandAvailable();
     }
 
-    void pushBytes(transport::TransportBytesEvent event)
+    void pushBytes(transport::TransportBytesEvent event, bool mergeAdjacent)
     {
         if (event.bytes.empty()) {
             return;
@@ -329,7 +350,7 @@ struct ScriptRuntimeWorker::Impl {
             }
             pendingRxBytes += event.bytes.size();
             syncMode = !config.enabled;
-            if (!commands.empty()) {
+            if (mergeAdjacent && !commands.empty()) {
                 auto* previous = std::get_if<BytesCommand>(&commands.back());
                 if (previous != nullptr && previous->event.context.connectionId == event.context.connectionId &&
                     previous->event.context.readyForIo == event.context.readyForIo &&
@@ -556,6 +577,7 @@ struct ScriptRuntimeWorker::Impl {
                 } else {
                     command = std::move(commands.front());
                     commands.pop_front();
+                    executing = true;
                     hasCommand = true;
                 }
             }
@@ -632,8 +654,11 @@ struct ScriptRuntimeWorker::Impl {
         return true;
     }
 
-    CommandExecutionResult executeCommandItem(ScriptHost&, std::optional<std::uint64_t>&, ConfigureCommand& command)
+    CommandExecutionResult executeCommandItem(ScriptHost& host, std::optional<std::uint64_t>&, ConfigureCommand& command)
     {
+        host.setExecutionConfig(command.config.execution);
+        host.setStorageRoot(command.config.storageRoot);
+        host.setStorageConfig(command.config.storageConfig);
         std::lock_guard lock(mutex);
         config = command.config;
         return {};
@@ -669,6 +694,7 @@ struct ScriptRuntimeWorker::Impl {
     {
         CommandExecutionResult result;
         result.boolValue =
+            command.runtimeGeneration == host.runtimeGeneration() &&
             host.requestOscilloscopeToggle(command.context, command.currentRunning, command.targetRunning);
         result.boolPromise = command.result;
         return result;
@@ -747,13 +773,23 @@ struct ScriptRuntimeWorker::Impl {
 
     CommandExecutionResult executeCommandItem(ScriptHost& host, std::optional<std::uint64_t>&, ControlCommand& command)
     {
-        host.onControl(command.context, command.id, command.value);
+        host.onControl(command.context, command.id, command.value, command.runtimeGeneration);
         return {};
     }
 
     CommandExecutionResult executeCommandItem(ScriptHost& host, std::optional<std::uint64_t>&, TickCommand& command)
     {
         host.tick(command.currentMs);
+        return {};
+    }
+    CommandExecutionResult executeCommandItem(ScriptHost& host, std::optional<std::uint64_t>&, MenuCommand& command)
+    {
+        host.onMenu(command.context,command.id,command.checked,command.generation,command.revision);
+        return {};
+    }
+    CommandExecutionResult executeCommandItem(ScriptHost& host, std::optional<std::uint64_t>&, DataTableCommand& command)
+    {
+        host.onDataTable(command.context,command.event);
         return {};
     }
 
@@ -808,7 +844,7 @@ struct ScriptRuntimeWorker::Impl {
 
     void run()
     {
-        ScriptHost host;
+        ScriptHost host(stopSignal);
         std::optional<std::uint64_t> activeConnectionId;
         publishSnapshot(host);
 
@@ -821,6 +857,10 @@ struct ScriptRuntimeWorker::Impl {
             const auto execution = executeCommand(host, activeConnectionId, *command);
             publishOutputs(drainHostOutputs(host, execution.includeTransportStats));
             publishSnapshot(host);
+            {
+                std::lock_guard lock(mutex);
+                executing = false;
+            }
             if (execution.boolPromise) {
                 execution.boolPromise->set_value(execution.boolValue);
             }
@@ -834,6 +874,30 @@ struct ScriptRuntimeWorker::Impl {
 ScriptRuntimeWorker::ScriptRuntimeWorker() : impl_(std::make_unique<Impl>()) {}
 
 ScriptRuntimeWorker::~ScriptRuntimeWorker() = default;
+
+bool ScriptRuntimeWorker::idle() const
+{
+    std::lock_guard lock(impl_->mutex);
+    // 队列为空不代表执行完成，必须同时等待输出发布和 UI 消费。
+    return !impl_->executing && impl_->commands.empty() && impl_->outputs.empty();
+}
+
+std::future<bool> ScriptRuntimeWorker::resetStreamReplayStateAsync()
+{
+    auto promise = std::make_shared<std::promise<bool>>();
+    auto future = promise->get_future();
+    impl_->pushCommand(ResetStreamReplayStateCommand{.result = promise});
+    return future;
+}
+
+std::future<std::pair<bool, std::string>>
+ScriptRuntimeWorker::applyStreamRuntimeProfileEventAsync(StreamRuntimeProfileEvent event)
+{
+    auto promise = std::make_shared<std::promise<std::pair<bool, std::string>>>();
+    auto future = promise->get_future();
+    impl_->pushCommand(ApplyStreamRuntimeProfileCommand{.event = std::move(event), .result = promise});
+    return future;
+}
 
 void ScriptRuntimeWorker::configure(ScriptRuntimeWorkerConfig config)
 {
@@ -868,6 +932,7 @@ bool ScriptRuntimeWorker::requestOscilloscopeToggle(transport::ConnectionContext
                                     .currentRunning = currentRunning,
                                     .targetRunning = targetRunning,
                                     .result = promise,
+                                    .runtimeGeneration = snapshot().runtimeGeneration,
                                 },
                                 promise);
 }
@@ -893,19 +958,31 @@ void ScriptRuntimeWorker::postTransportError(transport::TransportErrorEvent even
     impl_->pushCommand(ErrorCommand{.event = std::move(event)});
 }
 
-void ScriptRuntimeWorker::postTransportBytes(transport::TransportBytesEvent event)
+void ScriptRuntimeWorker::postTransportBytes(transport::TransportBytesEvent event, bool mergeAdjacent)
 {
-    impl_->pushBytes(std::move(event));
+    impl_->pushBytes(std::move(event), mergeAdjacent);
 }
 
-void ScriptRuntimeWorker::postControl(transport::ConnectionContext context, std::string id, ControlValue value)
+void ScriptRuntimeWorker::postControl(transport::ConnectionContext context, std::string id, ControlValue value,
+                                      std::optional<std::uint64_t> generation)
 {
-    impl_->pushCommand(ControlCommand{.context = std::move(context), .id = std::move(id), .value = std::move(value)});
+    impl_->pushCommand(ControlCommand{.context = std::move(context), .id = std::move(id), .value = std::move(value),
+                                      .runtimeGeneration = generation.value_or(snapshot().runtimeGeneration)});
 }
 
 void ScriptRuntimeWorker::postTick(std::uint64_t currentMs)
 {
     impl_->pushCommand(TickCommand{.currentMs = currentMs});
+}
+
+void ScriptRuntimeWorker::postMenu(transport::ConnectionContext context, std::string id, bool checked,
+                                   std::uint64_t generation, std::uint64_t revision)
+{
+    impl_->pushCommand(MenuCommand{std::move(context),std::move(id),checked,generation,revision});
+}
+void ScriptRuntimeWorker::postDataTable(transport::ConnectionContext context,DataTableEvent event)
+{
+    impl_->pushCommand(DataTableCommand{std::move(context),std::move(event)});
 }
 
 void ScriptRuntimeWorker::postTxEvent(transport::ConnectionContext context, TxEvent event)
@@ -915,11 +992,13 @@ void ScriptRuntimeWorker::postTxEvent(transport::ConnectionContext context, TxEv
 
 void ScriptRuntimeWorker::postDialogEvent(transport::ConnectionContext context, DialogEvent event)
 {
+    if (!event.runtimeGeneration) event.runtimeGeneration = snapshot().runtimeGeneration;
     impl_->pushCommand(DialogEventCommand{.context = std::move(context), .event = std::move(event)});
 }
 
 void ScriptRuntimeWorker::postFileDialogEvent(transport::ConnectionContext context, FileDialogEvent event)
 {
+    if (!event.runtimeGeneration) event.runtimeGeneration = snapshot().runtimeGeneration;
     impl_->pushCommand(FileDialogEventCommand{.context = std::move(context), .event = std::move(event)});
 }
 

@@ -1,9 +1,12 @@
 #include "protoscope/plot/raw_capture_file.hpp"
+#include "protoscope/plot/csv_data_file.hpp"
+#include "protoscope/plot/data_file_output.hpp"
 
 #include <array>
 #include <cctype>
 #include <charconv>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -16,11 +19,11 @@ namespace protoscope::plot {
 namespace {
 
     constexpr std::string_view kFileMagic = "ProtoScopeRawCapture";
-    constexpr std::string_view kVersionEvents = "3";
+    constexpr std::string_view kVersionEvents = "4";
     constexpr std::string_view kVersionLegacyEvents = "2";
     constexpr std::size_t kStreamHeaderBytes = 4096;
 
-    std::string trim(std::string_view text)
+    std::string_view trimView(std::string_view text)
     {
         std::size_t begin = 0;
         while (begin < text.size() && std::isspace(static_cast<unsigned char>(text[begin])) != 0) {
@@ -30,12 +33,17 @@ namespace {
         while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1])) != 0) {
             --end;
         }
-        return std::string(text.substr(begin, end - begin));
+        return text.substr(begin, end - begin);
+    }
+
+    std::string trim(std::string_view text)
+    {
+        return std::string(trimView(text));
     }
 
     bool parseUnsigned(std::string_view text, std::uint64_t& value)
     {
-        const auto cleaned = trim(text);
+        const auto cleaned = trimView(text);
         const auto* begin = cleaned.data();
         const auto* end = cleaned.data() + cleaned.size();
         const auto [ptr, ec] = std::from_chars(begin, end, value);
@@ -59,7 +67,7 @@ namespace {
 
     bool parseBool(std::string_view text, bool& value)
     {
-        const auto cleaned = trim(text);
+        const auto cleaned = trimView(text);
         if (cleaned == "true" || cleaned == "1") {
             value = true;
             return true;
@@ -103,7 +111,7 @@ namespace {
 
     bool decodeStringHex(std::string_view text, std::string& value)
     {
-        const auto cleaned = trim(text);
+        const auto cleaned = trimView(text);
         if (cleaned.size() % 2 != 0) {
             return false;
         }
@@ -135,7 +143,7 @@ namespace {
     bool parseChannelMap(std::string_view text, std::vector<std::size_t>& outMap)
     {
         outMap.clear();
-        const auto cleaned = trim(text);
+        const auto cleaned = trimView(text);
         if (cleaned.empty()) {
             return true;
         }
@@ -170,7 +178,7 @@ namespace {
 
     bool parseColor(std::string_view text, std::optional<std::array<float, 4>>& color)
     {
-        const auto cleaned = trim(text);
+        const auto cleaned = trimView(text);
         if (cleaned == "none" || cleaned.empty()) {
             color = std::nullopt;
             return true;
@@ -207,7 +215,7 @@ namespace {
 
     bool parseLineWidth(std::string_view text, std::optional<float>& lineWidth)
     {
-        const auto cleaned = trim(text);
+        const auto cleaned = trimView(text);
         if (cleaned == "none" || cleaned.empty()) {
             lineWidth = std::nullopt;
             return true;
@@ -224,6 +232,7 @@ namespace {
     {
         std::ostringstream out;
         out << "event: plot_setup\n"
+            << "sequence: " << event.sequence << '\n'
             << "timestamp_ms: " << event.timestampMs << '\n'
             << "source: " << encodeStringHex(event.plotSetup.source) << '\n'
             << "reset_history: " << (event.plotSetup.resetHistory ? "true" : "false") << '\n'
@@ -242,7 +251,9 @@ namespace {
                 << "channel." << index << ".bit_display.first_bit: " << channel.bitDisplay.firstBit << '\n'
                 << "channel." << index << ".bit_display.bit_count: " << channel.bitDisplay.bitCount << '\n'
                 << "channel." << index << ".bit_display.y_offset: " << std::setprecision(17)
-                << channel.bitDisplay.yOffset << '\n';
+                << channel.bitDisplay.yOffset << '\n'
+                << "channel." << index << ".bit_display.hover_readout: "
+                << (channel.bitDisplay.hoverReadout ? "true" : "false") << '\n';
         }
         out << "view.time_scale: " << std::setprecision(17) << event.plotSetup.view.timeScale << '\n'
             << "view.time_unit: " << encodeStringHex(event.plotSetup.view.timeUnit) << '\n'
@@ -250,50 +261,24 @@ namespace {
             << "view.vertical_max: " << std::setprecision(17) << event.plotSetup.view.verticalMax << '\n'
             << "view.vertical_unit: " << encodeStringHex(event.plotSetup.view.verticalUnit) << '\n'
             << "view.history_limit: " << event.plotSetup.view.historyLimit << '\n'
+            << "view.display_formula: " << static_cast<int>(event.plotSetup.view.displayFormula) << '\n'
             << '\n';
         return out.str();
+    }
+
+    std::string encodeEventRecord(const RawCaptureEvent& event);
+
+    bool isBytesEvent(const RawCaptureEvent& event)
+    {
+        return event.type == RawCaptureEventType::RxBytes || event.type == RawCaptureEventType::TxBytes;
     }
 
     std::uint64_t totalEventBytes(const RawCaptureFileData& capture)
     {
         std::uint64_t total = 0;
         for (const auto& event : capture.events) {
-            switch (event.type) {
-                case RawCaptureEventType::RxBytes: {
-                    std::ostringstream line;
-                    line << "event: rx_bytes\n"
-                         << "timestamp_ms: " << event.timestampMs << '\n'
-                         << "size: " << event.bytes.size() << '\n'
-                         << '\n';
-                    total +=
-                        static_cast<std::uint64_t>(line.str().size()) + static_cast<std::uint64_t>(event.bytes.size());
-                    break;
-                }
-                case RawCaptureEventType::ProfileSet: {
-                    std::ostringstream line;
-                    line << "event: profile_set\n"
-                         << "timestamp_ms: " << event.timestampMs << '\n'
-                         << "frame: " << event.profile.frameName << '\n'
-                         << "length: " << event.profile.length << '\n'
-                         << "channel_map: " << serializeChannelMap(event.profile.channelMap) << '\n'
-                         << '\n';
-                    total += static_cast<std::uint64_t>(line.str().size());
-                    break;
-                }
-                case RawCaptureEventType::ProfileClear: {
-                    std::ostringstream line;
-                    line << "event: profile_clear\n"
-                         << "timestamp_ms: " << event.timestampMs << '\n'
-                         << "frame: " << event.profile.frameName << '\n'
-                         << '\n';
-                    total += static_cast<std::uint64_t>(line.str().size());
-                    break;
-                }
-                case RawCaptureEventType::PlotSetup: {
-                    total += static_cast<std::uint64_t>(encodePlotSetupRecord(event).size());
-                    break;
-                }
-            }
+            total += encodeEventRecord(event).size();
+            if (isBytesEvent(event)) total += event.bytes.size();
         }
         return total;
     }
@@ -317,18 +302,25 @@ namespace {
 
     std::string encodeRawCaptureHeaderWithSize(const RawCaptureFileData& capture,
                                                std::uint64_t rawSize,
-                                               bool eventsMode)
+                                               bool eventsMode,
+                                               std::uint64_t waveSize = 0)
     {
         std::ostringstream header;
         header << kFileMagic << '\n'
                << "version: " << kVersionEvents << '\n'
                << "protocol_name: " << capture.protocolName << '\n'
                << "protocol_dir: " << capture.protocolDir << '\n'
-               << "sample_frequency_hz: " << capture.sampleFrequencyHz << '\n'
+               << "sample_frequency_hz: " << std::setprecision(17) << capture.sampleFrequencyHz << '\n'
                << "captured_at_ms: " << capture.capturedAtMs << '\n'
                << "truncated: " << (capture.truncated ? "true" : "false") << '\n'
                << "payload_size: " << rawSize << '\n'
                << "event_stream: " << (eventsMode ? "true" : "false") << '\n'
+               << "wave_size: " << waveSize << '\n'
+               << "source: " << encodeStringHex(capture.source) << '\n'
+               << "incomplete: " << (capture.incomplete ? "true" : "false") << '\n'
+               << "filtered: " << (capture.filtered ? "true" : "false") << '\n'
+               << "rx_only: " << (capture.rxOnly ? "true" : "false") << '\n'
+               << "range: " << encodeStringHex(capture.rangeDescription) << '\n'
                << '\n';
         return header.str();
     }
@@ -337,9 +329,10 @@ namespace {
                                      std::uint64_t rawSize,
                                      bool eventsMode,
                                      std::string& header,
-                                     std::string& error)
+                                     std::string& error,
+                                     std::uint64_t waveSize = 0)
     {
-        const std::string base = encodeRawCaptureHeaderWithSize(capture, rawSize, eventsMode);
+        const std::string base = encodeRawCaptureHeaderWithSize(capture, rawSize, eventsMode, waveSize);
         if (base.size() > kStreamHeaderBytes) {
             error = "psraw 文件头超出固定长度限制";
             return false;
@@ -354,13 +347,18 @@ namespace {
         std::ostringstream out;
         switch (event.type) {
             case RawCaptureEventType::RxBytes:
-                out << "event: rx_bytes\n"
+            case RawCaptureEventType::TxBytes:
+                out << "event: " << (event.type == RawCaptureEventType::TxBytes ? "tx_bytes" : "rx_bytes") << '\n'
                     << "timestamp_ms: " << event.timestampMs << '\n'
+                    << "endpoint: " << encodeStringHex(event.endpoint) << '\n'
+                    << "sequence: " << event.sequence << '\n'
+                    << "write_status: " << encodeStringHex(event.writeStatus) << '\n'
                     << "size: " << event.bytes.size() << '\n'
                     << '\n';
                 break;
             case RawCaptureEventType::ProfileSet:
                 out << "event: profile_set\n"
+                    << "sequence: " << event.sequence << '\n'
                     << "timestamp_ms: " << event.timestampMs << '\n'
                     << "frame: " << event.profile.frameName << '\n'
                     << "length: " << event.profile.length << '\n'
@@ -369,6 +367,7 @@ namespace {
                 break;
             case RawCaptureEventType::ProfileClear:
                 out << "event: profile_clear\n"
+                    << "sequence: " << event.sequence << '\n'
                     << "timestamp_ms: " << event.timestampMs << '\n'
                     << "frame: " << event.profile.frameName << '\n'
                     << '\n';
@@ -398,6 +397,10 @@ namespace {
     {
         if (firstLine == "event: rx_bytes") {
             event.type = RawCaptureEventType::RxBytes;
+            return true;
+        }
+        if (firstLine == "event: tx_bytes") {
+            event.type = RawCaptureEventType::TxBytes;
             return true;
         }
         if (firstLine == "event: profile_set") {
@@ -459,6 +462,17 @@ namespace {
                                               DecodedEventState& state,
                                               std::string& error)
     {
+        if (key == "endpoint")
+            return parseStringHexField(value, event.endpoint, "psraw endpoint 格式错误", error);
+        if (key == "write_status")
+            return parseStringHexField(value, event.writeStatus, "psraw write_status 格式错误", error);
+        if (key == "sequence") {
+            if (!parseUnsigned(value, event.sequence)) {
+                error = "psraw sequence 格式错误";
+                return EventFieldParseResult::Failed;
+            }
+            return EventFieldParseResult::Handled;
+        }
         if (key == "timestamp_ms") {
             if (!parseUnsigned(value, event.timestampMs)) {
                 error = "psraw 事件时间戳格式错误";
@@ -552,6 +566,12 @@ namespace {
         } else if (field == "bit_display.enabled") {
             if (!parseBool(value, channel.bitDisplay.enabled)) {
                 error = "psraw plot_setup channel bit_display.enabled 格式错误";
+                return EventFieldParseResult::Failed;
+            }
+            return EventFieldParseResult::Handled;
+        } else if (field == "bit_display.hover_readout") {
+            if (!parseBool(value, channel.bitDisplay.hoverReadout)) {
+                error = "psraw plot_setup channel bit_display.hover_readout 格式错误";
                 return EventFieldParseResult::Failed;
             }
             return EventFieldParseResult::Handled;
@@ -671,6 +691,15 @@ namespace {
                                 DecodedEventState& state,
                                 std::string& error)
     {
+        if (key == "view.display_formula") {
+            if (value != "0" && value != "1") {
+                error = "psraw display_formula 格式错误";
+                return false;
+            }
+            event.plotSetup.view.displayFormula = value == "1" ? WaveDisplayFormula::ScaleThenOffset :
+                WaveDisplayFormula::OffsetThenScale;
+            return true;
+        }
         auto result = parseBaseEventField(key, value, event, state, error);
         if (result == EventFieldParseResult::Failed) {
             return false;
@@ -689,7 +718,7 @@ namespace {
                               const DecodedEventState& state,
                               std::string& error)
     {
-        if (event.type == RawCaptureEventType::RxBytes) {
+        if (isBytesEvent(event)) {
             if (!state.rxSizeSeen) {
                 error = "psraw rx_bytes 事件缺少 size";
                 return false;
@@ -729,11 +758,12 @@ namespace {
         events.clear();
         std::size_t cursor = 0;
         while (cursor < bytes.size()) {
+            if (dataFileStopToken().stop_requested()) { error = "读取已取消"; return false; }
             std::size_t lineEnd = bytes.find('\n', cursor);
             if (lineEnd == std::string::npos) {
                 lineEnd = bytes.size();
             }
-            const auto firstLine = trim(bytes.substr(cursor, lineEnd - cursor));
+            const auto firstLine = trimView(bytes.substr(cursor, lineEnd - cursor));
             if (firstLine.empty()) {
                 cursor = lineEnd + 1;
                 continue;
@@ -752,7 +782,7 @@ namespace {
                 if (lineEnd == std::string::npos) {
                     lineEnd = bytes.size();
                 }
-                const auto line = trim(bytes.substr(cursor, lineEnd - cursor));
+                const auto line = trimView(bytes.substr(cursor, lineEnd - cursor));
                 cursor = lineEnd + 1;
                 if (line.empty()) {
                     break;
@@ -762,8 +792,8 @@ namespace {
                     error = "psraw 事件字段格式错误";
                     return false;
                 }
-                const auto key = trim(line.substr(0, pos));
-                const auto value = trim(line.substr(pos + 1));
+                const auto key = trimView(line.substr(0, pos));
+                const auto value = trimView(line.substr(pos + 1));
                 if (!parseDecodedEventField(key, value, event, state, error)) {
                     return false;
                 }
@@ -780,6 +810,7 @@ namespace {
     struct DecodedRawCaptureHeader {
         RawCaptureFileData capture;
         std::uint64_t payloadSize{0};
+        std::uint64_t waveSize{0};
     };
 
     struct RawCaptureHeaderState {
@@ -799,7 +830,19 @@ namespace {
                                     std::string& error)
     {
         if (key == "version") {
-            state.versionSeen = (value == kVersionEvents || value == kVersionLegacyEvents);
+            state.versionSeen = (value == kVersionEvents || value == "3" || value == kVersionLegacyEvents);
+        } else if (key == "wave_size") {
+            if (!parseUnsigned(value, header.waveSize)) { error = "psraw wave_size 无效"; return false; }
+        } else if (key == "source") {
+            if (!decodeStringHex(value, header.capture.source)) { error = "psraw source 无效"; return false; }
+        } else if (key == "range") {
+            if (!decodeStringHex(value, header.capture.rangeDescription)) { error = "psraw range 无效"; return false; }
+        } else if (key == "incomplete" || key == "filtered" || key == "rx_only") {
+            bool flag = false;
+            if (!parseBool(value, flag)) { error = "psraw 完整性字段无效"; return false; }
+            if (key == "incomplete") header.capture.incomplete = flag;
+            if (key == "filtered") header.capture.filtered = flag;
+            if (key == "rx_only") header.capture.rxOnly = flag;
         } else if (key == "protocol_name") {
             state.protocolNameSeen = true;
             header.capture.protocolName = std::string(value);
@@ -850,7 +893,7 @@ namespace {
             if (lineEnd == std::string::npos) {
                 lineEnd = headerText.size();
             }
-            auto line = trim(headerText.substr(lineBegin, lineEnd - lineBegin));
+            const auto line = trimView(headerText.substr(lineBegin, lineEnd - lineBegin));
             lineBegin = lineEnd + 1;
             if (line.empty()) {
                 state.separatorSeen = true;
@@ -864,8 +907,8 @@ namespace {
                 error = "psraw 文件头字段格式错误";
                 return false;
             }
-            const auto key = trim(line.substr(0, separator));
-            const auto value = trim(line.substr(separator + 1));
+            const auto key = trimView(line.substr(0, separator));
+            const auto value = trimView(line.substr(separator + 1));
             if (!parseRawCaptureHeaderField(key, value, header, state, error)) {
                 return false;
             }
@@ -904,7 +947,14 @@ namespace {
 
     void rebuildRawCapturePayloadFromEvents(RawCaptureFileData& capture)
     {
+        std::size_t payloadSize = 0;
+        for (const auto& event : capture.events) {
+            if (event.type == RawCaptureEventType::RxBytes) {
+                payloadSize += event.bytes.size();
+            }
+        }
         capture.payload.clear();
+        capture.payload.reserve(payloadSize);
         for (const auto& event : capture.events) {
             if (event.type == RawCaptureEventType::RxBytes) {
                 capture.payload.insert(capture.payload.end(), event.bytes.begin(), event.bytes.end());
@@ -916,6 +966,7 @@ namespace {
         RawCaptureFileData normalized;
         std::string header;
         std::uint64_t rawSize{0};
+        std::string waveform;
     };
 
     bool prepareRawCaptureEncoding(const RawCaptureFileData& capture,
@@ -925,29 +976,39 @@ namespace {
         prepared.normalized = capture;
         prepared.normalized.events = normalizedEvents(capture);
         prepared.rawSize = totalEventBytes(prepared.normalized);
-        return encodeFixedRawCaptureHeader(prepared.normalized, prepared.rawSize, true, prepared.header, error);
+        if (capture.waveform) {
+            std::ostringstream out;
+            if (!encodeWaveCsv(out, *capture.waveform, WaveCsvShape::Long, {}, error)) return false;
+            prepared.waveform = out.str();
+        }
+        return encodeFixedRawCaptureHeader(prepared.normalized, prepared.rawSize + prepared.waveform.size(),
+                                           true, prepared.header, error, prepared.waveform.size());
     }
 
     void appendEncodedEventStream(const std::vector<RawCaptureEvent>& events, std::vector<std::uint8_t>& bytes)
     {
         for (const auto& event : events) {
+            if (dataFileStopToken().stop_requested()) throw std::runtime_error("导出已取消");
             const auto record = encodeEventRecord(event);
             bytes.insert(bytes.end(), record.begin(), record.end());
-            if (event.type == RawCaptureEventType::RxBytes && !event.bytes.empty()) {
+            if (isBytesEvent(event) && !event.bytes.empty()) {
                 bytes.insert(bytes.end(), event.bytes.begin(), event.bytes.end());
             }
+            reportDataFileProgress(1);
         }
     }
 
     void writeEncodedEventStream(std::ostream& out, const std::vector<RawCaptureEvent>& events)
     {
         for (const auto& event : events) {
+            if (dataFileStopToken().stop_requested()) throw std::runtime_error("导出已取消");
             const auto record = encodeEventRecord(event);
             out.write(record.data(), static_cast<std::streamsize>(record.size()));
-            if (event.type == RawCaptureEventType::RxBytes && !event.bytes.empty()) {
+            if (isBytesEvent(event) && !event.bytes.empty()) {
                 out.write(reinterpret_cast<const char*>(event.bytes.data()),
                           static_cast<std::streamsize>(event.bytes.size()));
             }
+            reportDataFileProgress(1);
         }
     }
 
@@ -989,11 +1050,36 @@ bool encodeRawCaptureFile(const RawCaptureFileData& capture, std::vector<std::ui
     bytes.reserve(prepared.header.size() + static_cast<std::size_t>(prepared.rawSize));
     bytes.insert(bytes.end(), prepared.header.begin(), prepared.header.end());
     appendEncodedEventStream(prepared.normalized.events, bytes);
+    bytes.insert(bytes.end(), prepared.waveform.begin(), prepared.waveform.end());
     return true;
 }
 
-std::optional<RawCaptureFileData> decodeRawCaptureFile(std::string_view bytes, std::string& error)
+std::optional<RawCaptureFileData> decodeRawCaptureFile(std::string_view bytes, std::string& error,
+                                                     const DataFileReadCallbacks* callbacks)
 {
+    if (callbacks) {
+        // 内存包使用流视图，不重复构造文本或完整波形模型。
+        struct ViewBuffer : std::streambuf {
+            explicit ViewBuffer(std::string_view bytes) {
+                auto* begin = const_cast<char*>(bytes.data());
+                setg(begin, begin, begin + bytes.size());
+            }
+            pos_type seekoff(off_type off, std::ios_base::seekdir direction,
+                             std::ios_base::openmode) override {
+                const auto base = direction == std::ios_base::beg ? 0 :
+                    direction == std::ios_base::cur ? gptr() - eback() : egptr() - eback();
+                const auto target = base + off;
+                if (target < 0 || target > egptr() - eback()) return pos_type(off_type(-1));
+                setg(eback(), eback() + target, egptr());
+                return pos_type(target);
+            }
+            pos_type seekpos(pos_type pos, std::ios_base::openmode mode) override {
+                return seekoff(off_type(pos), std::ios_base::beg, mode);
+            }
+        } buffer(bytes);
+        std::istream input(&buffer);
+        return readRawCaptureStream(input, bytes.size(), error, callbacks);
+    }
     if (bytes.size() < kStreamHeaderBytes) {
         error = "psraw 文件长度不足";
         return std::nullopt;
@@ -1010,10 +1096,21 @@ std::optional<RawCaptureFileData> decodeRawCaptureFile(std::string_view bytes, s
         return std::nullopt;
     }
 
-    if (!decodeEventStream(payloadBytes, header.capture.events, error)) {
+    if (header.waveSize > payloadBytes.size()) {
+        error = "psraw 波形快照超出文件范围";
+        return std::nullopt;
+    }
+    const auto eventSize = payloadBytes.size() - static_cast<std::size_t>(header.waveSize);
+    if (header.waveSize > 0) {
+        header.capture.waveform = decodeWaveCsv(payloadBytes.substr(eventSize), error);
+        if (!header.capture.waveform) return std::nullopt;
+    }
+    if (!decodeEventStream(payloadBytes.substr(0, eventSize), header.capture.events, error)) {
         return std::nullopt;
     }
     rebuildRawCapturePayloadFromEvents(header.capture);
+    for (const auto& event : header.capture.events)
+        if (event.type == RawCaptureEventType::TxBytes) header.capture.rxOnly = false;
     return header.capture;
 }
 
@@ -1033,38 +1130,190 @@ bool writeRawCaptureFile(const std::filesystem::path& path, const RawCaptureFile
                 return false;
             }
         }
-        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        DataFileOutput output(path);
+        auto& out = output.stream;
         if (!out.good()) {
             error = "无法打开 psraw 文件";
             return false;
         }
         out.write(prepared.header.data(), static_cast<std::streamsize>(prepared.header.size()));
         writeEncodedEventStream(out, prepared.normalized.events);
+        out.write(prepared.waveform.data(), static_cast<std::streamsize>(prepared.waveform.size()));
         if (!out.good()) {
             error = "写入 psraw 文件失败";
             return false;
         }
-        return true;
+        return output.commit(error);
     } catch (const std::exception& ex) {
         error = ex.what();
         return false;
     }
 }
 
-std::optional<RawCaptureFileData> readRawCaptureFile(const std::filesystem::path& path, std::string& error)
+std::optional<RawCaptureFileData> readRawCaptureFile(const std::filesystem::path& path, std::string& error,
+                                                   const DataFileReadCallbacks* callbacks)
 {
     try {
-        std::ifstream in(path, std::ios::binary);
+        std::error_code sizeError;
+        const auto fileSize = std::filesystem::file_size(path, sizeError);
+        if (sizeError) {
+            error = "无法获取 psraw 文件大小: " + sizeError.message();
+            return std::nullopt;
+        }
+        if (fileSize > static_cast<std::uint64_t>((std::numeric_limits<std::streamsize>::max)())) {
+            error = "psraw 文件过大，无法读取";
+            return std::nullopt;
+        }
+
+        std::array<char, 65536> buffer{};
+        std::ifstream in;
+        in.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
+        in.open(path, std::ios::binary);
         if (!in.good()) {
             error = "无法打开 psraw 文件";
             return std::nullopt;
         }
-        std::string contents((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        return decodeRawCaptureFile(contents, error);
+        return readRawCaptureStream(in, fileSize, error, callbacks);
     } catch (const std::exception& ex) {
         error = ex.what();
         return std::nullopt;
     }
+}
+
+std::optional<RawCaptureFileData> readRawCaptureStream(std::istream& in, std::uint64_t fileSize, std::string& error,
+                                                      const DataFileReadCallbacks* callbacks)
+{
+    try {
+        std::array<char, kStreamHeaderBytes> headerBytes{};
+        in.read(headerBytes.data(), headerBytes.size());
+        if (in.gcount() != static_cast<std::streamsize>(headerBytes.size())) {
+            error = "psraw 文件头读取不完整"; return std::nullopt;
+        }
+        DecodedRawCaptureHeader header;
+        if (!parseRawCaptureHeader({headerBytes.data(), headerBytes.size()}, header, error)) return std::nullopt;
+        if (fileSize < kStreamHeaderBytes || header.payloadSize != fileSize - kStreamHeaderBytes ||
+            header.waveSize > header.payloadSize) {
+            error = "psraw 文件长度与文件头不一致"; return std::nullopt;
+        }
+        const auto eventEnd = fileSize - header.waveSize;
+        if (callbacks) {
+            if (header.waveSize) {
+                // 快照在事件区之后；先读取其表头确认替换，再流式提交样本，最后恢复事件。
+                in.seekg(static_cast<std::streamoff>(eventEnd));
+                auto waveCallbacks = *callbacks;
+                waveCallbacks.metadata = [&](const RawCaptureFileData& wave, bool) {
+                    header.capture.waveform = wave.waveform;
+                    return callbacks->metadata(header.capture, eventEnd > kStreamHeaderBytes);
+                };
+                header.capture.waveform = readWaveCsvStream(in, error, &waveCallbacks);
+                if (!header.capture.waveform) return std::nullopt;
+                in.clear();
+                in.seekg(kStreamHeaderBytes);
+            } else if (!callbacks->metadata(header.capture, true)) return std::nullopt;
+        }
+        while (static_cast<std::uint64_t>(in.tellg()) < eventEnd) {
+            if (dataFileStopToken().stop_requested()) { error = "读取已取消"; return std::nullopt; }
+            std::string line;
+            if (!std::getline(in, line)) { error = "psraw 事件读取不完整"; return std::nullopt; }
+            if (trimView(line).empty()) continue;
+            RawCaptureEvent event;
+            if (!decodeEventType(trimView(line), event, error)) return std::nullopt;
+            DecodedEventState state;
+            bool separator = false;
+            while (std::getline(in, line)) {
+                const auto view = trimView(line);
+                if (view.empty()) { separator = true; break; }
+                const auto pos = view.find(':');
+                if (pos == view.npos || !parseDecodedEventField(trimView(view.substr(0, pos)),
+                    trimView(view.substr(pos + 1)), event, state, error)) {
+                    if (error.empty()) error = "psraw 事件字段格式错误";
+                    return std::nullopt;
+                }
+            }
+            const auto position = in.tellg();
+            if (!separator || position < 0 || static_cast<std::uint64_t>(position) > eventEnd) {
+                error = "psraw 事件头超出事件区域"; return std::nullopt;
+            }
+            if (isBytesEvent(event)) {
+                if (!state.rxSizeSeen || state.rxSize > eventEnd - static_cast<std::uint64_t>(position)) {
+                    error = "psraw 事件字节长度无效"; return std::nullopt;
+                }
+                if (!callbacks) event.bytes.resize(static_cast<std::size_t>(state.rxSize));
+                for (std::size_t offset = 0; offset < state.rxSize; offset += 65536) {
+                    if (dataFileStopToken().stop_requested()) { error = "读取已取消"; return std::nullopt; }
+                    const auto count = (std::min<std::size_t>)(65536, state.rxSize - offset);
+                    if (callbacks) event.bytes.resize(count);
+                    in.read(reinterpret_cast<char*>(event.bytes.data() + (callbacks ? 0 : offset)), count);
+                    if (in.gcount() != static_cast<std::streamsize>(count)) {
+                        error = "psraw 字节读取不完整"; return std::nullopt;
+                    }
+                    if (callbacks && !callbacks->event(event, offset != 0)) return std::nullopt;
+                }
+            } else {
+                std::size_t cursor = 0;
+                if (!finalizeDecodedEvent({}, cursor, event, state, error)) return std::nullopt;
+            }
+            if (event.type == RawCaptureEventType::TxBytes) header.capture.rxOnly = false;
+            if (callbacks) {
+                if ((!isBytesEvent(event) || state.rxSize == 0) && !callbacks->event(std::move(event), false))
+                    return std::nullopt;
+            } else header.capture.events.push_back(std::move(event));
+        }
+        if (header.waveSize && !callbacks) {
+            header.capture.waveform = readWaveCsvStream(in, error);
+            if (!header.capture.waveform) return std::nullopt;
+        }
+        rebuildRawCapturePayloadFromEvents(header.capture);
+        return std::move(header.capture);
+    } catch (const std::exception& ex) {
+        error = ex.what();
+        return std::nullopt;
+    }
+}
+
+std::optional<RawCaptureFileData> readRawCaptureFileRegion(const std::filesystem::path& path,
+    std::uint64_t offset, std::uint64_t size, std::string& error, const DataFileReadCallbacks& callbacks)
+{
+    // 把现场包中的一个条目暴露为独立的有界流；CSV 不得越界读到下一个附件。
+    class RegionBuffer final : public std::streambuf {
+    public:
+        RegionBuffer(const std::filesystem::path& path, std::uint64_t offset, std::uint64_t size)
+            : file_(path, std::ios::binary), offset_(offset), size_(size) { setg(buffer_.data(), buffer_.data(), buffer_.data()); }
+    protected:
+        int_type underflow() override {
+            if (gptr() < egptr()) return traits_type::to_int_type(*gptr());
+            if (next_ >= size_) return traits_type::eof();
+            file_.clear();
+            file_.seekg(static_cast<std::streamoff>(offset_ + next_));
+            const auto count = (std::min<std::uint64_t>)(buffer_.size(), size_ - next_);
+            file_.read(buffer_.data(), static_cast<std::streamsize>(count));
+            if (file_.gcount() != static_cast<std::streamsize>(count))
+                throw std::runtime_error("现场包原始数据读取不完整");
+            next_ += count;
+            setg(buffer_.data(), buffer_.data(), buffer_.data() + count);
+            return traits_type::to_int_type(*gptr());
+        }
+        pos_type seekoff(off_type off, std::ios_base::seekdir direction, std::ios_base::openmode) override {
+            const auto current = next_ - static_cast<std::uint64_t>(egptr() - gptr());
+            if (direction == std::ios_base::cur && off == 0) return pos_type(current);
+            const auto base = direction == std::ios_base::beg ? 0 :
+                direction == std::ios_base::cur ? current : size_;
+            const auto target = static_cast<off_type>(base) + off;
+            if (target < 0 || static_cast<std::uint64_t>(target) > size_) return pos_type(off_type(-1));
+            next_ = static_cast<std::uint64_t>(target);
+            setg(buffer_.data(), buffer_.data(), buffer_.data());
+            return pos_type(target);
+        }
+        pos_type seekpos(pos_type pos, std::ios_base::openmode mode) override {
+            return seekoff(off_type(pos), std::ios_base::beg, mode);
+        }
+    private:
+        std::ifstream file_;
+        std::array<char, 65536> buffer_{};
+        std::uint64_t offset_, size_, next_{0};
+    } buffer(path, offset, size);
+    std::istream input(&buffer);
+    return readRawCaptureStream(input, size, error, &callbacks);
 }
 
 RawCaptureStreamWriter::~RawCaptureStreamWriter()
@@ -1099,14 +1348,10 @@ bool RawCaptureStreamWriter::open(const std::filesystem::path& path,
         error = "已有完整原始数据录制正在进行";
         return false;
     }
-    if (metadata.protocolName.empty() || metadata.protocolDir.empty()) {
-        error = "当前协议元数据不完整，无法开始录制";
-        return false;
-    }
-
     RawCaptureFileData cleanMetadata = metadata;
     cleanMetadata.payload.clear();
     cleanMetadata.events.clear();
+    cleanMetadata.waveform.reset();
     cleanMetadata.truncated = false;
     std::string header;
     if (!encodeFixedRawCaptureHeader(cleanMetadata, 0, true, header, error)) {
@@ -1169,7 +1414,8 @@ bool RawCaptureStreamWriter::appendEvent(const RawCaptureEvent& event, std::stri
         return false;
     }
     bytesWritten_ += static_cast<std::uint64_t>(record.size());
-    if (event.type == RawCaptureEventType::RxBytes && !event.bytes.empty()) {
+    if (event.type == RawCaptureEventType::TxBytes) metadata_.rxOnly = false;
+    if (isBytesEvent(event) && !event.bytes.empty()) {
         out_.write(reinterpret_cast<const char*>(event.bytes.data()), static_cast<std::streamsize>(event.bytes.size()));
         if (!out_.good()) {
             error = "写入 psraw 事件数据失败";

@@ -48,6 +48,9 @@ scripting:
 - `batch_bytes`、`transport_read_buffer_bytes`、`rx_chunk_bytes_per_pump` 控制数据投递颗粒度，越小越容易平滑刷新。
 - `fps_limit`、`pump_min_interval_ms` 控制 UI 刷新频率和 CPU 占用。
 - `max_render_points_per_channel`、`max_render_vertices`、`peak_detect_downsample` 控制绘制压力，不负责拆分数据批次。
+- 波形平移使用每通道的分层摘要；叠加、堆叠、分屏与概览复用预算内绘图数据，原始采样、录制和精确读数保持完整。
+- `gui.wave.bit_dense_render_mode` 默认为 `compressed_steps`（压缩阶梯），也可选 `activity_band`（密集活动带）；放大后恢复真实跳变。
+- 拖动期间统计和 FFT 保留上次结果并显示待更新，松手后后台计算；余辉暂停累积并显示轻量轨迹，触发模式每帧最多选择 32 个代表触发。松手不会自动恢复数据跟随。
 - 更平滑：减小 `batch_bytes`、`transport_read_buffer_bytes`、`rx_chunk_bytes_per_pump`、`plot_appends_per_pump`，适当降低 `output_flush_budget_ms` 和 `pump_min_interval_ms`。
 - 更高吞吐：增大上述批量预算，让 UI 一轮追更多 backlog，但可能出现更明显的大段刷新。
 - 更省渲染性能：降低 `fps_limit`、`max_render_points_per_channel`、`max_render_vertices`，保持 `peak_detect_downsample: true`。

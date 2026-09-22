@@ -1,6 +1,9 @@
 #include "protoscope/session/session_package.hpp"
+#include "protoscope/plot/data_file_output.hpp"
 
 #include <charconv>
+#include <array>
+#include <algorithm>
 #include <fstream>
 #include <iterator>
 #include <sstream>
@@ -183,29 +186,96 @@ bool writeSessionPackage(const std::filesystem::path& path, const SessionPackage
         }
     }
 
-    std::ofstream out(path, std::ios::binary);
+    plot::DataFileOutput output(path);
+    auto& out = output.stream;
     if (!out.good()) {
         error = "无法写入会话包";
         return false;
     }
-    const auto encoded = encodeSessionPackage(package);
-    out.write(encoded.data(), static_cast<std::streamsize>(encoded.size()));
+    out << kMagic << '\n' << "version: " << kVersion << '\n'
+        << "created_at_ms: " << package.createdAtMs << '\n' << "entries: " << package.entries.size() << '\n';
+    // 条目直接写入临时文件，不再创建与整个现场包等大的字符串副本。
+    for (const auto& entry : package.entries) {
+        out << "entry: " << entry.name << '\n' << "size: " << entry.bytes.size() << "\n\n";
+        for (std::size_t offset = 0; offset < entry.bytes.size(); offset += 65536) {
+            if (plot::dataFileStopToken().stop_requested()) { error = "现场包写入已取消"; return false; }
+            const auto count = (std::min<std::size_t>)(65536, entry.bytes.size() - offset);
+            out.write(reinterpret_cast<const char*>(entry.bytes.data() + offset), count);
+        }
+        out << "\nendentry\n";
+    }
     if (!out.good()) {
         error = "写入会话包失败";
         return false;
     }
-    return true;
+    return output.commit(error);
 }
 
-std::optional<SessionPackageData> readSessionPackage(const std::filesystem::path& path, std::string& error)
+std::optional<SessionPackageData> readSessionPackage(const std::filesystem::path& path, std::string& error,
+                                                    SessionRawCaptureSlice* rawSlice)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::array<char, 65536> buffer{};
+    std::ifstream in;
+    in.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
+    in.open(path, std::ios::binary);
     if (!in.good()) {
         error = "无法读取会话包";
         return std::nullopt;
     }
-    std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    return decodeSessionPackage(bytes, error);
+    std::error_code sizeError;
+    const auto fileSize = std::filesystem::file_size(path, sizeError);
+    if (sizeError) { error = "无法获取现场包大小"; return std::nullopt; }
+    std::string line;
+    const auto field = [&](std::string_view prefix, std::string& value) {
+        if (!std::getline(in, line) || !line.starts_with(prefix)) {
+            error = "会话包字段缺失: " + std::string(prefix); return false;
+        }
+        value = line.substr(prefix.size());
+        return true;
+    };
+    if (!std::getline(in, line) || line != kMagic) { error = "不是 ProtoScope 会话包"; return std::nullopt; }
+    std::string value;
+    if (!field("version: ", value) || value != kVersion) { error = "不支持的会话包版本"; return std::nullopt; }
+    SessionPackageData package;
+    std::size_t entries = 0;
+    if (!field("created_at_ms: ", value) || !parseUnsigned(value, package.createdAtMs) ||
+        !field("entries: ", value) || !parseSize(value, entries) || entries > kMaxSessionPackageEntries) {
+        error = "会话包头部无效"; return std::nullopt;
+    }
+    for (std::size_t index = 0; index < entries; ++index) {
+        SessionPackageEntry entry;
+        std::size_t size = 0;
+        if (!field("entry: ", entry.name) || entry.name.empty() ||
+            !field("size: ", value) || !parseSize(value, size) ||
+            !std::getline(in, line) || !line.empty()) {
+            error = "会话包条目头部无效"; return std::nullopt;
+        }
+        const auto position = in.tellg();
+        if (position < 0 || static_cast<std::uint64_t>(position) > fileSize ||
+            size > fileSize - static_cast<std::uint64_t>(position)) {
+            error = "会话包条目内容被截断"; return std::nullopt;
+        }
+        const bool deferRaw = rawSlice && entry.name == "raw_capture.psraw";
+        if (deferRaw) {
+            if (rawSlice->size != 0) { error = "现场包包含重复原始数据"; return std::nullopt; }
+            *rawSlice = {static_cast<std::uint64_t>(position), size};
+            in.seekg(static_cast<std::streamoff>(size), std::ios::cur);
+        } else entry.bytes.resize(size);
+        for (std::size_t offset = 0; !deferRaw && offset < size; offset += 65536) {
+            if (plot::dataFileStopToken().stop_requested()) { error = "现场包读取已取消"; return std::nullopt; }
+            const auto count = (std::min<std::size_t>)(65536, size - offset);
+            in.read(reinterpret_cast<char*>(entry.bytes.data() + offset), count);
+            if (in.gcount() != static_cast<std::streamsize>(count)) {
+                error = "会话包条目内容被截断"; return std::nullopt;
+            }
+        }
+        if (!std::getline(in, line) || !line.empty() || !std::getline(in, line) || line != "endentry") {
+            error = "会话包条目结束标记缺失"; return std::nullopt;
+        }
+        package.entries.push_back(std::move(entry));
+    }
+    if (in.peek() != std::char_traits<char>::eof()) { error = "会话包末尾存在未知数据"; return std::nullopt; }
+    return package;
 }
 
 const SessionPackageEntry* findSessionPackageEntry(const SessionPackageData& package, std::string_view name)

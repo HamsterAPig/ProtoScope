@@ -2,6 +2,9 @@
 
 #include "script_host_api_module.hpp"
 #include "script_host_internal.hpp"
+#include "control_properties.hpp"
+#include "industrial_control.hpp"
+#include "tabs_layout.hpp"
 
 #include <algorithm>
 #include <array>
@@ -203,7 +206,7 @@ TxSequenceValue defaultTxSequenceFor(const ControlDescriptor& descriptor);
 
 ControlValue defaultValueFor(const ControlDescriptor& descriptor)
 {
-    switch (descriptor.type) {
+    switch (controlValueKind(descriptor.type)) {
         case ControlType::Button:
             return false;
         case ControlType::InputText:
@@ -222,6 +225,7 @@ ControlValue defaultValueFor(const ControlDescriptor& descriptor)
             return defaultValueTableFor(descriptor);
         case ControlType::TxSequence:
             return defaultTxSequenceFor(descriptor);
+        default: break;
     }
     return false;
 }
@@ -292,6 +296,15 @@ std::string serializeLuaObject(const sol::object& object, int depth)
 
 std::optional<ControlType> parseControlType(std::string_view value)
 {
+    if (value == "label") return ControlType::Label;
+    if (value == "readout") return ControlType::Readout;
+    if (value == "indicator") return ControlType::Indicator;
+    if (value == "progress") return ControlType::Progress;
+    if (value == "slider_int") return ControlType::SliderInt;
+    if (value == "slider_float") return ControlType::SliderFloat;
+    if (value == "radio_group") return ControlType::RadioGroup;
+    if (value == "text_area") return ControlType::TextArea;
+    if (value == "data_table") return ControlType::DataTable;
     if (value == "btn") {
         value = "button";
     } else if (value == "text") {
@@ -370,6 +383,7 @@ std::optional<ControlLabelPosition> parseControlLabelPosition(std::string_view v
 
 bool controlAllowsEmptyLabel(ControlType type)
 {
+    type = controlValueKind(type);
     return type == ControlType::Checkbox || type == ControlType::InputText || type == ControlType::InputInt ||
            type == ControlType::InputFloat;
 }
@@ -1062,7 +1076,11 @@ std::optional<ControlValue> controlValueFromLua(const ControlDescriptor& descrip
         return defaultValueFor(descriptor);
     }
 
-    switch (descriptor.type) {
+    if (descriptor.type == ControlType::Readout) {
+        auto text = formatReadout(object, descriptor.precision, error);
+        return text ? std::optional<ControlValue>{std::move(*text)} : std::nullopt;
+    }
+    switch (controlValueKind(descriptor.type)) {
         case ControlType::Button:
         case ControlType::Checkbox:
             if (object.is<bool>()) {
@@ -1138,6 +1156,7 @@ std::optional<ControlValue> controlValueFromLua(const ControlDescriptor& descrip
             return valueTableValueFromLuaPatch(descriptor, object, error);
         case ControlType::TxSequence:
             return txSequenceValueFromLua(descriptor, object, error);
+        default: break;
     }
 
     error = "控件 " + descriptor.id + " 类型不匹配，实际收到 " + luaTypeName(object.get_type());
@@ -1673,7 +1692,7 @@ bool applyTxSequenceControlConfig(ControlDescriptor& descriptor, const sol::tabl
 
 bool applyControlTypeConfig(ControlDescriptor& descriptor, const sol::table& table, std::string& error)
 {
-    switch (descriptor.type) {
+    switch (controlValueKind(descriptor.type)) {
         case ControlType::Button:
             return true;
         case ControlType::InputText:
@@ -1696,6 +1715,7 @@ bool applyControlTypeConfig(ControlDescriptor& descriptor, const sol::table& tab
             return applyValueTableControlConfig(descriptor, table, error);
         case ControlType::TxSequence:
             return applyTxSequenceControlConfig(descriptor, table, error);
+        default: break;
     }
     return true;
 }
@@ -1863,7 +1883,13 @@ std::optional<ControlDescriptor> parseControlDescriptor(const sol::object& objec
     descriptor.label = readStringFieldOrPosition(table, "label", 3);
     if (!applyControlLabelPosition(descriptor, table, error) || !validateControlIdentity(descriptor, error) ||
         !applyControlCompactLabelConfig(descriptor, table, error) ||
-        !applyControlTypeConfig(descriptor, table, error)) {
+        !applyControlTypeConfig(descriptor, table, error) ||
+        !applyIndustrialControlConfig(descriptor, table, error) ||
+        !applyControlProperties(descriptor, table, false, error)) {
+        return std::nullopt;
+    }
+    if (!validateControlValue(descriptor, defaultValueFor(descriptor))) {
+        error = "控件默认值违反约束";
         return std::nullopt;
     }
 
@@ -2407,6 +2433,11 @@ std::optional<LayoutNodeDescriptor> parseTypedLayoutNode(
         node.children = std::move(*children);
         return node;
     }
+    if (type == "tabs") {
+        return parseTabsLayout(table, path, [&](const sol::table& page, const std::string& pagePath, std::string& err) {
+            return parseLayoutChildren(dock, page, controlsById, usedControls, pagePath, err);
+        }, error);
+    }
     if (type == "inline_group") {
         node.kind = LayoutNodeKind::InlineGroup;
         const auto spacing = readOptionalFloatField(table, "spacing", node.spacing, path, error);
@@ -2613,6 +2644,7 @@ std::optional<DockDescriptor> parseSingleDockDescriptor(const sol::object& objec
             return std::nullopt;
         }
         dock.layout = std::move(*layout);
+        if (!registerTabSelections(dock, error)) return std::nullopt;
     }
     return dock;
 }
@@ -3156,6 +3188,14 @@ bool applyPlotChannelBitDisplay(PlotChannelDescriptor& descriptor,
 
     const sol::table bitTable = bitDisplayObject.as<sol::table>();
     spec.enabled = true;
+    const sol::object hoverObject = bitTable["hover_readout"];
+    if (hoverObject.valid() && hoverObject.get_type() != sol::type::lua_nil) {
+        if (!hoverObject.is<bool>()) {
+            error = "plot.setup.channels[" + std::to_string(index) + "].bit_display.hover_readout 必须是 boolean";
+            return false;
+        }
+        spec.hoverReadout = hoverObject.as<bool>();
+    }
     const sol::object enabledObject = bitTable["enabled"];
     if (enabledObject.valid() && enabledObject.get_type() != sol::type::lua_nil) {
         if (!enabledObject.is<bool>()) {
@@ -3431,7 +3471,26 @@ namespace script_host_lua {
 
 } // namespace script_host_lua
 
-ScriptHost::ScriptHost() : runtime_(std::make_unique<Runtime>()) {}
+ScriptHost::ScriptHost(std::shared_ptr<std::atomic_bool> stopSignal)
+    : runtime_(std::make_unique<Runtime>()),
+      stopSignal_(stopSignal ? std::move(stopSignal) : std::make_shared<std::atomic_bool>(false)) {}
+
+void ScriptHost::setExecutionConfig(ExecutionConfig config)
+{
+    config.loadTimeoutMs = std::clamp<std::uint64_t>(config.loadTimeoutMs, 1, 3600000);
+    config.callbackTimeoutMs = std::clamp<std::uint64_t>(config.callbackTimeoutMs, 1, 3600000);
+    executionConfig_ = config;
+}
+
+void ScriptHost::requestStop() noexcept
+{
+    stopSignal_->store(true, std::memory_order_relaxed);
+}
+
+bool ScriptHost::executionFaulted() const
+{
+    return stopSignal_->load(std::memory_order_relaxed) || (runtime_ && runtime_->execution.failure != nullptr);
+}
 
 ScriptHost::~ScriptHost() = default;
 ScriptHost::ScriptHost(ScriptHost&&) noexcept = default;
@@ -3622,6 +3681,7 @@ std::optional<StreamParseBatch> ScriptHost::lastStreamParseBatch() const
 
 void ScriptHost::resetRuntime()
 {
+    ++runtimeGeneration_;
     scriptLoaded_ = false;
     lastError_.clear();
     docks_.clear();
@@ -3844,10 +3904,15 @@ void ScriptHost::onTransportBytes(const transport::TransportBytesEvent& event)
     handleRawTransportBytes(event, startedAt);
 }
 
-void ScriptHost::onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value)
+void ScriptHost::onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value,
+                           std::optional<std::uint64_t> generation)
 {
+    if (generation && *generation != runtimeGeneration_) return;
+    if (executionFaulted()) return;
     const auto* descriptor = findControlDescriptor(controls_, id);
-    if (descriptor == nullptr) {
+    if (descriptor == nullptr || isOutputControl(descriptor->type) || descriptor->dataTable ||
+        !descriptor->visible || descriptor->disabled || descriptor->readOnly ||
+        !validateControlValue(*descriptor, value)) {
         return;
     }
     if (descriptor->type == ControlType::ValueTable) {
@@ -3884,7 +3949,7 @@ bool ScriptHost::requestOscilloscopeToggle(const transport::ConnectionContext& c
 bool ScriptHost::setControlValue(const std::string& id, const ControlValue& value)
 {
     const auto* descriptor = findControlDescriptor(controls_, id);
-    if (descriptor == nullptr) {
+    if (descriptor == nullptr || descriptor->binding || descriptor->dataTable || !validateControlValue(*descriptor, value)) {
         return false;
     }
     if (descriptor->type == ControlType::ValueTable) {
@@ -3901,19 +3966,26 @@ bool ScriptHost::setControlValue(const std::string& id, const ControlValue& valu
 
 void ScriptHost::tick(std::uint64_t currentMs)
 {
-    std::vector<std::string> dueTimers;
+    if (executionFaulted()) {
+        return;
+    }
+    pollStorageCompletions();
+    if (executionFaulted()) return;
+    std::vector<std::pair<std::string, std::uint64_t>> dueTimers;
     dueTimers.reserve(timers_.size());
     for (const auto& [name, timer] : timers_) {
         if (timer.active && currentMs >= timer.dueAtMs) {
-            dueTimers.push_back(name);
+            dueTimers.emplace_back(name, timer.generation);
         }
     }
 
-    for (const auto& name : dueTimers) {
+    for (const auto& [name, generation] : dueTimers) {
         auto iter = timers_.find(name);
-        if (iter != timers_.end()) {
-            iter->second.active = false;
+        // 前一个回调可能取消或重设本轮到期项；新代次必须留给下一次 tick。
+        if (iter == timers_.end() || !iter->second.active || iter->second.generation != generation) {
+            continue;
         }
+        iter->second.active = false;
         if (activeConnection_.has_value()) {
             callbackOnTimer(ScriptHostContext{*activeConnection_}, name);
         } else {
@@ -3938,11 +4010,7 @@ std::vector<ControlSnapshot> ScriptHost::controlStatesSnapshot() const
     std::vector<ControlSnapshot> snapshot;
     snapshot.reserve(controls_.size());
     for (const auto& control : controls_) {
-        const auto iter = controlValues_.find(control.id);
-        snapshot.push_back(ControlSnapshot{
-            .descriptor = control,
-            .value = iter == controlValues_.end() ? defaultValueFor(control) : iter->second,
-        });
+        snapshot.push_back(makeControlSnapshot(control));
     }
     return snapshot;
 }
@@ -3961,11 +4029,7 @@ std::vector<DockSnapshot> ScriptHost::dockSnapshots() const
         snapshot.descriptor = dock;
         snapshot.controls.reserve(dock.controls.size());
         for (const auto& control : dock.controls) {
-            const auto iter = controlValues_.find(control.id);
-            snapshot.controls.push_back(ControlSnapshot{
-                .descriptor = control,
-                .value = iter == controlValues_.end() ? defaultValueFor(control) : iter->second,
-            });
+            snapshot.controls.push_back(makeControlSnapshot(control));
         }
         docks.push_back(std::move(snapshot));
     }
@@ -4121,10 +4185,11 @@ std::vector<FileDialogRequest> ScriptHost::drainFileDialogRequests()
     return drained;
 }
 
-void ScriptHost::registerLuaApi(sol::state_view lua, sol::table& proto)
+void ScriptHost::registerLuaApi(Runtime& runtime, sol::table& proto)
 {
     ScriptHostQueues queues;
-    ScriptHostContextInternal ctx{*this, queues, fileIoConfig_, activeConnection_, lua};
+    ScriptHostContextInternal ctx{*this, queues, fileIoConfig_, activeConnection_,
+                                  sol::state_view(runtime.lua), *runtime.data, runtime.businessUi};
     std::array modules{
         makeCoreApiModule(*this),
         makeTxApiModule(*this),
@@ -4135,6 +4200,7 @@ void ScriptHost::registerLuaApi(sol::state_view lua, sol::table& proto)
         makePlotApiModule(*this),
         makeControlApiModule(*this),
         makeCodecApiModule(*this),
+        makeDataApiModule(*this),
     };
 
     // 核心流程：宿主只编排模块顺序，具体 Lua wire format 由各 API 模块原样注册。
@@ -4145,7 +4211,13 @@ void ScriptHost::registerLuaApi(sol::state_view lua, sol::table& proto)
 
 std::optional<std::uint64_t> ScriptHost::nextWakeupAtMs() const
 {
+    if (executionFaulted()) {
+        return std::nullopt;
+    }
     std::optional<std::uint64_t> nextWakeup;
+    if (runtime_ && runtime_->data && runtime_->data->needsPoll()) {
+        nextWakeup = runtime_->data->nextPollAtMs();
+    }
     for (const auto& [_, timer] : timers_) {
         if (!timer.active) {
             continue;
@@ -4174,14 +4246,24 @@ const std::string& ScriptHost::lastError() const
 
 void ScriptHost::onTxEvent(const transport::ConnectionContext& ctx, const TxEvent& event)
 {
-    const bool releaseFileChunk = event.state == TxEventState::Sent || event.state == TxEventState::Rejected ||
-                                  event.state == TxEventState::Dropped || event.state == TxEventState::Canceled ||
-                                  event.state == TxEventState::Timeout;
-    if (event.fileJobId != 0 && releaseFileChunk) {
+    if (event.fileJobId != 0 && !executionFaulted()) {
         const auto iter = fileSendJobs_.find(event.fileJobId);
-        if (iter != fileSendJobs_.end()) {
-            iter->second.inflight = iter->second.inflight == 0 ? 0 : iter->second.inflight - 1;
-            pumpFileSendJob(event.fileJobId);
+        if (iter != fileSendJobs_.end() && iter->second.inflight.contains(event.id)) {
+            const bool failed = event.state == TxEventState::Failed || event.state == TxEventState::Rejected ||
+                                event.state == TxEventState::Dropped || event.state == TxEventState::Canceled ||
+                                event.state == TxEventState::Timeout;
+            const bool completed = iter->second.kind == TxRequestKind::Request
+                ? event.state == TxEventState::Completed : event.state == TxEventState::Sent;
+            if (failed) {
+                // 失败立即停止推进并释放句柄；已交给传输层的在途块仍由传输层报告结果。
+                const auto handleId = iter->second.handleId;
+                fileSendJobs_.erase(iter);
+                std::erase_if(txRequests_, [&](const auto& request) { return request.fileJobId == event.fileJobId; });
+                protoFsClose(luaView(), handleId);
+            } else if (completed) {
+                iter->second.inflight.erase(event.id);
+                pumpFileSendJob(event.fileJobId);
+            }
         }
     }
     callbackOnTx(ScriptHostContext{ctx}, event);
@@ -4189,11 +4271,14 @@ void ScriptHost::onTxEvent(const transport::ConnectionContext& ctx, const TxEven
 
 void ScriptHost::onDialogEvent(const transport::ConnectionContext& ctx, const DialogEvent& event)
 {
+    if (event.runtimeGeneration && *event.runtimeGeneration != runtimeGeneration_) return;
     callbackOnDialog(ScriptHostContext{ctx}, event);
 }
 
 void ScriptHost::onFileDialogEvent(const transport::ConnectionContext& ctx, const FileDialogEvent& event)
 {
+    // 必须先验证代次，再授予文件路径权限；旧窗口不能授权新协议访问路径。
+    if (event.runtimeGeneration && *event.runtimeGeneration != runtimeGeneration_) return;
     if (event.state == "selected" && !event.path.empty() && fileIoConfig_.allowDialogPaths) {
         std::error_code errorCode;
         auto path = std::filesystem::weakly_canonical(std::filesystem::absolute(event.path), errorCode);
@@ -4207,6 +4292,11 @@ void ScriptHost::onFileDialogEvent(const transport::ConnectionContext& ctx, cons
             .writable = event.kind != FileDialogKind::OpenFile,
         });
     }
+    if (runtime_ && runtime_->tables && runtime_->tables->fileDialog(event,[this](const std::string& id) {
+        const auto* control=findControlDescriptor(controls_,id);
+        return scriptLoaded_ && !executionFaulted() && control && control->visible &&
+               !control->disabled && !control->readOnly;
+    })) return;
     callbackOnFileDialog(ScriptHostContext{ctx}, event);
 }
 
@@ -4232,6 +4322,10 @@ const std::vector<ControlDescriptor>& ScriptHost::controlDescriptors() const
 
 const ControlValue* ScriptHost::findControlValue(const std::string& id) const
 {
+    if (runtime_) {
+        const auto bound=runtime_->bindingStatus.find(id);
+        if (bound!=runtime_->bindingStatus.end() && bound->second.state!=ControlDataState::Valid) return nullptr;
+    }
     const auto iter = controlValues_.find(id);
     return iter == controlValues_.end() ? nullptr : &iter->second;
 }
@@ -4239,6 +4333,11 @@ const ControlValue* ScriptHost::findControlValue(const std::string& id) const
 void ScriptHost::updateControlValue(const std::string& id, ControlValue value)
 {
     const auto* descriptor = findControlDescriptor(controls_, id);
+    if (descriptor == nullptr || descriptor->binding || descriptor->dataTable || !validateControlValue(*descriptor, value)) {
+        protoLog("warn", "控件值违反当前约束: " + id);
+        return;
+    }
+    if (scriptLoaded_) runtime_->controlUpdatedAtMs[id] = nowMs();
     if (descriptor != nullptr && descriptor->type == ControlType::ValueTable) {
         auto current = defaultValueTableFor(*descriptor);
         if (const auto iter = controlValues_.find(id); iter != controlValues_.end()) {
@@ -4423,6 +4522,7 @@ std::optional<DialogRequest> ScriptHost::protoDialog(DialogKind kind, const sol:
         .dedupeKey = luaStringField(table, "dedupe_key").value_or(""),
         .window = *window,
         .createdAtMs = createdAtMs,
+        .runtimeGeneration = scriptLoaded_ ? runtimeGeneration_ : runtimeGeneration_ + 1,
     };
     if (request.title.empty() || request.message.empty()) {
         error = "title 和 message 不能为空";
@@ -4465,12 +4565,13 @@ std::optional<FileDialogRequest> ScriptHost::protoFileDialog(FileDialogKind kind
     }
 
     // 成员函数只补齐宿主状态，Lua 参数解析保持在无状态 helper 中。
-    const FileDialogRequest request = makeFileDialogRequest(nextFileDialogId(),
+    FileDialogRequest request = makeFileDialogRequest(nextFileDialogId(),
                                                             *resolvedKind,
                                                             fileDialogConnectionContext(activeConnection_, createdAtMs),
                                                             table,
                                                             std::move(*filters),
                                                             createdAtMs);
+    request.runtimeGeneration = scriptLoaded_ ? runtimeGeneration_ : runtimeGeneration_ + 1;
     fileDialogRequests_.push_back(request);
     return request;
 }
@@ -4524,6 +4625,7 @@ void ScriptHost::protoSetTimer(const std::string& name, std::uint64_t intervalMs
         .name = name,
         .dueAtMs = nowMs() + intervalMs,
         .active = true,
+        .generation = nextTimerGeneration_++,
     };
 }
 

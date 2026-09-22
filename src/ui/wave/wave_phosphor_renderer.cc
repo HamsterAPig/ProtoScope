@@ -191,6 +191,26 @@ void main()
                     const std::vector<std::size_t>& visibleChannelIndices,
                     const ImPlotRect& limits)
         {
+            // 即使冻结或隐藏期间往返切换，也必须清空旧模式的 CPU/GPU 余辉累积。
+            if (lastResetGeneration_ != view.phosphorResetGeneration || lastDownsampleMode_ != view.downsampleMode ||
+                lastThemeRevision_ != activeThemeRevision()) {
+                viewportInvalid_ = true;
+                lastThemeRevision_ = activeThemeRevision();
+                lastResetGeneration_ = view.phosphorResetGeneration;
+                lastDownsampleMode_ = view.downsampleMode;
+            }
+            if (lastViewport_ && !view.autoFollowLatest &&
+                (lastViewport_->X.Min != limits.X.Min || lastViewport_->X.Max != limits.X.Max ||
+                 lastViewport_->Y.Min != limits.Y.Min || lastViewport_->Y.Max != limits.Y.Max)) {
+                viewportInvalid_ = true;
+            }
+            lastViewport_ = limits;
+            if (view.interactionActive || ImGui::IsMouseDragging(ImGuiMouseButton_Left) ||
+                ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
+                viewportInvalid_ = true;
+                view.lastRenderStats.phosphorBackendStatus = "交互轨迹";
+                return false;
+            }
             if (!view.phosphorEnabled) {
                 view.lastRenderStats.phosphorBackendStatus = "关闭";
                 return false;
@@ -207,13 +227,20 @@ void main()
             const int width = plotPixelWidth();
             const int height = plotPixelHeight();
             const bool advance = wavePhosphorShouldAdvance(view);
-            if (!ensureBackend(view, width, height, advance)) {
+            const bool rebuild = viewportInvalid_;
+            if (viewportInvalid_) {
+                // 松手按最终坐标重建一次，随后继续冻结，不改变数据跟随状态。
+                width_ = 0;
+                height_ = 0;
+                viewportInvalid_ = false;
+            }
+            if (!ensureBackend(view, width, height, advance || rebuild)) {
                 view.lastRenderStats.phosphorBackendStatus =
                     advance ? "禁用: 后端不可用" : "冻结: 等待跟随模式";
                 return false;
             }
 
-            if (advance) {
+            if (advance || rebuild) {
                 if (activeBackend_ == plot::WavePhosphorBackend::GpuFbo && beginGpuFrame(view.persistenceWindow)) {
                     accumulate(view, snapshot, displayData, visibleChannelIndices, limits);
                     endGpuFrame();
@@ -263,6 +290,12 @@ void main()
             activeBackend_ = plot::WavePhosphorBackend::CpuTexture;
             return true;
         }
+
+        bool viewportInvalid_{false};
+        std::uint64_t lastResetGeneration_{0};
+        std::uint64_t lastThemeRevision_{0};
+        plot::WaveDownsampleMode lastDownsampleMode_{plot::WaveDownsampleMode::StableEdges};
+        std::optional<ImPlotRect> lastViewport_;
 
         bool textureApiAvailable() const
         {
@@ -616,6 +649,37 @@ void main()
                 !channelCanEnterPhosphor(snapshot, view.triggerChannelIndex)) {
                 return;
             }
+            const auto& sourceDisplay = displayData.channels[view.triggerChannelIndex];
+            if (sourceDisplay.source) {
+                const plot::WaveQueryView triggerQuery(*sourceDisplay.source, sourceDisplay.axis,
+                                                       sourceDisplay.frequency, sourceDisplay.formula);
+                const double duration = (std::max)(safeDuration(limits), view.minVisibleTimeSpan);
+                const auto totalBudget = view.adaptiveMaxRenderPointsPerChannel.value_or(view.maxRenderPointsPerChannel);
+                const auto vertexBudget = view.adaptiveMaxRenderVertices.value_or(view.maxRenderVertices);
+                const auto points = (std::max)(std::size_t{2}, (std::min)(totalBudget / 32,
+                    vertexBudget / (32 * (std::max)(std::size_t{1}, visibleChannelIndices.size()) * 16)));
+                // 每个时间分区至多取一个真实触发，避免枚举全部跳变后反复扫描整窗。
+                for (std::size_t segment = 0; segment < 32; ++segment) {
+                    const double begin = limits.X.Min + duration * static_cast<double>(segment) / 32.0;
+                    const double end = limits.X.Min + duration * static_cast<double>(segment + 1) / 32.0;
+                    const auto trigger = triggerQuery.firstCrossing(begin, end, view.triggerThreshold,
+                        view.triggerEdge == plot::WavePhosphorTriggerEdge::Rising);
+                    if (!trigger) continue;
+                    const auto window = makeWavePhosphorTriggerWindow(*trigger, limits.X.Min, duration, view.triggerPositionRatio);
+                    for (const auto channelIndex : visibleChannelIndices) {
+                        if (!channelCanEnterPhosphor(snapshot, channelIndex)) continue;
+                        const auto& c = displayData.channels[channelIndex];
+                        const plot::WaveQueryView query(snapshot.channels[channelIndex], c.axis, c.frequency, c.formula);
+                        std::vector<plot::WaveSample> trace;
+                        for (const auto index : query.traceIndices(window.sourceMinTime, window.sourceMaxTime, points,
+                                                                   nullptr, true, view.downsampleMode))
+                            trace.push_back(query.sample(index));
+                        accumulateSampleWindow(trace, window.sourceMinTime, window.sourceMaxTime, limits,
+                            wavePhosphorStrokeStyle(snapshot.channels[channelIndex], channelIndex), &window);
+                    }
+                }
+                return;
+            }
             const auto* triggerSamples = samplesForChannel(displayData, view.triggerChannelIndex);
             if (triggerSamples == nullptr || triggerSamples->size() < 2) {
                 return;
@@ -711,10 +775,31 @@ void main()
             }
             const auto offset =
                 (static_cast<std::size_t>(y) * static_cast<std::size_t>(width_) + static_cast<std::size_t>(x)) * 4U;
+            if (activeWaveStyleTokens().lightPersistence) {
+                // 浅底使用预乘 alpha 的 source-over，重复描画趋近原色而不是趋白。
+                pixels_[offset] = color.x * amount + pixels_[offset] * (1.F - amount);
+                pixels_[offset + 1] = color.y * amount + pixels_[offset + 1] * (1.F - amount);
+                pixels_[offset + 2] = color.z * amount + pixels_[offset + 2] * (1.F - amount);
+                pixels_[offset + 3] = amount + pixels_[offset + 3] * (1.F - amount);
+                return;
+            }
             pixels_[offset + 0U] = (std::min)(1.0F, pixels_[offset + 0U] + color.x * amount);
             pixels_[offset + 1U] = (std::min)(1.0F, pixels_[offset + 1U] + color.y * amount);
             pixels_[offset + 2U] = (std::min)(1.0F, pixels_[offset + 2U] + color.z * amount);
-            pixels_[offset + 3U] = (std::min)(0.92F, pixels_[offset + 3U] + amount);
+            pixels_[offset + 3U] = (std::min)(1.0F, pixels_[offset + 3U] + amount);
+        }
+
+        float depositionAlpha(const ImVec4& color)
+        {
+            const float initial = .20F * std::clamp(color.w, 0.F, 1.F);
+            if (!activeWaveStyleTokens().correctContrast || initial == 0.F) return initial;
+            if (depositRevision_ == activeThemeRevision() && depositColor_.x == color.x &&
+                depositColor_.y == color.y && depositColor_.z == color.z && depositColor_.w == color.w)
+                return depositAlpha_;
+            depositRevision_ = activeThemeRevision();
+            depositColor_ = color;
+            // 与游标元数据选色共用最新核心覆盖量；不改变既有余辉累积/衰减策略。
+            return depositAlpha_ = wavePhosphorDepositionAlpha(color);
         }
 
         void accumulateCpuLine(const float x0,
@@ -727,7 +812,7 @@ void main()
             const float dy = y1 - y0;
             const int steps = (std::max)(1, static_cast<int>(std::ceil((std::max)(std::abs(dx), std::abs(dy)))));
             const ImVec4 color = style.color;
-            const float amount = 0.20F * (std::clamp)(color.w, 0.0F, 1.0F);
+            const float amount = depositionAlpha(color);
             const float radius = (std::max)(0.5F, plot::sanitizeChannelLineWidth(style.lineWidth) * 0.5F);
             const int pixelRadius = static_cast<int>(std::ceil(radius));
             for (int step = 0; step <= steps; ++step) {
@@ -766,7 +851,7 @@ void main()
                                const WavePhosphorStrokeStyle& style)
         {
             const ImVec4 color = style.color;
-            const float amount = 0.20F * (std::clamp)(color.w, 0.0F, 1.0F);
+            const float amount = depositionAlpha(color);
             const float lineWidth = plot::sanitizeChannelLineWidth(style.lineWidth);
             if (!gpuVertices_.empty() && std::abs(gpuLineWidth_ - lineWidth) > 1e-3F) {
                 flushGpuLines();
@@ -783,7 +868,8 @@ void main()
             }
             glEnable(GL_BLEND);
             glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
-            glBlendFuncSeparate(GL_ONE, GL_ONE, GL_ONE, GL_ONE);
+            const GLenum destination = activeWaveStyleTokens().lightPersistence ? GL_ONE_MINUS_SRC_ALPHA : GL_ONE;
+            glBlendFuncSeparate(GL_ONE, destination, GL_ONE, destination);
             fboApi().lineWidth(gpuLineWidth_);
             drawGpuVertices(gpuVertices_.data(), gpuVertices_.size(), kGlLines);
             gpuVertices_.clear();
@@ -810,12 +896,17 @@ void main()
             auto* drawList = ImPlot::GetPlotDrawList();
             const ImVec2 plotPos = ImPlot::GetPlotPos();
             const ImVec2 plotSize = ImPlot::GetPlotSize();
+            // 两个后端的纹理均储存预乘颜色，显示时不能再次乘 alpha。
+            drawList->AddCallback([](const ImDrawList*, const ImDrawCmd*) {
+                glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+            }, nullptr);
             drawList->AddImage(ImTextureRef(static_cast<ImTextureID>(texture_)),
                                plotPos,
                                ImVec2(plotPos.x + plotSize.x, plotPos.y + plotSize.y),
                                ImVec2(0.0F, 0.0F),
                                ImVec2(1.0F, 1.0F),
                                IM_COL32_WHITE);
+            drawList->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
         }
 
         GLuint texture_{0};
@@ -831,6 +922,9 @@ void main()
         bool textureNeedsClear_{true};
         bool gpuFrameActive_{false};
         float gpuLineWidth_{1.0F};
+        ImVec4 depositColor_{};
+        float depositAlpha_{.2F};
+        std::uint64_t depositRevision_{std::numeric_limits<std::uint64_t>::max()};
         SavedGlState savedGpuState_{};
         std::vector<float> pixels_;
         std::vector<float> gpuVertices_;

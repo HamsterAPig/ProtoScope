@@ -230,14 +230,28 @@ void test_elf_static_address_file_watch_detects_changes_and_delete_recreate_relo
         std::ofstream output(path, std::ios::binary | std::ios::trunc);
         output << "v2-changed";
     }
-    auto changed = pollElfStaticAddressFileWatchState(state, nowMs() + 1000, error);
+    const auto start = nowMs();
+    auto changed = pollElfStaticAddressFileWatchState(state, start + 1000, error);
     require(!error, "文件变更轮询不应报错");
     require(changed.changed, "修改时间或大小变化后应报告变更");
-    require(changed.statusMessage.find("检测到 ELF 数据文件变更") != std::string::npos, "普通修改应提示手动重载");
+    require(changed.statusMessage.find("等待写入稳定后自动重载") != std::string::npos, "普通修改应等待自动重载");
     require(!changed.shouldReload, "普通修改不应立即自动重载");
+    require(state.pendingReload, "普通修改应进入待重载状态");
+    {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        output << "v2-still-writing";
+    }
+    require(!pollElfStaticAddressFileWatchState(state, start + 1500, error).shouldReload,
+            "连续写入应重置稳定计时");
+    require(!pollElfStaticAddressFileWatchState(state, start + 2000, error).shouldReload,
+            "最后写入稳定不足一秒不应重载");
+    const auto modifiedStable = pollElfStaticAddressFileWatchState(state, start + 2500, error);
+    require(modifiedStable.shouldReload && modifiedStable.clearComboCache, "普通修改稳定后应重载并清理候选缓存");
+    require(!pollElfStaticAddressFileWatchState(state, start + 3000, error).shouldReload,
+            "同一版本只触发一次重载");
 
     std::filesystem::remove(path);
-    auto deleted = pollElfStaticAddressFileWatchState(state, nowMs() + 2000, error);
+    auto deleted = pollElfStaticAddressFileWatchState(state, start + 4000, error);
     require(!error, "删除后轮询不应报错");
     require(deleted.changed, "删除后应报告变更");
     require(deleted.statusMessage.find("ELF 数据文件已删除") != std::string::npos, "删除后应提示继续使用旧模型");
@@ -247,13 +261,13 @@ void test_elf_static_address_file_watch_detects_changes_and_delete_recreate_relo
         std::ofstream output(path, std::ios::binary);
         output << "v3-recreated";
     }
-    auto recreated = pollElfStaticAddressFileWatchState(state, nowMs() + 3000, error);
+    auto recreated = pollElfStaticAddressFileWatchState(state, start + 5000, error);
     require(!error, "重建后轮询不应报错");
     require(recreated.changed, "重建后应报告变更");
     require(recreated.statusMessage.find("等待写入稳定后自动重载") != std::string::npos, "重建后应进入稳定等待");
     require(!recreated.shouldReload, "重建后仍不应立即自动重载");
 
-    auto stable = pollElfStaticAddressFileWatchState(state, nowMs() + 4500, error);
+    auto stable = pollElfStaticAddressFileWatchState(state, start + 6500, error);
     require(!error, "稳定轮询不应报错");
     require(stable.changed, "稳定后应报告自动重载事件");
     require(stable.shouldReload, "重建稳定后应触发自动重载");

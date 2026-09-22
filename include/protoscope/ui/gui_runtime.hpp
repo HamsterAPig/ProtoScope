@@ -2,13 +2,17 @@
 
 #include "protoscope/config/config.hpp"
 #include "protoscope/ui/dock_layout.hpp"
+#include "protoscope/ui/control_edit_state.hpp"
 #include "protoscope/ui/elf_static_address_file_watch.hpp"
+#include "protoscope/ui/file_dialog_paths.hpp"
 #include "protoscope/ui/protocol_state_file.hpp"
 #include "protoscope/ui/protocol_ui_state.hpp"
 #include "protoscope/ui/ui_component.hpp"
 #include "protoscope/ui/ui_host_context.hpp"
 #include "protoscope/ui/update_check.hpp"
 #include "protoscope/ui/wave_dock_renderer.hpp"
+#include "protoscope/ui/wave_status.hpp"
+#include "protoscope/ui/theme_manager.hpp"
 
 #include <array>
 #include <chrono>
@@ -16,6 +20,7 @@
 #include <deque>
 #include <filesystem>
 #include <future>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -46,6 +51,7 @@ struct GuiRuntimeOptions {
 };
 
 bool runRendererProbe(app::StartupDiagnosticsSink* diagnostics);
+bool validateWaveCursorExport(const plot::WaveViewState& view, std::string& error);
 
 class GuiRuntime {
 public:
@@ -63,6 +69,7 @@ public:
     void shutdown();
 
 private:
+    friend struct GuiRuntimeTestAccess;
     friend class RuntimeMenuComponent;
     friend class RuntimeDialogComponent;
     friend class CommDockComponent;
@@ -125,7 +132,15 @@ private:
     void renderFrame();
     void drawAppHeader(float menuBarHeight);
     void drawStatusBar();
+    WaveStatusPresenter waveStatusPresenter_;
     void processWaveFullscreenInput();
+    bool deferBuiltinFileOperation(std::function<void()> operation);
+    void prepareBuiltinFileOperation();
+    void dispatchBuiltinFileOperation();
+    std::function<void()> pendingBuiltinFileOperation_;
+    bool builtinFileOperationPrepared_{false};
+    bool executingBuiltinFileOperation_{false};
+    bool focusUnifiedDataDialog_{false};
     void enterWaveFullscreen();
     void exitWaveFullscreen();
     void captureWaveFullscreenDockSnapshot();
@@ -136,6 +151,17 @@ private:
     bool stopRawCaptureRecordingWithStatus();
     void syncDialogQueue();
     void drawDialogs();
+    void drawUnifiedDataDialog();
+    void openUnifiedDataImport();
+    void openUnifiedDataExport(int content = -1, bool useLast = false);
+    void submitUnifiedDataExport();
+    std::optional<std::filesystem::path> builtinFileDialog(
+        GLFWwindow* window, const wchar_t* title, const wchar_t* filter,
+        const std::filesystem::path& initialDirectory, const std::filesystem::path& suggestedFileName, bool saveDialog,
+        const wchar_t* extension, std::string& error, bool remember = true);
+    void rememberFileDialogPath(const std::filesystem::path& path, bool exporting);
+    void saveFileDialogPreferences(const config::DataExportConfig* lastExport = nullptr);
+    std::string fileDialogPreferenceError_;
     void drawRawCaptureFileDialogs();
     void handleGlobalShortcuts();
     void drawMainMenu();
@@ -145,6 +171,11 @@ private:
     void drawSettingsMenu();
     void drawHelpMenu();
     void drawLuaViewMenu();
+    void drawBusinessMenu();
+    void drawBusinessMenuItems(const std::vector<scripting::BusinessMenuItem>& items,
+                               std::uint64_t generation, std::uint64_t revision);
+    void applyBusinessDockRequests();
+    bool drawDataTableControl(const scripting::ControlSnapshot& control);
     void drawCommDock();
     void drawCommTransportModeSelector(dock::CommDockState& comm);
     void drawCommTransportConfig(dock::CommDockState& comm);
@@ -201,6 +232,11 @@ private:
                                    std::string_view stableId,
                                    std::size_t& widgetIndex,
                                    bool earlyExit);
+    bool drawLuaTabsLayoutNode(const scripting::LayoutNodeDescriptor& node,
+                               const std::vector<scripting::ControlSnapshot>& controls,
+                               std::string_view stableId,
+                               std::size_t& widgetIndex,
+                               bool earlyExit);
     [[nodiscard]] float luaLayoutControlWidth(const scripting::LayoutNodeDescriptor& node,
                                               const scripting::ControlSnapshot& control) const;
     [[nodiscard]] float luaLayoutControlFillWidth(const scripting::LayoutNodeDescriptor& node,
@@ -239,7 +275,7 @@ private:
     bool drawValueTableControl(const scripting::ControlSnapshot& control, std::string_view visibleLabel);
     bool drawTxSequenceControl(const scripting::ControlSnapshot& control, std::string_view visibleLabel);
     int pushLuaControlFeedbackStyle(const scripting::ControlDescriptor& descriptor);
-    void updateDynamicControlValueWithFeedback(const scripting::ControlDescriptor& descriptor,
+    void updateDynamicControlValueWithFeedback(scripting::ControlDescriptor descriptor,
                                                const scripting::ControlValue& value);
     void updateLuaDockDefaultLayout();
     void requestProtocolWorkspaceSwitch(std::string protocolDir, bool forceReload);
@@ -354,6 +390,7 @@ private:
 
     app::Application& application_;
     const config::ConfigStore& configStore_;
+    ThemeManager themeManager_;
     GuiRuntimeOptions options_{};
     app::StartupDiagnosticsSink* startupDiagnostics_{nullptr};
     GLFWwindow* window_{nullptr};
@@ -419,6 +456,16 @@ private:
     std::deque<scripting::DialogRequest> dialogQueue_;
     std::optional<scripting::DialogRequest> activeDialog_;
     bool activeDialogOpened_{false};
+    bool unifiedDataDialogOpen_{false};
+    bool unifiedExportMode_{false};
+    bool importParseWaveform_{false};
+    config::DataExportConfig dataExportDraft_{};
+    config::DataExportConfig pendingDataExport_{};
+    std::uint64_t pendingDataExportTask_{0};
+    std::uint64_t dataRecordBeginMs_{0};
+    std::uint64_t dataRecordEndMs_{0};
+    std::string unifiedDataError_;
+    std::string unifiedDataPath_;
     bool rawCaptureImportDialogOpen_{false};
     bool rawCaptureImportDialogOpened_{false};
     std::string rawCaptureImportPath_;
@@ -480,6 +527,28 @@ private:
 
     std::unordered_map<std::string, ElfSymbolComboUiState> elfSymbolComboStates_;
     std::unordered_map<std::string, LuaControlFeedbackState> luaControlFeedbackStates_;
+    std::unordered_map<std::string, ControlEditState> luaControlDrafts_;
+    std::uint64_t luaControlDraftGeneration_{0};
+    struct LuaTabsUiState {
+        std::string hostValue;
+        std::string visibleValue;
+        bool syncing{true};
+        int lastFrame{-1};
+    };
+    std::unordered_map<std::string, LuaTabsUiState> luaTabsUiStates_;
+    std::uint64_t luaTabsGeneration_{0};
+    std::uint64_t businessDockGeneration_{0};
+    std::uint64_t businessDockRevision_{0};
+    struct DataTableUiState {
+        std::array<char,512> filterValue{};
+        int filterColumn{0};
+        int filterOperation{0};
+        bool filterBoolean{false};
+        bool initialized{false};
+        std::string error;
+    };
+    std::unordered_map<std::string,DataTableUiState> dataTableUiStates_;
+    std::uint64_t dataTableUiGeneration_{0};
     WaveDockRenderer waveDockRenderer_;
 };
 

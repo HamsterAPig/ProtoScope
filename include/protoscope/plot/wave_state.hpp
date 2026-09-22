@@ -1,9 +1,14 @@
 #pragma once
+#include "protoscope/plot/wave_overview_color.hpp"
+#include "protoscope/plot/wave_cursor_color.hpp"
 
 #include "protoscope/plot/oscilloscope.hpp"
 #include "protoscope/plot/raw_capture_file.hpp"
 #include "protoscope/plot/wave_fft.hpp"
+#include "protoscope/plot/wave_cursors.hpp"
 #include "protoscope/plot/wave_math.hpp"
+#include "protoscope/plot/wave_analysis.hpp"
+#include <memory>
 
 #include <array>
 #include <cstddef>
@@ -127,13 +132,6 @@ struct WaveMeasurementSelection {
     bool bias{false};
 };
 
-struct ActiveBitLaneState {
-    bool active{false};
-    std::size_t parentChannelIndex{0};
-    std::size_t bitIndex{0};
-    std::size_t laneIndex{0};
-};
-
 enum class WaveMouseYOffsetDragMode {
     Direct,
     Shift,
@@ -188,6 +186,13 @@ struct WaveViewState {
     bool showCursorIntersectionReadouts{false};
     WaveBitDisplayReadoutPolicy bitDisplayReadoutPolicy{WaveBitDisplayReadoutPolicy::MixedNearest};
     bool showCursors{true};
+    bool cursorAutoColor{true};
+    // 随 Dock 的 view 生命周期保存，所有布局显式读取同一帧结果。
+    mutable CursorColorCache cursorColors;
+    std::vector<std::size_t> cursorVisibleSplitChannels;
+    bool cursorSplitVisibilityValid{false};
+    mutable std::vector<std::size_t> cursorHiddenFftChannels;
+    bool cursorFftPhaseVisible{true};
     bool followMeasurementCursorsOnScroll{false};
     bool measurementCursorReadoutRefreshPending{false};
     bool showMeasurementOverlay{true};
@@ -198,16 +203,27 @@ struct WaveViewState {
     bool initialized{false};
     bool cursorIntervalLocked{false};
     bool overviewWindowDragging{false};
+    // 宿主拥有概览捕获；起点与总位移解耦，窄框视觉扩展不会改变真实跨度。
+    struct OverviewDrag {
+        unsigned int activeId{0};
+        int target{0}; // 1 左边，2 右边，3 整框。
+        double minTime{0}, maxTime{0}, mouseX{0}, timePerPixel{0};
+    } overviewDrag;
     bool forceNextMainPlotLimits{false};
     bool activeChannelOffsetDrag{false};
     bool activeChannelScaleDrag{false};
-    bool activeBitYOffsetDrag{false};
     bool activeFftMagnitudeOffsetDrag{false};
     bool zoomSelectionActive{false};
     bool zoomSelectionDragging{false};
     bool zoomSelectionAutoExit{false};
     bool fftMagnitudeAutoFitIgnoreFundamental{false};
     bool peakDetectDownsample{true};
+    bool interactionActive{false};
+    bool fftUpdatePending{false};
+    bool measurementUpdatePending{false};
+    mutable bool statusOverlayPositionValid{false};
+    mutable std::array<float, 2> statusOverlayOffset{};
+    WaveBitDenseRenderMode bitDenseRenderMode{WaveBitDenseRenderMode::CompressedSteps};
     bool fitVisibleWaveformsRequested{false};
     bool defaultViewportPending{true};
     bool defaultViewportLegacyBehavior{false};
@@ -221,6 +237,9 @@ struct WaveViewState {
     std::size_t maxRenderPointsPerChannel{1200};
     std::size_t maxRenderVertices{60000};
     std::size_t overviewMaxSamples{20000};
+    bool overviewNormalizeChannels{false};
+    bool overviewShowBitChannels{false};
+    OverviewSelectionConfig overviewSelection{};
     // 自适应性能只覆盖本帧预算，保存配置时仍使用上面的用户配置。
     std::optional<std::size_t> adaptiveMaxRenderPointsPerChannel{};
     std::optional<std::size_t> adaptiveMaxRenderVertices{};
@@ -230,7 +249,7 @@ struct WaveViewState {
     std::size_t measurementChannelIndex{0};
     std::size_t activeFftMagnitudeOffsetDragChannelIndex{0};
     std::size_t lastCursorFftAnchorIndex{1};
-    ActiveBitLaneState activeBitLane{};
+    std::array<std::optional<CursorReadout>, 2> lastCursorReadouts{};
     std::size_t referenceChannelIndex{0};
     std::size_t triggerChannelIndex{0};
     WaveMeasurementReferenceMode referenceMode{WaveMeasurementReferenceMode::Channel};
@@ -255,12 +274,21 @@ struct WaveViewState {
     WaveFftConfig fft{};
     WaveFftXAxisMode fftXAxisMode{WaveFftXAxisMode::FrequencyHz};
     WaveViewMode viewMode{WaveViewMode::Overlay};
+    // 以下字段仅用于运行时隔离叠加/堆叠纵轴，不参与协议状态持久化。
+    WaveViewMode lastAppliedViewMode{WaveViewMode::Overlay};
+    WaveViewMode channelLayoutMode{WaveViewMode::Overlay};
+    std::vector<std::size_t> channelLayoutVisible;
+    std::vector<std::size_t> channelLayoutAligned;
+    bool stackedVerticalFitPending{false};
+    bool appliedVerticalRangeLock{false};
     bool fftSourceWindowValid{false};
     bool fftViewportInitialized{false};
     bool fftFitAllRequested{false};
     double visibleDuration{1.0};
     double minVisibleTimeSpan{0.001};
     double downsampleStartMultiplier{2.0};
+    WaveDownsampleMode downsampleMode{WaveDownsampleMode::StableEdges};
+    std::uint64_t phosphorResetGeneration{0};
     double channelCardFixedWidth{128.0};
     double channelCardAdaptiveRatio{0.22};
     double legendChannelNameMaxWidth{0.0};
@@ -286,6 +314,8 @@ struct WaveViewState {
     double fftPhaseMax{180.0};
     double manualVerticalMin{-1.0};
     double manualVerticalMax{1.0};
+    double normalViewMinValue{-1.0};
+    double normalViewMaxValue{1.0};
     double viewMinValue{-1.0};
     double viewMaxValue{1.0};
     double zoomSelectionStartX{0.0};
@@ -302,6 +332,7 @@ struct WaveViewState {
     WaveCursorExtremeSnapPolicy cursorExtremeSnapPolicy{WaveCursorExtremeSnapPolicy::NearestWaveform};
     WaveRenderStats lastRenderStats{};
     std::array<WaveCursorState, 2> cursors{};
+    WaveAuxiliaryCursors auxiliaryCursors{};
 };
 
 struct WaveAnalysisMarker {
@@ -375,9 +406,11 @@ struct WaveDockState {
     bool mainToolbarNeedsHorizontalScroll{true};
     std::uint64_t displayDataRevision{0};
     double displayDataSampleFrequencyHz{0.0};
+    WaveDownsampleMode displayDataDownsampleMode{WaveDownsampleMode::StableEdges};
     std::size_t lastLegendMeasurementChannelIndex{static_cast<std::size_t>(-1)};
 
     struct DisplayDataCacheKey {
+        WaveDownsampleMode downsampleMode{WaveDownsampleMode::StableEdges};
         std::uint64_t dataRevision{0};
         double sampleFrequencyHz{0.0};
         double viewMinTime{0.0};
@@ -388,7 +421,8 @@ struct WaveDockState {
 
         bool operator==(const DisplayDataCacheKey& other) const
         {
-            return dataRevision == other.dataRevision && sampleFrequencyHz == other.sampleFrequencyHz &&
+            return downsampleMode == other.downsampleMode &&
+                   dataRevision == other.dataRevision && sampleFrequencyHz == other.sampleFrequencyHz &&
                    viewMinTime == other.viewMinTime && viewMaxTime == other.viewMaxTime &&
                    channelCount == other.channelCount && displayFormula == other.displayFormula &&
                    rangeHash == other.rangeHash;
@@ -396,6 +430,7 @@ struct WaveDockState {
     };
 
     struct OverviewDisplayDataCacheKey {
+        WaveDownsampleMode downsampleMode{WaveDownsampleMode::StableEdges};
         std::uint64_t dataRevision{0};
         double sampleFrequencyHz{0.0};
         std::size_t channelCount{0};
@@ -405,13 +440,15 @@ struct WaveDockState {
 
         bool operator==(const OverviewDisplayDataCacheKey& other) const
         {
-            return dataRevision == other.dataRevision && sampleFrequencyHz == other.sampleFrequencyHz &&
+            return downsampleMode == other.downsampleMode &&
+                   dataRevision == other.dataRevision && sampleFrequencyHz == other.sampleFrequencyHz &&
                    channelCount == other.channelCount && displayFormula == other.displayFormula &&
                    rangeHash == other.rangeHash && pointLimit == other.pointLimit;
         }
     };
 
     struct RenderEnvelopeCacheKey {
+        WaveDownsampleMode downsampleMode{WaveDownsampleMode::StableEdges};
         std::uint64_t dataRevision{0};
         double sampleFrequencyHz{0.0};
         double visibleMinTime{0.0};
@@ -427,7 +464,8 @@ struct WaveDockState {
 
         bool operator==(const RenderEnvelopeCacheKey& other) const
         {
-            return dataRevision == other.dataRevision && sampleFrequencyHz == other.sampleFrequencyHz &&
+            return downsampleMode == other.downsampleMode &&
+                   dataRevision == other.dataRevision && sampleFrequencyHz == other.sampleFrequencyHz &&
                    visibleMinTime == other.visibleMinTime && visibleMaxTime == other.visibleMaxTime &&
                    channelIndex == other.channelIndex && pointLimit == other.pointLimit &&
                    sampleCount == other.sampleCount && peakDetectDownsample == other.peakDetectDownsample &&
@@ -446,6 +484,8 @@ struct WaveDockState {
 
     struct BitRenderCacheKey {
         std::uint64_t dataRevision{0};
+        std::uint64_t historyEpoch{0};
+        WaveTimeAxisSource axis{WaveTimeAxisSource::ScriptTime};
         std::size_t channelIndex{0};
         double visibleMinTime{0.0};
         double visibleMaxTime{0.0};
@@ -459,6 +499,7 @@ struct WaveDockState {
         std::size_t plotPixelHeight{0};
         std::size_t layoutFingerprint{0};
         std::size_t vertexBudget{0};
+        WaveBitDenseRenderMode denseMode{WaveBitDenseRenderMode::CompressedSteps};
 
         bool operator==(const BitRenderCacheKey&) const = default;
     };
@@ -466,9 +507,45 @@ struct WaveDockState {
     struct BitRenderCacheEntry {
         bool valid{false};
         BitRenderCacheKey key{};
-        std::vector<std::vector<WaveSample>> lanes;
+        std::vector<std::vector<WaveDigitalSegment>> lanes;
         std::size_t sourceSampleCount{0};
     };
+
+    struct BitCountCacheKey {
+        std::uint64_t revision{0}, epoch{0};
+        std::size_t channel{0}, firstBit{0}, bitCount{0};
+        WaveTimeAxisSource axis{WaveTimeAxisSource::ScriptTime};
+        double frequency{0}, minTime{0}, maxTime{0};
+        bool operator==(const BitCountCacheKey&) const = default;
+    };
+    struct BitCountCacheEntry {
+        bool valid{false}, pending{false};
+        BitCountCacheKey key{};
+        std::vector<std::uint64_t> counts;
+    };
+    std::vector<BitCountCacheEntry> bitCountCache;
+    std::uint64_t bitCountQueryCount{0};
+    double lastBitCountQueryMs{0};
+
+    struct OverviewRenderKey {
+        std::uint64_t revision{0}, epoch{0};
+        std::size_t channel{0}, width{0}, budget{0};
+        WaveTimeAxisSource axis{WaveTimeAxisSource::ScriptTime};
+        double frequency{0}, minTime{0}, maxTime{0}, ratio{1}, scale{1}, offset{0};
+        WaveDisplayFormula formula{WaveDisplayFormula::OffsetThenScale};
+        bool normalize{false};
+        WaveDownsampleMode downsampleMode{WaveDownsampleMode::StableEdges};
+        bool operator==(const OverviewRenderKey&) const = default;
+    };
+    struct OverviewRenderEntry {
+        bool valid{false};
+        OverviewRenderKey key{};
+        std::vector<WaveSample> trace;
+        std::vector<WaveTimeEnvelope> envelope;
+    };
+    std::vector<OverviewRenderEntry> overviewRenderCache;
+    std::uint64_t overviewQueryCount{0};
+    OverviewColorCache overviewColorCache;
 
     bool cachedDisplayKeyValid{false};
     DisplayDataCacheKey cachedDisplayKey{};
@@ -483,6 +560,36 @@ struct WaveDockState {
     bool cachedFftKeyValid{false};
     WaveFftCacheKey cachedFftKey{};
     WaveFftFrame cachedFftFrame{};
+    std::string fftDisplayError;
+    std::shared_ptr<WaveAnalysisWorker> analysisWorker;
+    std::uint64_t analysisEpoch{0};
+    std::size_t displayPointBudget{0};
+    std::uint64_t fftRequestGeneration{0};
+    std::uint64_t fftSubmittedCount{0};
+    std::uint64_t measurementSubmittedCount{0};
+    bool fftRequestActive{false};
+    WaveFftCacheKey fftRequestedKey{};
+    bool fftTargetKeyValid{false};
+    bool fftTargetFollowing{false};
+    bool fftRefreshRequested{false};
+    WaveTimeAxisSource fftTargetAxis{WaveTimeAxisSource::SampleIndex};
+    WaveFftCacheKey fftTargetKey{};
+    struct MeasurementKey {
+        std::size_t channel{0};
+        double begin{0}, end{0};
+        std::optional<std::size_t> reference;
+        std::optional<double> manual;
+        double frequency{0};
+        double ratio{1};
+        double referenceRatio{1};
+        bool operator==(const MeasurementKey&) const = default;
+    };
+    MeasurementKey measurementKey{};
+    std::uint64_t measurementRequestGeneration{0};
+    std::uint64_t measurementDataRevision{0};
+    bool measurementRequestActive{false};
+    bool measurementKeyValid{false};
+    std::optional<MeasurementReadout> cachedMeasurement;
     bool suppressZoomSelectionEscapeThisFrame{false};
 };
 

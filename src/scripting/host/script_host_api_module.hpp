@@ -46,5 +46,6 @@ std::unique_ptr<IScriptHostApiModule> makeOscilloscopeApiModule(ScriptHost& host
 std::unique_ptr<IScriptHostApiModule> makePlotApiModule(ScriptHost& host);
 std::unique_ptr<IScriptHostApiModule> makeControlApiModule(ScriptHost& host);
 std::unique_ptr<IScriptHostApiModule> makeCodecApiModule(ScriptHost& host);
+std::unique_ptr<IScriptHostApiModule> makeDataApiModule(ScriptHost& host);
 
 } // namespace protoscope::scripting

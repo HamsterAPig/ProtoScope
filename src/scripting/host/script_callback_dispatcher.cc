@@ -10,7 +10,7 @@ namespace protoscope::scripting {
 
 std::optional<sol::protected_function> ScriptHost::resolveGlobalCallback(const char* name)
 {
-    if (!scriptLoaded_ || !runtime_) {
+    if (!scriptLoaded_ || !runtime_ || executionFaulted()) {
         return std::nullopt;
     }
 
@@ -38,6 +38,7 @@ void ScriptHost::callbackOnOpen(const ScriptHostContext& ctx)
     if (!callback.has_value()) {
         return;
     }
+    CallbackScope execution(*this);
     try {
         sol::state_view view(runtime_->lua.lua_state());
         sol::protected_function_result result = (*callback)(makeContextTable(view, ctx.connection));
@@ -57,6 +58,7 @@ void ScriptHost::callbackOnClose(const ScriptHostContext& ctx)
     if (!callback.has_value()) {
         return;
     }
+    CallbackScope execution(*this);
     try {
         sol::state_view view(runtime_->lua.lua_state());
         sol::protected_function_result result = (*callback)(makeContextTable(view, ctx.connection));
@@ -76,6 +78,7 @@ void ScriptHost::callbackOnError(const ScriptHostContext& ctx, const std::string
     if (!callback.has_value()) {
         return;
     }
+    CallbackScope execution(*this);
     try {
         sol::state_view view(runtime_->lua.lua_state());
         sol::protected_function_result result = (*callback)(makeContextTable(view, ctx.connection), message);
@@ -95,6 +98,7 @@ void ScriptHost::callbackOnBytes(const ScriptHostContext& ctx, const std::vector
     if (!callback.has_value()) {
         return;
     }
+    CallbackScope execution(*this);
     try {
         sol::state_view view(runtime_->lua.lua_state());
         sol::protected_function_result result =
@@ -111,6 +115,9 @@ void ScriptHost::callbackOnBytes(const ScriptHostContext& ctx, const std::vector
 
 bool ScriptHost::callbackOnStreamBatch(const ScriptHostContext& ctx, const std::vector<StreamParsedFrame>& frames)
 {
+    if (executionFaulted()) {
+        return true;
+    }
     if (!scriptLoaded_ || !runtime_ || !runtime_->stream || !runtime_->stream->onBatchCallbackKey.has_value()) {
         return false;
     }
@@ -120,6 +127,7 @@ bool ScriptHost::callbackOnStreamBatch(const ScriptHostContext& ctx, const std::
         return true;
     }
 
+    CallbackScope execution(*this);
     try {
         sol::state_view view(runtime_->lua.lua_state());
         auto callback = callbackIter->second;
@@ -140,7 +148,7 @@ bool ScriptHost::callbackOnStreamBatch(const ScriptHostContext& ctx, const std::
 
 void ScriptHost::callbackOnStreamFrame(const ScriptHostContext& ctx, const StreamParsedFrame& frame)
 {
-    if (!scriptLoaded_ || !runtime_ || !runtime_->stream) {
+    if (!scriptLoaded_ || !runtime_ || !runtime_->stream || executionFaulted()) {
         return;
     }
 
@@ -154,6 +162,7 @@ void ScriptHost::callbackOnStreamFrame(const ScriptHostContext& ctx, const Strea
         return;
     }
 
+    CallbackScope execution(*this);
     try {
         sol::state_view view(runtime_->lua.lua_state());
         auto callback = callbackIter->second;
@@ -173,7 +182,8 @@ void ScriptHost::callbackOnStreamFrame(const ScriptHostContext& ctx, const Strea
 
 void ScriptHost::callbackOnStreamError(const ScriptHostContext& ctx, const StreamParseError& error)
 {
-    if (!scriptLoaded_ || !runtime_ || !runtime_->stream || !runtime_->stream->onErrorCallbackKey.has_value()) {
+    if (!scriptLoaded_ || !runtime_ || !runtime_->stream || !runtime_->stream->onErrorCallbackKey.has_value() ||
+        executionFaulted()) {
         return;
     }
     const auto callbackIter = runtime_->streamCallbacks.find(*runtime_->stream->onErrorCallbackKey);
@@ -182,6 +192,7 @@ void ScriptHost::callbackOnStreamError(const ScriptHostContext& ctx, const Strea
         return;
     }
 
+    CallbackScope execution(*this);
     try {
         sol::state_view view(runtime_->lua.lua_state());
         auto callback = callbackIter->second;
@@ -202,6 +213,7 @@ void ScriptHost::callbackOnTimer(const ScriptHostContext& ctx, const std::string
     if (!callback.has_value()) {
         return;
     }
+    CallbackScope execution(*this);
     try {
         sol::state_view view(runtime_->lua.lua_state());
         sol::protected_function_result result = (*callback)(makeContextTable(view, ctx.connection), timerName);
@@ -221,6 +233,7 @@ void ScriptHost::callbackOnControl(const ScriptHostContext& ctx, const std::stri
     if (!callback.has_value()) {
         return;
     }
+    CallbackScope execution(*this);
     try {
         sol::state_view view(runtime_->lua.lua_state());
         sol::protected_function_result result =
@@ -243,12 +256,16 @@ bool ScriptHost::callbackOnOscilloscopeToggle(const ScriptHostContext& ctx, bool
     if (!callback.has_value()) {
         return false;
     }
+    CallbackScope execution(*this);
     try {
         sol::state_view view(runtime_->lua.lua_state());
         sol::protected_function_result result =
             (*callback)(makeContextTable(view, ctx.connection), currentRunning, targetRunning);
         if (!result.valid()) {
             protoLog("error", "on_oscilloscope_toggle 执行失败: " + protectedCallError(result));
+            return false;
+        }
+        if (executionFaulted()) {
             return false;
         }
         const sol::object returned = result.get<sol::object>();
@@ -271,6 +288,7 @@ void ScriptHost::callbackOnTx(const ScriptHostContext& ctx, const TxEvent& event
     if (!callback.has_value()) {
         return;
     }
+    CallbackScope execution(*this);
     try {
         sol::state_view view(runtime_->lua.lua_state());
         sol::protected_function_result result =
@@ -291,6 +309,7 @@ void ScriptHost::callbackOnDialog(const ScriptHostContext& ctx, const DialogEven
     if (!callback.has_value()) {
         return;
     }
+    CallbackScope execution(*this);
     try {
         sol::state_view view(runtime_->lua.lua_state());
         sol::protected_function_result result =
@@ -311,6 +330,7 @@ void ScriptHost::callbackOnFileDialog(const ScriptHostContext& ctx, const FileDi
     if (!callback.has_value()) {
         return;
     }
+    CallbackScope execution(*this);
     try {
         sol::state_view view(runtime_->lua.lua_state());
         sol::protected_function_result result =

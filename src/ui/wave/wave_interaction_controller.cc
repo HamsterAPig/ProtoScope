@@ -10,6 +10,148 @@
 
 namespace protoscope::ui {
 
+std::optional<plot::ChannelSpec> channelDisplayAffineTransform(
+    const plot::ChannelSpec& spec, plot::WaveDisplayFormula formula, double a, double b)
+{
+    if (!std::isfinite(a) || a <= 0.0 || !std::isfinite(b)) {
+        return std::nullopt;
+    }
+    auto result = spec;
+    result.scale = a * spec.scale;
+    // 核心逻辑：在显示坐标中合成仿射变换，原始采样与 ratio 始终不变。
+    if (formula == plot::WaveDisplayFormula::ScaleThenOffset) {
+        result.offset = a * spec.offset + b;
+    } else if (result.scale != 0.0) {
+        result.offset = spec.offset + b / result.scale;
+    } else if (b != 0.0) {
+        return std::nullopt;
+    }
+    if (!std::isfinite(result.scale) || !std::isfinite(result.offset)) {
+        return std::nullopt;
+    }
+    return result;
+}
+
+bool fitChannelDisplayRange(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot,
+                           std::size_t channelIndex, double center, double height)
+{
+    const auto spec = wave.buffer.channelSpec(channelIndex);
+    if (!spec || channelIndex >= snapshot.channels.size() || bitDisplayEnabled(spec->bitDisplay)) {
+        return false;
+    }
+    const auto& channel = snapshot.channels[channelIndex];
+    double low = std::numeric_limits<double>::infinity();
+    double high = -low;
+    for (std::size_t i = channel.visibleBegin; channel.samples && i < channel.visibleEnd; ++i) {
+        const double value = channel.samples[i].value * spec->ratio;
+        if (std::isfinite(value)) {
+            low = (std::min)(low, value);
+            high = (std::max)(high, value);
+        }
+    }
+    if (!std::isfinite(low) || !std::isfinite(high) || !std::isfinite(height) || height <= 0.0) {
+        return false;
+    }
+    auto updated = *spec;
+    // 显式适配允许恢复零 scale；常量通道只居中，不除以零跨度。
+    if (high > low) {
+        updated.scale = (spec->scale < 0.0 ? -1.0 : 1.0) * height / (high - low);
+    } else if (updated.scale == 0.0) {
+        updated.scale = 1.0;
+    }
+    const double middle = low * 0.5 + high * 0.5;
+    updated.offset = wave.view.displayFormula == plot::WaveDisplayFormula::ScaleThenOffset
+                         ? center - middle * updated.scale
+                         : center / updated.scale - middle;
+    if (!std::isfinite(updated.scale) || !std::isfinite(updated.offset)) {
+        return false;
+    }
+    if (updated.scale != spec->scale || updated.offset != spec->offset) {
+        applyChannelTransformOverride(wave, channelIndex, updated, channelDefaultSpec(wave, channelIndex, *spec));
+    }
+    return true;
+}
+
+bool alignWaveLayoutChannels(plot::WaveDockState& wave)
+{
+    auto& view = wave.view;
+    applyWaveViewModeVerticalRange(view, std::nullopt);
+    const auto snapshot = wave.buffer.snapshot(-std::numeric_limits<double>::infinity(),
+                                               std::numeric_limits<double>::infinity(), false);
+    std::vector<std::size_t> visible;
+    for (std::size_t i = 0; i < snapshot.channels.size(); ++i) {
+        if (!channelHiddenByLegendState(wave, i) && !bitDisplayEnabled(snapshot.channels[i].bitDisplay)) {
+            visible.push_back(i);
+        }
+    }
+    if (view.channelLayoutMode != view.viewMode || view.channelLayoutVisible != visible) {
+        view.channelLayoutMode = view.viewMode;
+        view.channelLayoutVisible = visible;
+        view.channelLayoutAligned.clear();
+        view.forceNextMainPlotLimits = true;
+        if (view.viewMode == plot::WaveViewMode::Stacked) {
+            view.stackedVerticalFitPending = !view.lockVerticalRange;
+        }
+    }
+    if (view.viewMode == plot::WaveViewMode::Overlay) {
+        return false;
+    }
+    bool changed = false;
+    const auto viewport = currentViewport(view);
+    const double multiplier = (std::max)(view.verticalAutoFitMultiplier, 1.0);
+    for (std::size_t row = 0; row < visible.size(); ++row) {
+        const auto index = visible[row];
+        if (std::find(view.channelLayoutAligned.begin(), view.channelLayoutAligned.end(), index) !=
+            view.channelLayoutAligned.end()) {
+            continue;
+        }
+        const bool stacked = view.viewMode == plot::WaveViewMode::Stacked;
+        if (fitChannelDisplayRange(wave, snapshot, index,
+                                   stacked ? static_cast<double>(row) * 1.6
+                                           : (viewport.minValue + viewport.maxValue) * 0.5,
+                                   stacked ? 1.0 : (viewport.maxValue - viewport.minValue) / multiplier)) {
+            view.channelLayoutAligned.push_back(index);
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+bool commitWaveVerticalViewport(plot::WaveDockState& wave, const plot::WaveViewport& baseline,
+                                const std::vector<std::size_t>& channels)
+{
+    auto& view = wave.view;
+    if (view.lockVerticalRange || (view.viewMinValue == baseline.minValue &&
+                                   view.viewMaxValue == baseline.maxValue)) {
+        return false;
+    }
+    const double span = view.viewMaxValue - view.viewMinValue;
+    const double a = (baseline.maxValue - baseline.minValue) / span;
+    const double b = baseline.minValue - a * view.viewMinValue;
+    bool changed = false;
+    const auto snapshot = wave.buffer.snapshot(view.viewMinTime, view.viewMaxTime);
+    for (auto index : channels) {
+        const auto spec = wave.buffer.channelSpec(index);
+        if (!spec || bitDisplayEnabled(spec->bitDisplay) || channelHiddenByLegendState(wave, index) ||
+            index >= snapshot.channels.size() || snapshot.channels[index].totalSamples == 0) {
+            continue;
+        }
+        const auto updated = channelDisplayAffineTransform(*spec, view.displayFormula, a, b);
+        if (!updated) {
+            wave.statusMessage = "当前通道 scale 为零或变换超出范围，无法平移；请先适配。";
+            continue;
+        }
+        applyChannelTransformOverride(wave, index, *updated, channelDefaultSpec(wave, index, *spec));
+        changed = true;
+    }
+    view.viewMinValue = baseline.minValue;
+    view.viewMaxValue = baseline.maxValue;
+    view.viewportAnimation.start.minValue = view.viewportAnimation.target.minValue = baseline.minValue;
+    view.viewportAnimation.start.maxValue = view.viewportAnimation.target.maxValue = baseline.maxValue;
+    view.forceNextMainPlotLimits = true;
+    return changed;
+}
+
 double scaleFromInteractionFactor(double scale, double factor)
 {
     if (!std::isfinite(factor) || factor <= 0.0) {
@@ -120,34 +262,15 @@ bool updateActiveChannelOffset(plot::WaveDockState& wave, double displayDelta)
     if (!spec.has_value()) {
         return false;
     }
-    auto updated = *spec;
-    updated.offset += offsetParameterDeltaFromDisplayDelta(updated, wave.view.displayFormula, displayDelta);
-    applyChannelTransformOverride(wave, channelIndex, updated, channelDefaultSpec(wave, channelIndex, *spec));
-    return true;
-}
-
-bool updateActiveBitYOffset(plot::WaveDockState& wave, double displayDelta)
-{
-    const auto channelIndex = wave.view.measurementChannelIndex;
-    const auto spec = wave.buffer.channelSpec(channelIndex);
-    if (!spec.has_value() || !bitDisplayEnabled(spec->bitDisplay)) {
+    if (bitDisplayEnabled(spec->bitDisplay)) {
         return false;
     }
-    auto updated = *spec;
-    updated.bitDisplay.yOffset += displayDelta;
-    applyChannelTransformOverride(wave, channelIndex, updated, channelDefaultSpec(wave, channelIndex, *spec));
-    return true;
-}
-
-bool resetChannelBitYOffsetToZero(plot::WaveDockState& wave, std::size_t channelIndex)
-{
-    const auto spec = wave.buffer.channelSpec(channelIndex);
-    if (!spec.has_value() || !bitDisplayEnabled(spec->bitDisplay)) {
+    const auto updated = channelDisplayAffineTransform(*spec, wave.view.displayFormula, 1.0, displayDelta);
+    if (!updated) {
+        wave.statusMessage = "当前通道 scale 为零，无法平移；请先适配。";
         return false;
     }
-    auto updated = *spec;
-    updated.bitDisplay.yOffset = 0.0;
-    applyChannelTransformOverride(wave, channelIndex, updated, channelDefaultSpec(wave, channelIndex, *spec));
+    applyChannelTransformOverride(wave, channelIndex, *updated, channelDefaultSpec(wave, channelIndex, *spec));
     return true;
 }
 
@@ -162,6 +285,17 @@ bool allowsMouseYOffsetDrag(plot::WaveMouseYOffsetDragMode mode, bool shiftDown)
             return false;
     }
     return true;
+}
+
+bool canHandleOscilloscopeChannelInteractions(const plot::WaveViewState& view, bool cursorDragClaimed)
+{
+    return !cursorDragClaimed && view.controlMode == plot::WaveControlMode::Oscilloscope;
+}
+
+bool canDragWaveYOffset(const plot::WaveViewState& view, bool shiftDown, bool cursorDragClaimed)
+{
+    return !cursorDragClaimed && view.controlMode == plot::WaveControlMode::Oscilloscope &&
+           allowsMouseYOffsetDrag(view.mouseYOffsetDragMode, shiftDown);
 }
 
 bool isYAxisScaleHotZoneHovered()
@@ -201,14 +335,15 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
                                            const ImPlotRect& limits,
                                            const ImPlotPoint& mousePos,
                                            double timeSnapDistance,
-                                           double valueSnapDistance)
+                                           double valueSnapDistance,
+                                           bool cursorDragClaimed)
 {
     auto& view = wave.view;
-    if (view.controlMode != plot::WaveControlMode::Oscilloscope) {
+    if (!canHandleOscilloscopeChannelInteractions(view, cursorDragClaimed)) {
         view.activeChannelOffsetDrag = false;
-        view.activeChannelScaleDrag = false;
-        view.activeBitYOffsetDrag = false;
-        view.activeBitLane = {};
+        if (view.controlMode != plot::WaveControlMode::Oscilloscope) {
+            view.activeChannelScaleDrag = false;
+        }
         return false;
     }
 
@@ -216,7 +351,6 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         view.activeChannelOffsetDrag = false;
         view.activeChannelScaleDrag = false;
-        view.activeBitYOffsetDrag = false;
     }
 
     bool changed = false;
@@ -238,40 +372,19 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
         return changed;
     }
 
-    const bool canDragYOffset = allowsMouseYOffsetDrag(view.mouseYOffsetDragMode, io.KeyShift);
-    std::optional<plot::CursorReadout> clickedWaveform;
+    const bool canDragYOffset = canDragWaveYOffset(view, io.KeyShift, cursorDragClaimed);
+    if (!canDragYOffset) {
+        view.activeChannelOffsetDrag = false;
+    }
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         const auto waveformChannels = selectableWaveformChannels(snapshot, displayData, visibleChannelIndices);
-        clickedWaveform = plot::findNearestDisplayPointInChannels(
+        const auto clickedWaveform = plot::findNearestDisplayPointInChannels(
             displayData, waveformChannels, mousePos.x, mousePos.y, timeSnapDistance, valueSnapDistance);
         if (clickedWaveform.has_value()) {
             const bool channelChanged = view.measurementChannelIndex != clickedWaveform->channelIndex;
-            const bool bitLaneCleared = view.activeBitLane.active;
             view.measurementChannelIndex = clickedWaveform->channelIndex;
-            view.activeBitLane = {};
-            changed = channelChanged || bitLaneCleared || changed;
-        }
-    }
-
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && canDragYOffset) {
-        const auto bitLayout =
-            buildBitLaneLayout(snapshot, visibleChannelIndices, limits, ImPlot::GetPlotPos(), ImPlot::GetPlotSize());
-        if (const auto bitLane = findBitLaneAtPlotValue(bitLayout, mousePos.y, valueSnapDistance)) {
-            const bool channelChanged = view.measurementChannelIndex != bitLane->lane.parentChannelIndex;
-            view.measurementChannelIndex = bitLane->lane.parentChannelIndex;
-            view.activeBitLane = {
-                .active = true,
-                .parentChannelIndex = bitLane->lane.parentChannelIndex,
-                .bitIndex = bitLane->lane.bitIndex,
-                .laneIndex = bitLane->lane.laneIndex,
-            };
-            view.activeBitYOffsetDrag = true;
-            view.activeChannelOffsetDrag = false;
+            view.activeChannelOffsetDrag = canDragYOffset;
             changed = channelChanged || changed;
-        } else if (clickedWaveform.has_value()) {
-            view.activeChannelOffsetDrag = true;
-            view.activeBitYOffsetDrag = false;
-            view.activeBitLane = {};
         }
     }
 
@@ -292,13 +405,7 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
     applyViewport(view, viewport, WaveViewportAutoFollowPolicy::UserInteraction);
     changed = true;
 
-    if (canDragYOffset && view.activeBitYOffsetDrag) {
-        const auto bitLayout =
-            buildBitLaneLayout(snapshot, visibleChannelIndices, limits, ImPlot::GetPlotPos(), ImPlot::GetPlotSize());
-        const auto activeLane = findBitLaneAtPlotValue(bitLayout, currentPlot.y, std::abs(limits.Y.Max - limits.Y.Min));
-        const double lanePixelPitch = activeLane.has_value() ? (std::max)(activeLane->lane.lanePixelPitch, 1.0F) : 1.0F;
-        changed = updateActiveBitYOffset(wave, static_cast<double>(io.MouseDelta.y) / lanePixelPitch) || changed;
-    } else if (canDragYOffset && view.activeChannelOffsetDrag) {
+    if (canDragYOffset && view.activeChannelOffsetDrag) {
         changed = updateActiveChannelOffset(wave, currentPlot.y - previousPlot.y) || changed;
     }
     return changed;
@@ -858,8 +965,7 @@ bool bitCursorCandidateAllowed(const plot::WaveViewState& view,
     if (view.bitDisplayReadoutPolicy == plot::WaveBitDisplayReadoutPolicy::MixedNearest) {
         return true;
     }
-    return activeBitLaneVisible(view, bitLayout) ||
-           findBitLaneAtPlotValue(bitLayout, plotY, maxValueDistance).has_value();
+    return findBitLaneAtPlotValue(bitLayout, plotY, maxValueDistance).has_value();
 }
 
 std::optional<plot::CursorReadout> findNearestCursorByScope(const plot::WaveSnapshot& snapshot,
@@ -884,8 +990,8 @@ std::optional<plot::CursorReadout> findNearestCursorByScope(const plot::WaveSnap
     }
 
     if (bitCursorCandidateAllowed(view, bitLayout, plotY, maxValueDistance)) {
-        if (const auto bitTransition =
-                findNearestBitTransition(snapshot, bitLayout, time, plotY, maxTimeDistance, maxValueDistance)) {
+        if (const auto bitTransition = findNearestBitTransition(
+                snapshot, displayData, bitLayout, time, plotY, maxTimeDistance, maxValueDistance)) {
             const double bitScore =
                 cursorCandidateScore(*bitTransition, time, plotY, maxTimeDistance, maxValueDistance);
             if (!best.has_value() || bitScore < bestScore) {

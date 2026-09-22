@@ -2543,6 +2543,16 @@ void test_config_default_roundtrip()
     const auto tempPath = tempRoot.path() / "protoscope.yaml";
 
     auto config = store.load(tempPath).config;
+    require(config.gui.wave.cursorAutoColor, "游标自动色默认应开启");
+    const auto legacyCursorConfig = store.loadText("gui:\n  wave:\n    show_axis_labels: true\n");
+    require(legacyCursorConfig.error.empty() && legacyCursorConfig.config.gui.wave.cursorAutoColor,
+            "旧配置缺少游标色开关仍应开启");
+    const auto manualCursorConfig = store.loadText("gui:\n  wave:\n    cursor_auto_color: false\n");
+    require(manualCursorConfig.error.empty() && !manualCursorConfig.config.gui.wave.cursorAutoColor,
+            "显式 false 应恢复主题游标色板");
+    require(!store.loadText("gui:\n  wave:\n    cursor_auto_color: invalid_bool\n").error.empty(),
+            "非法游标 bool 必须保留解析错误语义");
+    config.gui.wave.cursorAutoColor = false;
     require(config.protocol.rootDir.find("protocols/templates") != std::string::npos,
             "默认协议根目录应指向 protocols/templates");
     require(config.protocol.selectedDir.find("protocols/templates/default_protocol") != std::string::npos,
@@ -2696,6 +2706,7 @@ void test_config_default_roundtrip()
     const auto reloaded = store.load(tempPath);
     require(reloaded.config.communication.kind == protoscope::transport::TransportKind::Serial,
             "串口模式 roundtrip 失败");
+    require(!reloaded.config.gui.wave.cursorAutoColor, "游标自动色保存重载失败");
     require(reloaded.config.communication.serial.portName == "COM9", "串口端口 roundtrip 失败");
     require(reloaded.config.communication.serial.dataBits == 7, "串口数据位 roundtrip 失败");
     require(reloaded.config.communication.serial.parity == "even", "串口奇偶校验 roundtrip 失败");
@@ -2817,7 +2828,12 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
     config.gui.wave.legendOverlayDoubleClickAutoCollapse = false;
 
     protoscope::dock::DockStore dockStore;
+    config.gui.wave.cursorAutoColor = false;
     store.applyToDock(config, dockStore);
+    require(!dockStore.waveState().view.cursorAutoColor, "applyToDock 应应用手动游标色");
+    require(!store.captureFromDock(dockStore).gui.wave.cursorAutoColor, "captureFromDock 应回收 false");
+    dockStore.waveState().view.cursorAutoColor = true;
+    require(store.captureFromDock(dockStore).gui.wave.cursorAutoColor, "captureFromDock 应回收 true");
     require(dockStore.waveState().view.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Shift,
             "applyToDock 应写入鼠标 Y 偏移拖动模式");
     require(dockStore.waveState().view.gridDivisionReadoutMode ==
@@ -2907,8 +2923,8 @@ void test_config_gui_theme_values_and_fallback()
 
     const auto invalid = store.loadText("gui:\n  theme: neon_unknown\n");
     require(invalid.error.empty(), "非法 theme 字段不应导致配置读取失败");
-    require(invalid.config.gui.theme == protoscope::config::GuiTheme::ProfessionalDark,
-            "非法 theme 字段应回退到 professional_dark");
+    require(invalid.config.gui.theme == "neon_unknown",
+            "未知主题 ID 应保留，由主题管理器决定显示回退");
 
     auto savedConfig = highContrast.config;
     std::string yamlText;
@@ -3321,8 +3337,10 @@ function on_open(ctx)
   proto.plot.setup({
     channels = {
       { label = "CH1", unit = "raw", bit_display = true },
-      { label = "CH2", unit = "raw", bit_display = { first_bit = 4, bit_count = 12, y_offset = 2.5 } },
+      { label = "CH2", unit = "raw", bit_display = { first_bit = 4, bit_count = 12, y_offset = 2.5, hover_readout = true } },
       { label = "CH3", unit = "raw", bit_display = { enabled = false, first_bit = 2, bit_count = 3 } },
+      { label = "CH4", bit_display = { hover_readout = false } },
+      { label = "CH5", bit_display = { hover_readout = nil } },
     }
   })
 end
@@ -3334,7 +3352,13 @@ end
 
     const auto setups = host.drainPlotSetups();
     require(setups.size() == 1, "bit_display setup 应生成 1 次配置");
-    require(setups[0].channels.size() == 3, "bit_display setup 应保留所有通道");
+    require(setups[0].channels.size() == 5, "bit_display setup 应保留所有通道");
+    require(!setups[0].channels[0].bitDisplay.hoverReadout &&
+                setups[0].channels[1].bitDisplay.hoverReadout &&
+                !setups[0].channels[2].bitDisplay.hoverReadout &&
+                !setups[0].channels[3].bitDisplay.hoverReadout &&
+                !setups[0].channels[4].bitDisplay.hoverReadout,
+            "悬停开关须支持 true、false、省略与 nil");
     require(setups[0].channels[0].bitDisplay.enabled, "bit_display=true 应启用 bit 显示");
     require(setups[0].channels[0].bitDisplay.firstBit == 0, "bit_display=true first_bit 默认值错误");
     require(setups[0].channels[0].bitDisplay.bitCount == 8, "bit_display=true bit_count 默认值错误");
@@ -3373,6 +3397,19 @@ end
         }
     }
     require(hasBitDisplayError, "非法 bit_display 应记录明确字段错误");
+    writeMainLua(protocolDir.path(), R"lua(
+function on_open(ctx)
+  proto.plot.setup({channels = {{bit_display = {hover_readout = "true"}}}})
+end
+)lua");
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "非法字段脚本应能加载");
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{.context = sampleCtx()});
+    require(host.drainPlotSetups().empty(), "非法 hover_readout 不得产生 setup");
+    bool hoverError = false;
+    for (const auto& log : host.drainLogs()) {
+        hoverError = hoverError || log.message.find("bit_display.hover_readout") != std::string::npos;
+    }
+    require(hoverError, "非法 hover_readout 应报告字段错误");
 }
 
 void test_script_plot_push_accepts_compact_series()

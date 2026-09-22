@@ -1,0 +1,428 @@
+#include "protoscope/ui/gui_runtime.hpp"
+#include "../src/ui/runtime/gui_runtime_detail.hpp"
+#include "test_helpers.hpp"
+#include "protoscope/data/record_csv.hpp"
+
+#include <imgui_impl_opengl3.h>
+#include <implot.h>
+#include <fstream>
+#include <iostream>
+#include <thread>
+
+namespace protoscope::ui {
+struct GuiRuntimeTestAccess {
+    static void draw(GuiRuntime& runtime, const std::vector<scripting::ControlSnapshot>& controls,
+                     std::map<std::string, ImRect>* rectangles = nullptr)
+    {
+        for (const auto& control : controls) {
+            if (control.descriptor.type==scripting::ControlType::TabSelection ||
+                control.descriptor.type==scripting::ControlType::DataTable) continue;
+            const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+            runtime.drawDynamicLayoutControl(control, ImGui::GetContentRegionAvail().x);
+            if (rectangles) (*rectangles)[control.descriptor.id] = ImRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+            if (ImGui::GetItemRectMax().x > right + 1)
+                throw std::runtime_error("control overflows viewport: " + control.descriptor.id);
+        }
+    }
+    static const ControlEditState& draft(const GuiRuntime& runtime,const std::string& id)
+    {
+        return runtime.luaControlDrafts_.at(id);
+    }
+    static bool submitted(const GuiRuntime& runtime,const std::string& id)
+    {
+        return runtime.luaControlFeedbackStates_.contains(id);
+    }
+    static void clearFeedback(GuiRuntime& runtime)
+    {
+        runtime.luaControlFeedbackStates_.clear();
+    }
+    static void drawLayout(GuiRuntime& runtime, const scripting::DockSnapshot& dock)
+    {
+        std::size_t index=0;
+        runtime.drawLuaLayoutNode(dock.descriptor.layout->root,dock.controls,"test",index,false);
+    }
+    static std::string selectedTab(const GuiRuntime& runtime)
+    {
+        return runtime.luaTabsUiStates_.at("telemetry_pages").visibleValue;
+    }
+    static ImVec2 firstTabCenter(std::uint64_t generation)
+    {
+        auto* window=ImGui::FindWindowByName("Tabs");
+        const auto id=window->GetID(("##tabs_test_telemetry_pages_"+std::to_string(generation)).c_str());
+        auto* bar=ImGui::GetCurrentContext()->TabBars.GetByKey(id);
+        if (!bar || bar->Tabs.empty()) throw std::runtime_error("missing tab bar geometry");
+        return ImVec2(bar->BarRect.Min.x+bar->Tabs[0].Offset+bar->Tabs[0].Width/2,bar->BarRect.GetCenter().y);
+    }
+    static ImRect drawMenu(GuiRuntime& runtime)
+    {
+        ImGui::BeginMainMenuBar();
+        runtime.drawBusinessMenu();
+        const ImRect rectangle(ImGui::GetItemRectMin(),ImGui::GetItemRectMax());
+        ImGui::EndMainMenuBar();
+        return rectangle;
+    }
+    static bool dockVisible(GuiRuntime& runtime,app::Application& app)
+    {
+        runtime.syncLuaDockVisibilityDefaults();
+        runtime.applyBusinessDockRequests();
+        const auto& lua=app.docks().luaState();
+        return runtime.isLuaDockVisible(luaDockStableId(lua.docks.front().descriptor,
+            luaDockLayoutKey(lua.protocolDir,lua.scriptPath)));
+    }
+    static void manuallyShowDock(GuiRuntime& runtime,app::Application& app)
+    {
+        const auto& lua=app.docks().luaState();
+        runtime.setLuaDockVisible(luaDockStableId(lua.docks.front().descriptor,
+            luaDockLayoutKey(lua.protocolDir,lua.scriptPath)),true);
+    }
+    static ImRect drawTable(GuiRuntime& runtime,const scripting::ControlSnapshot& control)
+    {
+        const auto scope=control.descriptor.id+"_"+std::to_string(control.descriptor.runtimeGeneration);
+        const auto seed=ImGui::GetCurrentWindow()->GetID(scope.c_str());
+        runtime.drawDataTableControl(control);
+        auto* table=ImGui::GetCurrentContext()->Tables.GetByKey(ImHashStr("##records",0,seed));
+        if (!table) throw std::runtime_error("missing data table geometry");
+        return table->OuterRect;
+    }
+    static ImVec2 firstPopupItem()
+    {
+        const auto& stack=ImGui::GetCurrentContext()->OpenPopupStack;
+        if (stack.empty() || !stack.back().Window) throw std::runtime_error("export format popup missing");
+        const auto start=stack.back().Window->DC.CursorStartPos;
+        return ImVec2(start.x+12,start.y+ImGui::GetTextLineHeight()/2);
+    }
+};
+}
+
+namespace {
+void capture(const std::filesystem::path& directory, int width, int height)
+{
+    const int stride = (width*3+3)&~3;
+    std::vector<unsigned char> pixels(static_cast<std::size_t>(stride*height));
+    glPixelStorei(GL_PACK_ALIGNMENT,4);
+    glReadPixels(0,0,width,height,GL_RGB,GL_UNSIGNED_BYTE,pixels.data());
+    const auto range=std::minmax_element(pixels.begin(),pixels.end());
+    if (*range.first==*range.second || glGetError()!=GL_NO_ERROR) throw std::runtime_error("blank framebuffer");
+    for (int y=0;y<height;++y) for (int x=0;x<width;++x)
+        std::swap(pixels[y*stride+x*3],pixels[y*stride+x*3+2]);
+    std::array<unsigned char,54> header{};
+    header[0]='B';header[1]='M';header[26]=1;header[28]=24;
+    auto put=[&](int offset,std::uint32_t value) {
+        for (int i=0;i<4;++i) header[offset+i]=static_cast<unsigned char>(value>>(8*i));
+    };
+    put(2,static_cast<std::uint32_t>(54+pixels.size()));put(10,54);put(14,40);put(18,width);put(22,height);
+    std::filesystem::create_directories(directory);
+    std::ofstream file(directory/("industrial-"+std::to_string(width)+".bmp"),std::ios::binary);
+    file.write(reinterpret_cast<const char*>(header.data()),header.size());
+    file.write(reinterpret_cast<const char*>(pixels.data()),static_cast<std::streamsize>(pixels.size()));
+    if (!file) throw std::runtime_error("screenshot write failed");
+}
+}
+
+int main(int argc,char** argv)
+{
+    using namespace protoscope;
+    if (argc<2) return 2;
+    const bool withGl=argc>2;
+    GLFWwindow* window=nullptr;
+    if (withGl) {
+        if (!glfwInit()) return 2;
+        glfwWindowHint(GLFW_VISIBLE,GLFW_FALSE);
+        window=glfwCreateWindow(1000,900,"Industrial controls",nullptr,nullptr);
+        if (!window) return 2;
+        glfwMakeContextCurrent(window);
+    }
+    ImGui::CreateContext(); ImPlot::CreateContext();
+    auto& io=ImGui::GetIO();
+    io.IniFilename=nullptr; io.DeltaTime=1.0F/60;
+    io.BackendFlags|=ImGuiBackendFlags_RendererHasVtxOffset;
+    io.Fonts->AddFontDefault();
+    ImFontConfig iconConfig;
+    iconConfig.MergeMode=true;
+    static constexpr ImWchar iconRanges[]={0xf000,0xf8ff,0};
+    const auto iconPath=std::filesystem::absolute(argv[1]).parent_path().parent_path()/"assets/fonts/fa-solid-900.ttf";
+    if (!io.Fonts->AddFontFromFileTTF(iconPath.string().c_str(),13.0F,&iconConfig,iconRanges)) return 2;
+    unsigned char* pixels;int w,h;
+    if (withGl) {
+        if (!ImGui_ImplOpenGL3_Init("#version 130")) return 2;
+    } else io.Fonts->GetTexDataAsRGBA32(&pixels,&w,&h);
+    int result=0;
+    try {
+        tests::ScopedTempPath tableDirectory(tests::makeUniqueTempDir("protoscope-table-ui"));
+        scripting::ScriptHost host;
+        if (!host.loadProtocolDirectory(argv[1])) throw std::runtime_error(host.lastError());
+        auto controls=host.controlStatesSnapshot();
+        for (auto& control:controls) {
+            if (control.descriptor.type==scripting::ControlType::Readout) {
+                control.value=std::string("9223372036854775807.00");
+                control.dataState=scripting::ControlDataState::Valid;
+            }
+            if (control.descriptor.type==scripting::ControlType::Progress) control.descriptor.indeterminate=true;
+            if (scripting::isOutputControl(control.descriptor.type) && ui::isPersistedControlType(control.descriptor.type))
+                throw std::runtime_error("measurement must not be persisted");
+            if (ui::isPersistedControlType(control.descriptor.type)) {
+                YAML::Node node;
+                ui::writeControlValue(node["value"],control);
+                if (!ui::readControlValue(node["value"],control.descriptor.type))
+                    throw std::runtime_error("input persistence roundtrip failed: " + control.descriptor.id);
+            }
+        }
+        app::Application application;
+        config::ConfigStore configs;
+        ui::GuiRuntime runtime(application,configs);
+        for (const int width:{1000,360}) {
+            io.DisplaySize=ImVec2(static_cast<float>(width),900);
+            for (int frame=0;frame<6;++frame) {
+                if (withGl) ImGui_ImplOpenGL3_NewFrame();
+                ImGui::NewFrame();
+                ImGui::SetNextWindowPos(ImVec2(0,0));ImGui::SetNextWindowSize(io.DisplaySize);
+                ImGui::Begin("Telemetry",nullptr,ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoResize);
+                ui::GuiRuntimeTestAccess::draw(runtime,controls);
+                ImGui::End();ImGui::Render();
+                if (ImGui::GetDrawData()->TotalVtxCount==0) throw std::runtime_error("blank draw data");
+                if (withGl) {
+                    glViewport(0,0,width,900);glClearColor(0.05F,0.05F,0.05F,1);glClear(GL_COLOR_BUFFER_BIT);
+                    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());glFinish();
+                    if (frame==5) capture(argv[2],width,900);
+                }
+            }
+        }
+        // 真实 ImGui 输入帧覆盖按下、宿主更新、释放及多行普通回车，不依赖 UI 测试插件。
+        std::map<std::string,ImRect> rectangles;
+        auto frame = [&] {
+            if (withGl) ImGui_ImplOpenGL3_NewFrame();
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos(ImVec2(0,0));ImGui::SetNextWindowSize(io.DisplaySize);
+            ImGui::Begin("Telemetry",nullptr,ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoResize);
+            ui::GuiRuntimeTestAccess::draw(runtime,controls,&rectangles);
+            ImGui::End();ImGui::Render();
+        };
+        auto require = [](bool condition,const char* message) {
+            if (!condition) throw std::runtime_error(message);
+        };
+        frame();
+        const auto slider=rectangles.at("target");
+        io.AddMousePosEvent(slider.Min.x+slider.GetWidth()*0.8F,slider.GetCenter().y);
+        io.AddMouseButtonEvent(0,true);frame();
+        require(ui::GuiRuntimeTestAccess::draft(runtime,"target").editing &&
+                !ui::GuiRuntimeTestAccess::submitted(runtime,"target"),"slider press must not submit");
+        for (auto& control:controls) if (control.descriptor.id=="target") control.value=55;
+        frame();
+        require(std::get<int>(ui::GuiRuntimeTestAccess::draft(runtime,"target").value)!=55,
+                "active ImGui slider must preserve draft after host update");
+        io.AddMouseButtonEvent(0,false);frame();
+        require(ui::GuiRuntimeTestAccess::submitted(runtime,"target"),"slider release must submit");
+        const auto area=rectangles.at("notes");
+        io.AddMousePosEvent(area.Min.x+15,area.Min.y+10);io.AddMouseButtonEvent(0,true);frame();
+        io.AddMouseButtonEvent(0,false);frame();
+        io.AddInputCharactersUTF8("draft");frame();
+        for (auto& control:controls) if (control.descriptor.id=="notes") control.value=std::string("program update");
+        frame();
+        require(std::get<std::string>(ui::GuiRuntimeTestAccess::draft(runtime,"notes").value)=="draft",
+                "active textarea must preserve draft");
+        io.AddKeyEvent(ImGuiKey_Enter,true);frame();
+        require(!ui::GuiRuntimeTestAccess::submitted(runtime,"notes") &&
+                std::get<std::string>(ui::GuiRuntimeTestAccess::draft(runtime,"notes").value).find('\n')!=std::string::npos,
+                "ordinary multiline Enter must insert newline without commit");
+        io.AddKeyEvent(ImGuiKey_Enter,false);frame();
+        io.AddMousePosEvent(30,850);io.AddMouseButtonEvent(0,true);frame();
+        io.AddMouseButtonEvent(0,false);frame();
+        require(ui::GuiRuntimeTestAccess::submitted(runtime,"notes"),"textarea focus loss must commit");
+        ui::GuiRuntimeTestAccess::clearFeedback(runtime);
+        io.AddMousePosEvent(area.Min.x+15,area.Min.y+10);io.AddMouseButtonEvent(0,true);frame();
+        io.AddMouseButtonEvent(0,false);frame();
+        io.AddInputCharactersUTF8("cancel");frame();
+        io.AddKeyEvent(ImGuiKey_Escape,true);frame();
+        io.AddKeyEvent(ImGuiKey_Escape,false);frame();
+        require(!ui::GuiRuntimeTestAccess::submitted(runtime,"notes"),"Escape must cancel without commit");
+        require(std::get<std::string>(ui::GuiRuntimeTestAccess::draft(runtime,"notes").value)=="program update",
+                "Escape must restore current host value");
+        auto dock=host.dockSnapshots().front();
+        auto tabsFrame = [&] {
+            if (withGl) ImGui_ImplOpenGL3_NewFrame();
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos(ImVec2(0,0));ImGui::SetNextWindowSize(io.DisplaySize);
+            ImGui::Begin("Tabs",nullptr,ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoResize);
+            ui::GuiRuntimeTestAccess::drawLayout(runtime,dock);
+            ImGui::End();ImGui::Render();
+        };
+        ui::GuiRuntimeTestAccess::clearFeedback(runtime);
+        for (int i=0;i<4;++i) tabsFrame();
+        require(ui::GuiRuntimeTestAccess::selectedTab(runtime)=="live", "initial tab selection");
+        require(!ui::GuiRuntimeTestAccess::submitted(runtime,"telemetry_pages"),"initial tab must not emit input");
+        for (auto& control:dock.controls)
+            if (control.descriptor.id=="telemetry_pages") control.value=std::string("settings");
+        for (int i=0;i<3;++i) tabsFrame();
+        require(ui::GuiRuntimeTestAccess::selectedTab(runtime)=="settings", "host must select tab");
+        require(!ui::GuiRuntimeTestAccess::submitted(runtime,"telemetry_pages"),"host selection must not echo input");
+        // 页签标题使用默认 ImGui 字体，在固定窗口左上按真实鼠标事件切回 Live。
+        const auto tabCenter=ui::GuiRuntimeTestAccess::firstTabCenter(host.runtimeGeneration());
+        io.AddMousePosEvent(tabCenter.x,tabCenter.y);tabsFrame();
+        io.AddMouseButtonEvent(0,true);tabsFrame();
+        io.AddMouseButtonEvent(0,false);tabsFrame();tabsFrame();
+        require(ui::GuiRuntimeTestAccess::selectedTab(runtime)=="live" &&
+                ui::GuiRuntimeTestAccess::submitted(runtime,"telemetry_pages"), "tab click must submit page ID");
+        for (const int width:{1000,360}) {
+            io.DisplaySize=ImVec2(static_cast<float>(width),900);
+            for (int i=0;i<4;++i) tabsFrame();
+            if (withGl) {
+                glViewport(0,0,width,900);glClear(GL_COLOR_BUFFER_BIT);
+                ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());glFinish();
+                capture(std::filesystem::path(argv[2])/"tabs",width,900);
+            }
+        }
+        // 通过实际 Application -> worker -> 快照验证业务菜单及 Dock 请求，而非只检查绘制反馈。
+        require(application.reloadProtocolDirectory(std::filesystem::absolute(argv[1]).generic_string(),true),
+                "application must load menu demo");
+        ImRect menuRect;
+        auto menuFrame=[&] {
+            if (withGl) ImGui_ImplOpenGL3_NewFrame();
+            ImGui::NewFrame();
+            menuRect=ui::GuiRuntimeTestAccess::drawMenu(runtime);
+            ImGui::Render();
+        };
+        for (int i=0;i<4;++i) menuFrame();
+        const auto menuCenter=menuRect.GetCenter();
+        io.AddMousePosEvent(menuCenter.x,menuCenter.y);menuFrame();
+        io.AddMouseButtonEvent(0,true);menuFrame();
+        io.AddMouseButtonEvent(0,false);menuFrame();menuFrame();
+        auto& popups=ImGui::GetCurrentContext()->OpenPopupStack;
+        require(!popups.empty() && popups.back().Window,"business menu popup must open");
+        auto* popup=popups.back().Window;
+        const ImVec2 menuItem(popup->Pos.x+20,popup->Pos.y+popup->WindowPadding.y+ImGui::GetFontSize()/2);
+        io.AddMousePosEvent(menuItem.x,menuItem.y);menuFrame();
+        io.AddMouseButtonEvent(0,true);menuFrame();
+        io.AddMouseButtonEvent(0,false);menuFrame();
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(3);
+        while (application.docks().luaState().businessUi.dockRequests.empty() &&
+               std::chrono::steady_clock::now()<deadline) {
+            application.pumpOnce();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        require(!application.docks().luaState().businessUi.dockRequests.empty(),"menu click must reach Lua worker");
+        require(!ui::GuiRuntimeTestAccess::dockVisible(runtime,application),"show_dock(false) hides dock");
+        ui::GuiRuntimeTestAccess::manuallyShowDock(runtime,application);
+        require(ui::GuiRuntimeTestAccess::dockVisible(runtime,application),"old request must not override manual state");
+        // 独立协议验证表格真实点击经过 Application 和 worker；数据库只写临时目录。
+        {
+            std::ofstream file(tableDirectory.path()/"main.lua");
+            file<<R"(
+                function data() return {{id="samples",fields={{name="n",type="int64",nullable=false}}}} end
+                function ui() return {id="table_dock",title="Tables",controls={
+                    {"btn","publish","Publish"},
+                    {"data_table","table","Samples",dataset="samples",page_size=2,max_rows=10,visible_rows=4},
+                    {"data_table","history","Recorded",dataset="samples",mode="history",page_size=2,visible_rows=4}
+                }} end
+                function on_control(ctx,id,value)
+                    if id=="publish" then proto.record.start() end
+                end
+                function on_record(ctx,evt)
+                    assert(evt.ok,evt.error)
+                    if evt.operation=="start" then
+                        for i=1,5 do assert(proto.data.publish({dataset="samples",values={n=i}})) end
+                        proto.record.stop()
+                    end
+                end
+            )";
+        }
+        auto configuration=application.captureConfig();
+        configuration.protocol.rootDir=tableDirectory.path().parent_path().generic_string();
+        configuration.protocol.selectedDir=tableDirectory.path().generic_string();
+        configuration.scripting.storageRootDir=(tableDirectory.path()/"data").generic_string();
+        require(application.applyConfig(configuration),"configure table fixture");
+        require(application.reloadProtocolDirectory(tableDirectory.path().generic_string(),true),"load table fixture");
+        application.updateControlValue("publish",true);
+        auto tableControl=[&](std::size_t index=1) {
+            const auto value=application.docks().luaState().docks.at(0).controls.at(index);
+            if (!value.tablePage) throw std::runtime_error("missing table page: "+value.descriptor.id+
+                " in "+application.docks().luaState().protocolDir);
+            return value;
+        };
+        auto waitTable=[&](const std::function<bool()>& done) {
+            const auto until=std::chrono::steady_clock::now()+std::chrono::seconds(4);
+            do {
+                application.pumpOnce();
+                if (done()) return;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            } while (std::chrono::steady_clock::now()<until);
+            throw std::runtime_error("table GUI worker timeout");
+        };
+        waitTable([&]{return tableControl().tablePage->more;});
+        ImRect tableRect;
+        std::size_t tableIndex=1;
+        auto tableFrame=[&] {
+            application.pumpOnce();
+            if (withGl) ImGui_ImplOpenGL3_NewFrame();
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos(ImVec2(0,0));ImGui::SetNextWindowSize(io.DisplaySize);
+            ImGui::Begin("Data Table",nullptr,ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoResize);
+            const auto right=ImGui::GetCursorScreenPos().x+ImGui::GetContentRegionAvail().x;
+            tableRect=ui::GuiRuntimeTestAccess::drawTable(runtime,tableControl(tableIndex));
+            require(ImGui::GetItemRectMax().x<=right+1,"data table must fit viewport");
+            ImGui::End();ImGui::Render();
+        };
+        auto tableClick=[&](ImVec2 point) {
+            io.AddMousePosEvent(point.x,point.y);tableFrame();
+            io.AddMouseButtonEvent(0,true);tableFrame();
+            io.AddMouseButtonEvent(0,false);tableFrame();
+        };
+        for (int i=0;i<4;++i) tableFrame();
+        const float button=ImGui::GetFrameHeight(),spacing=ImGui::GetStyle().ItemSpacing.x;
+        tableClick(ImVec2(tableRect.Min.x+button+spacing+button/2,
+                          tableRect.Max.y+ImGui::GetStyle().ItemSpacing.y+button/2));
+        waitTable([&]{return tableControl().tablePage->offset==2;});
+        const auto rowHeight=ImGui::GetTextLineHeight()+ImGui::GetStyle().CellPadding.y*2;
+        tableClick(ImVec2(tableRect.Min.x+35,tableRect.Min.y+rowHeight*1.5F));
+        waitTable([&]{return std::get<std::string>(tableControl().value)=="3";});
+        // 输入筛选值并点击漏斗按钮，校验是服务端筛选而非只改变绘制文本。
+        tableClick(ImVec2(tableRect.Min.x+30,tableRect.Min.y-ImGui::GetStyle().ItemSpacing.y-button/2));
+        io.AddInputCharactersUTF8("4");tableFrame();
+        tableClick(ImVec2(tableRect.Max.x-button*1.5F-spacing,
+                          tableRect.Min.y-ImGui::GetStyle().ItemSpacing.y-button/2));
+        waitTable([&]{return tableControl().tablePage->rows.size()==1;});
+        require(std::get<std::int64_t>(tableControl().tablePage->rows[0].record->values[0].value)==4,
+                "GUI filter must reach worker");
+        tableClick(ImVec2(tableRect.Min.x+button/2,
+            tableRect.Max.y+2*ImGui::GetStyle().ItemSpacing.y+button*1.5F));
+        tableFrame();tableFrame();
+        tableClick(ui::GuiRuntimeTestAccess::firstPopupItem());
+        std::vector<scripting::FileDialogRequest> exportDialogs;
+        waitTable([&]{exportDialogs=application.drainFileDialogRequests();return !exportDialogs.empty();});
+        require(exportDialogs.size()==1 && exportDialogs[0].kind==scripting::FileDialogKind::SaveFile,
+                "GUI export action opens save dialog through worker");
+        const auto exportPath=tableDirectory.path()/"gui-table.csv";
+        application.respondFileDialog({.id=exportDialogs[0].id,.kind=scripting::FileDialogKind::SaveFile,
+            .state="selected",.path=exportPath.generic_string(),.runtimeGeneration=exportDialogs[0].runtimeGeneration});
+        waitTable([&]{return tableControl().tableExport.message=="Exported 1 rows";});
+        {
+            std::ifstream input(exportPath,std::ios::binary);data::RecordCsvReader reader(input);
+            const auto record=reader.next();
+            require(record && std::get<std::int64_t>(record->values[0].value)==4 && !reader.next(),
+                    "GUI export contains filtered data");
+        }
+        tableIndex=2;
+        for (int i=0;i<4;++i) tableFrame();
+        waitTable([&]{return !tableControl(2).tablePage->loading && tableControl(2).tablePage->rows.size()==2;});
+        tableClick(ImVec2(tableRect.Min.x+button+spacing+button/2,
+                          tableRect.Max.y+ImGui::GetStyle().ItemSpacing.y+button/2));
+        waitTable([&]{return !tableControl(2).tablePage->loading && tableControl(2).tablePage->offset==2;});
+        tableClick(ImVec2(tableRect.Min.x+2*(button+spacing)+button/2,
+                          tableRect.Max.y+ImGui::GetStyle().ItemSpacing.y+button/2));
+        waitTable([&]{return !tableControl(2).tablePage->loading && tableControl(2).tablePage->offset==0;});
+        for (const int width:{1000,360}) {
+            io.DisplaySize=ImVec2(static_cast<float>(width),900);
+            for (int i=0;i<4;++i) tableFrame();
+            require(ImGui::GetDrawData()->TotalVtxCount>0,"blank table frame");
+            if (withGl) {
+                glViewport(0,0,width,900);glClear(GL_COLOR_BUFFER_BIT);
+                ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());glFinish();
+                capture(std::filesystem::path(argv[2])/"tables",width,900);
+            }
+        }
+        std::cout<<"industrial UI: 1000/360 px, nonblank frames, bounded widgets, input persistence passed\n";
+    } catch (const std::exception& error) {std::cerr<<error.what()<<'\n';result=1;}
+    if (withGl) ImGui_ImplOpenGL3_Shutdown();
+    ImPlot::DestroyContext();ImGui::DestroyContext();
+    if (window) {glfwDestroyWindow(window);glfwTerminate();}
+    return result;
+}

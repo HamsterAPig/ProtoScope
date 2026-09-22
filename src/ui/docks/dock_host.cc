@@ -18,12 +18,13 @@ namespace {
 
     std::string luaControlImGuiLabel(const scripting::ControlDescriptor& descriptor, std::string_view visibleLabel)
     {
-        return std::string(visibleLabel) + "##lua_control_" + descriptor.id;
+        return std::string(visibleLabel) + "###lua_control_" + descriptor.id + "_" +
+               std::to_string(descriptor.runtimeGeneration);
     }
 
     std::string luaControlHiddenImGuiLabel(const scripting::ControlDescriptor& descriptor)
     {
-        return "##lua_control_" + descriptor.id;
+        return "###lua_control_" + descriptor.id + "_" + std::to_string(descriptor.runtimeGeneration);
     }
 
     std::string luaControlInputLabel(const scripting::ControlDescriptor& descriptor, std::string_view visibleLabel)
@@ -50,7 +51,7 @@ namespace {
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(visibleLabel.data(), visibleLabel.data() + visibleLabel.size());
         drawLuaControlCompactTooltip(descriptor, visibleLabel);
-        ImGui::SameLine();
+        ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
     }
 
     class ScopedImGuiItemWidth final {
@@ -75,6 +76,8 @@ namespace {
 
     bool isLuaDynamicInputControl(scripting::ControlType type)
     {
+        if (scripting::isOutputControl(type)) return false;
+        type = scripting::controlValueKind(type);
         return type == scripting::ControlType::InputText || type == scripting::ControlType::InputInt ||
                type == scripting::ControlType::InputFloat || type == scripting::ControlType::Combo ||
                type == scripting::ControlType::ElfSymbolCombo;
@@ -370,52 +373,64 @@ void GuiRuntime::drawStatusBar()
     auto& config = application_.docks().configState();
 
     ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + viewport->Size.y - 44.0F));
-    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, 44.0F));
+    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + viewport->Size.y - kStatusBarHeight));
+    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, kStatusBarHeight));
     constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                                       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
+                                       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking |
+                                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0F, 8.0F));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07F, 0.09F, 0.13F, 0.98F));
     ImGui::PushStyleColor(ImGuiCol_Border, tokens.panelBorder);
     if (ImGui::Begin("状态栏", nullptr, flags)) {
-        drawHeaderBadge(transportStateLabel(comm.state),
-                        comm.state == transport::TransportState::Open ? tokens.success : tokens.warning,
-                        false);
-        if (config.dirty) {
-            ImGui::SameLine();
-            drawHeaderBadge("配置未保存", tokens.warning, false);
-        }
-        if (config.pendingExternalReload) {
-            ImGui::SameLine();
-            drawHeaderBadge(
-                config.externalReloadMessage.empty() ? "检测到外部更新" : config.externalReloadMessage.c_str(),
-                tokens.warning,
-                false);
-            ImGui::SameLine();
-            if (drawGhostIconButton("重载配置", "从磁盘重载当前配置")) {
-                if (!reloadConfigFromDisk()) {
-                    application_.setStatusMessage("从磁盘重载配置失败", true);
-                }
-            }
-        }
-        if (comm.reconnectRequired) {
-            ImGui::SameLine();
-            drawHeaderBadge("通讯参数变更待重连", tokens.warning, false);
-        }
+        const auto snapshot = makeWaveStatusSnapshot(application_.docks().waveState(),
+                                                      application_.docks().luaState().protocolDir);
+        const auto& waveStatus = waveStatusPresenter_.update(snapshot, nowMs());
+        std::string connection = transportStateLabel(comm.state);
+        if (comm.reconnectRequired) connection += " | 通讯参数变更待重连";
         if (application_.isRawCaptureRecording()) {
             const auto fileName = application_.rawCaptureRecordingPath().filename().generic_string();
-            const std::string recordingText =
-                "录制 " + (fileName.empty() ? std::string("(未命名)") : fileName) + " " +
-                std::to_string(static_cast<unsigned long long>(application_.rawCaptureRecordingBytes())) + " bytes";
-            ImGui::SameLine();
-            drawHeaderBadge(recordingText.c_str(), tokens.danger, true);
+            connection += " | 录制 " + fileName + " " +
+                std::to_string(application_.rawCaptureRecordingBytes()) + " bytes";
         }
-        const std::string_view statusText = !config.transientStatusMessage.empty()
-                                                ? std::string_view{config.transientStatusMessage}
-                                                : std::string_view{config.statusMessage};
-        if (!statusText.empty()) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("%.*s", static_cast<int>(statusText.size()), statusText.data());
+        std::string general = !config.transientStatusMessage.empty() ?
+            config.transientStatusMessage : config.statusMessage;
+        if (config.dirty) general = "配置未保存 | " + general;
+        if (config.pendingExternalReload)
+            general = (config.externalReloadMessage.empty() ? "检测到外部更新" : config.externalReloadMessage) +
+                      " | " + general;
+        if (!fileDialogPreferenceError_.empty()) general = fileDialogPreferenceError_ + " | " + general;
+
+        // 三个固定分区只绘制一行，文字变化不会挤压相邻区域或撑高状态栏。
+        const auto textCell = [](const char* id, const std::string& text, const ImVec4& color) {
+            const ImVec2 start = ImGui::GetCursorScreenPos();
+            const float width = (std::max)(1.0F, ImGui::GetContentRegionAvail().x);
+            const ImVec2 end(start.x + width, start.y + ImGui::GetTextLineHeight());
+            ImGui::InvisibleButton(id, ImVec2(width, ImGui::GetTextLineHeight()));
+            ImGui::PushStyleColor(ImGuiCol_Text, color);
+            ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), start, end, end.x,
+                                      text.c_str(), nullptr, nullptr);
+            ImGui::PopStyleColor();
+            if (!text.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", text.c_str());
+        };
+        if (ImGui::BeginTable("##status_regions", 3, ImGuiTableFlags_SizingStretchProp |
+                                                    ImGuiTableFlags_NoSavedSettings)) {
+            ImGui::TableSetupColumn("connection", ImGuiTableColumnFlags_WidthStretch, 0.22F);
+            ImGui::TableSetupColumn("general", ImGuiTableColumnFlags_WidthStretch, 0.38F);
+            ImGui::TableSetupColumn("wave", ImGuiTableColumnFlags_WidthStretch, 0.40F);
+            ImGui::TableNextColumn();
+            textCell("##connection_status", connection,
+                     comm.state == transport::TransportState::Open ? tokens.success : tokens.warning);
+            ImGui::TableNextColumn();
+            if (config.pendingExternalReload && ImGui::GetContentRegionAvail().x > 100.0F) {
+                if (ImGui::SmallButton("重载") && !reloadConfigFromDisk())
+                    application_.setStatusMessage("从磁盘重载配置失败", true);
+                ImGui::SameLine();
+            }
+            textCell("##general_status", general, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TableNextColumn();
+            textCell("##wave_status", waveStatus.text(),
+                     waveStatus.fftError ? tokens.danger : ImGui::GetStyleColorVec4(ImGuiCol_Text));
+            ImGui::EndTable();
         }
     }
     ImGui::End();
@@ -712,9 +727,9 @@ void GuiRuntime::drawProtocolDock()
         }
     }
 #else
-    ImGui::BeginDisabled();
+    protoscope::ui::beginDisabled();
     ImGui::Button("浏览...");
-    ImGui::EndDisabled();
+    protoscope::ui::endDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
         ImGui::SetTooltip("当前平台暂不支持原生目录选择，请直接输入路径。");
     }
@@ -858,7 +873,8 @@ void GuiRuntime::drawTransferLogSection(float logHeight)
 
             ImGui::TableSetColumnIndex(10);
             if (drawTransferToolbarButton("导出", "导出当前过滤结果中的收发记录。", false)) {
-                openTransferLogExportDialog();
+                openUnifiedDataExport(application_.docks().receiveState().displayMode ==
+                    dock::TransferLogDisplayMode::ParsedFrames ? 2 : 1);
             }
 
             ImGui::TableSetColumnIndex(11);
@@ -1300,7 +1316,17 @@ bool GuiRuntime::drawDynamicLayoutControl(const scripting::ControlSnapshot& cont
 
 bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, std::optional<float> layoutWidth)
 {
-    const auto& descriptor = control.descriptor;
+    const auto descriptor = control.descriptor;
+    if (descriptor.type == scripting::ControlType::TabSelection) return false;
+    if (luaControlDraftGeneration_ != descriptor.runtimeGeneration) {
+        luaControlDrafts_.clear();
+        luaControlDraftGeneration_ = descriptor.runtimeGeneration;
+    }
+    if (!descriptor.visible) { luaControlDrafts_.erase(descriptor.id); return false; }
+    if (descriptor.type==scripting::ControlType::DataTable) return drawDataTableControl(control);
+    protoscope::ui::beginDisabled(descriptor.disabled ||
+                         (descriptor.readOnly && !scripting::isOutputControl(descriptor.type) &&
+                          scripting::controlValueKind(descriptor.type) != scripting::ControlType::InputText));
     const std::string visibleLabel = resolveLuaControlVisibleLabel(descriptor, layoutWidth);
     const std::string imguiLabel = luaControlImGuiLabel(descriptor, visibleLabel);
     const std::string inputLabel = luaControlInputLabel(descriptor, visibleLabel);
@@ -1308,7 +1334,13 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, s
     const ScopedImGuiItemWidth itemWidth(luaDynamicControlItemWidth(descriptor, visibleLabel, layoutWidth));
     bool updated = false;
     const int feedbackStyleColors = pushLuaControlFeedbackStyle(descriptor);
-    switch (descriptor.type) {
+    if (descriptor.binding && control.dataState != scripting::ControlDataState::Valid) {
+        drawLuaControlLeftLabel(descriptor, visibleLabel);
+        const char* text = control.dataState == scripting::ControlDataState::Waiting ? "Waiting for data" :
+                           control.dataState == scripting::ControlDataState::Null ? "No data" : "Invalid data";
+        ImGui::TextDisabled("%s",text);
+        if (!control.dataError.empty()) ImGui::SetItemTooltip("%s",control.dataError.c_str());
+    } else switch (descriptor.type) {
         case scripting::ControlType::Button:
             updated = drawDynamicButtonControl(control, imguiLabel, layoutWidth);
             drawLuaControlCompactTooltip(descriptor, visibleLabel);
@@ -1318,6 +1350,7 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, s
             drawLuaControlCompactTooltip(descriptor, visibleLabel);
             break;
         case scripting::ControlType::InputText:
+        case scripting::ControlType::TextArea:
             updated = drawDynamicTextControl(control, inputLabel, visibleLabel);
             drawLuaControlCompactTooltip(descriptor, visibleLabel);
             break;
@@ -1336,17 +1369,85 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, s
             updated = drawTxSequenceControl(control, visibleLabel);
             break;
         case scripting::ControlType::InputInt:
+        case scripting::ControlType::SliderInt:
             updated = drawDynamicIntControl(control, inputLabel, visibleLabel);
             drawLuaControlCompactTooltip(descriptor, visibleLabel);
             break;
         case scripting::ControlType::InputFloat:
+        case scripting::ControlType::SliderFloat:
             updated = drawDynamicFloatControl(control, inputLabel, visibleLabel);
             drawLuaControlCompactTooltip(descriptor, visibleLabel);
             break;
+        case scripting::ControlType::Label:
+            ImGui::PushTextWrapPos(0);
+            ImGui::TextUnformatted(std::get<std::string>(control.value).c_str());
+            ImGui::PopTextWrapPos();
+            break;
+        case scripting::ControlType::Readout: {
+            const auto elapsed = control.updatedAtMs == 0 ? 0 : nowMs() - std::min(nowMs(), control.updatedAtMs);
+            const bool stale = descriptor.staleAfterMs != 0 &&
+                (control.updatedAtMs == 0 || elapsed >= descriptor.staleAfterMs);
+            drawLuaControlLeftLabel(descriptor, visibleLabel);
+            const std::string text = std::get<std::string>(control.value) +
+                (descriptor.unit.empty() ? "" : " " + descriptor.unit);
+            ImGui::PushTextWrapPos(0);
+            ImGui::TextColored(stale ? ImVec4(0.94F,0.64F,0.22F,1) : ImGui::GetStyleColorVec4(ImGuiCol_Text),
+                               "%s%s", text.c_str(), stale ? " [stale]" : "");
+            ImGui::PopTextWrapPos();
+            if (descriptor.showUpdateTime) {
+                if (control.updatedAtMs == 0) ImGui::TextDisabled("No update");
+                else ImGui::TextDisabled("%llu ms ago", static_cast<unsigned long long>(elapsed));
+            }
+            break;
+        }
+        case scripting::ControlType::Indicator: {
+            drawLuaControlLeftLabel(descriptor, visibleLabel);
+            const bool on = std::get<bool>(control.value);
+            ImGui::PushTextWrapPos(0);
+            ImGui::TextColored(on ? ImVec4(0.24F,0.78F,0.47F,1) : ImVec4(0.91F,0.36F,0.34F,1),
+                               "%s", (on ? descriptor.onText : descriptor.offText).c_str());
+            ImGui::PopTextWrapPos();
+            break;
+        }
+        case scripting::ControlType::Progress: {
+            drawLuaControlLeftLabel(descriptor, visibleLabel);
+            const auto low = descriptor.minimum.value_or(0), high = descriptor.maximum.value_or(1);
+            const float fraction = high > low ? static_cast<float>((std::get<float>(control.value)-low)/(high-low)) : 0;
+            ImGui::ProgressBar(descriptor.indeterminate ? -static_cast<float>(ImGui::GetTime()) : fraction,
+                               ImVec2(ImGui::CalcItemWidth(), 0), descriptor.indeterminate ? "..." : nullptr);
+            break;
+        }
+        case scripting::ControlType::RadioGroup: {
+            drawLuaControlLeftLabel(descriptor, visibleLabel);
+            const int selected = std::get<int>(control.value);
+            int next = selected;
+            ImGui::BeginGroup();
+            for (std::size_t i=0; i<descriptor.comboOptions.size(); ++i) {
+                ImGui::PushID(static_cast<int>(i));
+                if (ImGui::RadioButton(luaControlHiddenImGuiLabel(descriptor).c_str(),
+                                       selected == static_cast<int>(i))) next = static_cast<int>(i);
+                ImGui::SameLine();
+                ImGui::TextWrapped("%s", descriptor.comboOptions[i].c_str());
+                if (ImGui::IsItemClicked()) next = static_cast<int>(i);
+                ImGui::PopID();
+            }
+            ImGui::EndGroup();
+            if (next != selected) {
+                updateDynamicControlValueWithFeedback(descriptor, next);
+                updated = true;
+            }
+            break;
+        }
+        case scripting::ControlType::TabSelection: break;
+        case scripting::ControlType::DataTable: break;
     }
     if (feedbackStyleColors > 0) {
         ImGui::PopStyleColor(feedbackStyleColors);
     }
+    if (!descriptor.tooltip.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("%s", descriptor.tooltip.c_str());
+    }
+    protoscope::ui::endDisabled();
     if (layoutWidth.has_value()) {
         reserveLuaDynamicControlWidth(startX, *layoutWidth);
     }
@@ -1402,12 +1503,12 @@ int GuiRuntime::pushLuaControlFeedbackStyle(const scripting::ControlDescriptor& 
     return 4;
 }
 
-void GuiRuntime::updateDynamicControlValueWithFeedback(const scripting::ControlDescriptor& descriptor,
+void GuiRuntime::updateDynamicControlValueWithFeedback(scripting::ControlDescriptor descriptor,
                                                        const scripting::ControlValue& value)
 {
     const bool feedbackEnabled = application_.runtimeConfig().gui.interactionFeedback.enabled;
     const std::string previousStatus = application_.docks().configState().statusMessage;
-    application_.updateControlValue(descriptor.id, value);
+    application_.updateControlValue(descriptor.id, value, descriptor.runtimeGeneration);
     if (!feedbackEnabled) {
         return;
     }
@@ -1453,11 +1554,33 @@ bool GuiRuntime::drawDynamicTextControl(const scripting::ControlSnapshot& contro
                                         std::string_view visibleLabel)
 {
     const auto& descriptor = control.descriptor;
-    char buffer[512]{};
-    std::snprintf(buffer, sizeof(buffer), "%s", std::get<std::string>(control.value).c_str());
+    auto& draft = luaControlDrafts_[descriptor.id];
+    draft.prepare(control, ImGui::GetFrameCount());
+    const auto& text = std::get<std::string>(draft.value);
+    std::vector<char> buffer(std::max(text.size() + 1, descriptor.maxLength ? descriptor.maxLength + 1 : 512), '\0');
+    std::copy(text.begin(), text.end(), buffer.begin());
     drawLuaControlLeftLabel(descriptor, visibleLabel);
-    if (ImGui::InputText(inputLabel.c_str(), buffer, sizeof(buffer))) {
-        updateDynamicControlValueWithFeedback(descriptor, std::string(buffer));
+    ImGuiInputTextFlags flags = descriptor.readOnly ? ImGuiInputTextFlags_ReadOnly : ImGuiInputTextFlags_None;
+    const bool multiline = descriptor.type == scripting::ControlType::TextArea;
+    if (multiline && descriptor.wrap) flags |= ImGuiInputTextFlags_WordWrap;
+    const bool changed = multiline ?
+        ImGui::InputTextMultiline(inputLabel.c_str(), buffer.data(), buffer.size(),
+                                 ImVec2(ImGui::CalcItemWidth(), ImGui::GetTextLineHeightWithSpacing()*descriptor.rows), flags) :
+        ImGui::InputText(inputLabel.c_str(), buffer.data(), buffer.size(), flags);
+    // Escape 是取消而非失焦提交，恢复当前宿主值而不是开始编辑时的旧值。
+    if (draft.editing && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        draft.cancel(control);
+        return false;
+    }
+    if (changed) draft.value = std::string(buffer.data());
+    const bool submit = draft.finish(changed, ImGui::IsItemActive(), ImGui::IsItemDeactivatedAfterEdit(),
+                                     descriptor.commitMode);
+    if (ImGui::BeginPopupContextItem()) {
+        if (ImGui::MenuItem("Copy")) ImGui::SetClipboardText(std::get<std::string>(draft.value).c_str());
+        ImGui::EndPopup();
+    }
+    if (submit) {
+        updateDynamicControlValueWithFeedback(descriptor, draft.value);
         return true;
     }
     return false;
@@ -1568,10 +1691,20 @@ bool GuiRuntime::drawDynamicIntControl(const scripting::ControlSnapshot& control
                                        std::string_view visibleLabel)
 {
     const auto& descriptor = control.descriptor;
-    int value = std::get<int>(control.value);
+    auto& draft = luaControlDrafts_[descriptor.id];
+    draft.prepare(control, ImGui::GetFrameCount());
+    int value = std::get<int>(draft.value);
     drawLuaControlLeftLabel(descriptor, visibleLabel);
-    if (ImGui::InputInt(inputLabel.c_str(), &value)) {
-        updateDynamicControlValueWithFeedback(descriptor, value);
+    const bool changed = descriptor.type == scripting::ControlType::SliderInt ?
+        ImGui::SliderInt(inputLabel.c_str(), &value, static_cast<int>(*descriptor.minimum),
+                        static_cast<int>(*descriptor.maximum)) : ImGui::InputInt(inputLabel.c_str(), &value);
+    if (draft.editing && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        draft.cancel(control);
+        return false;
+    }
+    if (changed) draft.value = value;
+    if (draft.finish(changed, ImGui::IsItemActive(), ImGui::IsItemDeactivatedAfterEdit(), descriptor.commitMode)) {
+        updateDynamicControlValueWithFeedback(descriptor, draft.value);
         return true;
     }
     return false;
@@ -1582,10 +1715,22 @@ bool GuiRuntime::drawDynamicFloatControl(const scripting::ControlSnapshot& contr
                                          std::string_view visibleLabel)
 {
     const auto& descriptor = control.descriptor;
-    float value = std::get<float>(control.value);
+    auto& draft = luaControlDrafts_[descriptor.id];
+    draft.prepare(control, ImGui::GetFrameCount());
+    float value = std::get<float>(draft.value);
     drawLuaControlLeftLabel(descriptor, visibleLabel);
-    if (ImGui::InputFloat(inputLabel.c_str(), &value)) {
-        updateDynamicControlValueWithFeedback(descriptor, value);
+    const auto format = "%." + std::to_string(descriptor.precision) + "f";
+    const bool changed = descriptor.type == scripting::ControlType::SliderFloat ?
+        ImGui::SliderFloat(inputLabel.c_str(), &value, static_cast<float>(*descriptor.minimum),
+                          static_cast<float>(*descriptor.maximum), format.c_str()) :
+        ImGui::InputFloat(inputLabel.c_str(), &value);
+    if (draft.editing && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        draft.cancel(control);
+        return false;
+    }
+    if (changed) draft.value = value;
+    if (draft.finish(changed, ImGui::IsItemActive(), ImGui::IsItemDeactivatedAfterEdit(), descriptor.commitMode)) {
+        updateDynamicControlValueWithFeedback(descriptor, draft.value);
         return true;
     }
     return false;
@@ -1743,7 +1888,7 @@ bool GuiRuntime::drawTxSequenceControl(const scripting::ControlSnapshot& control
                 const bool canMoveUp = rowIndex > 0;
                 const bool canMoveDown = rowIndex + 1 < next.frames.size();
                 if (!canMoveUp) {
-                    ImGui::BeginDisabled();
+                    protoscope::ui::beginDisabled();
                 }
                 if (ImGui::Button("上", ImVec2(30.0F, 0.0F))) {
                     std::swap(next.frames[rowIndex - 1], next.frames[rowIndex]);
@@ -1751,11 +1896,11 @@ bool GuiRuntime::drawTxSequenceControl(const scripting::ControlSnapshot& control
                 }
                 drawIconTooltip("上移一行");
                 if (!canMoveUp) {
-                    ImGui::EndDisabled();
+                    protoscope::ui::endDisabled();
                 }
                 ImGui::SameLine();
                 if (!canMoveDown) {
-                    ImGui::BeginDisabled();
+                    protoscope::ui::beginDisabled();
                 }
                 if (ImGui::Button("下", ImVec2(30.0F, 0.0F))) {
                     std::swap(next.frames[rowIndex], next.frames[rowIndex + 1]);
@@ -1763,7 +1908,7 @@ bool GuiRuntime::drawTxSequenceControl(const scripting::ControlSnapshot& control
                 }
                 drawIconTooltip("下移一行");
                 if (!canMoveDown) {
-                    ImGui::EndDisabled();
+                    protoscope::ui::endDisabled();
                 }
                 ImGui::SameLine();
                 if (ImGui::Button("复制", ImVec2(44.0F, 0.0F))) {

@@ -1,4 +1,6 @@
 #include "protoscope/app/application.hpp"
+#include "protoscope/config/embedded_protocols.hpp"
+#include "protoscope/plot/data_file_output.hpp"
 
 #include "protoscope/plot/wave_math.hpp"
 #include "protoscope/protocol_utils/codec.hpp"
@@ -27,12 +29,25 @@ namespace protoscope::app {
 
 namespace {
 
-    constexpr std::size_t kRawCaptureReplayChunkBytes = 1024;
+    constexpr std::size_t kRawCaptureReplayLargeChunkBytes = 64U * 1024U;
+    constexpr std::size_t kRawCaptureReplaySyncBatchBytes = 1024U * 1024U;
     constexpr std::size_t kRawCaptureReplaySeekNoticeEvents = 4096;
     constexpr std::size_t kTransportEventsPerPump = 256;
     constexpr auto kTransportEventBudget = std::chrono::milliseconds(4);
     constexpr std::uint64_t kCommPressureDebugLogIntervalMs = 2000;
     constexpr std::string_view kSessionProtocolEntryPrefix = "protocol/";
+
+    std::size_t resolveRawCaptureReplayChunkBytes(const std::optional<scripting::StreamBufferDefinition>& streamBuffer)
+    {
+        if (!streamBuffer.has_value()) {
+            return kRawCaptureReplayLargeChunkBytes;
+        }
+        if (streamBuffer->dropOldest) {
+            // drop_oldest 模式下输入块必须小于环形缓冲区容量，避免覆盖上一个块留下的半帧。
+            return (std::max)(std::size_t{1U}, streamBuffer->capacity / 2U);
+        }
+        return kRawCaptureReplayLargeChunkBytes;
+    }
 
     std::uint64_t nowMs()
     {
@@ -201,7 +216,8 @@ namespace {
 
     bool sameBitDisplaySpec(const plot::BitDisplaySpec& left, const plot::BitDisplaySpec& right)
     {
-        return sameBitDisplayIdentity(left, right) && std::abs(left.yOffset - right.yOffset) <= 1e-12;
+        return sameBitDisplayIdentity(left, right) && std::abs(left.yOffset - right.yOffset) <= 1e-12 &&
+               left.hoverReadout == right.hoverReadout;
     }
 
     bool sameChannelSpecs(const std::vector<plot::ChannelSpec>& setupChannels, const plot::OscilloscopeBuffer& buffer)
@@ -677,7 +693,7 @@ namespace {
     }
 
     std::vector<plot::RawCaptureEvent> trimRawCaptureEventsToPayloadWindow(
-        const std::vector<plot::RawCaptureEvent>& events, std::uint64_t keepStart)
+        const std::vector<plot::RawCaptureEvent>& events, std::uint64_t keepStart, bool includeTx = false)
     {
         std::vector<plot::RawCaptureEvent> activeProfiles;
         std::optional<plot::RawCaptureEvent> activePlotSetup;
@@ -685,7 +701,8 @@ namespace {
         std::uint64_t rxCursor = 0;
 
         for (const auto& event : events) {
-            if (event.type != plot::RawCaptureEventType::RxBytes) {
+            if (event.type != plot::RawCaptureEventType::RxBytes &&
+                !(includeTx && event.type == plot::RawCaptureEventType::TxBytes)) {
                 if (rxCursor < keepStart) {
                     if (event.type == plot::RawCaptureEventType::ProfileSet ||
                         event.type == plot::RawCaptureEventType::ProfileClear) {
@@ -769,8 +786,9 @@ namespace {
         }
 
         if (capture.protocolName.empty() || capture.protocolDir.empty()) {
-            error = std::string(metadataError);
-            return false;
+            // 原始记录和波形快照可独立于协议再次导出，协议只在显式离线解析时必需。
+            static_cast<void>(metadataError);
+            static_cast<void>(error);
         }
 
         normalizeRawCaptureExportWindow(capture);
@@ -902,6 +920,7 @@ namespace {
 
     bool validateReleasedProtocolDirectory(const std::filesystem::path& protocolDir,
                                            const scripting::FileIoConfig& fileIoConfig,
+                                           const scripting::ExecutionConfig& executionConfig,
                                            std::string& error)
     {
         std::error_code protocolEntryError;
@@ -916,6 +935,7 @@ namespace {
 
         scripting::ScriptHost probeHost;
         probeHost.setFileIoConfig(fileIoConfig);
+        probeHost.setExecutionConfig(executionConfig);
         if (!probeHost.loadProtocolDirectory(protocolDir.generic_string())) {
             error = "现场包协议脚本无效: " + probeHost.lastError();
             return false;
@@ -1260,6 +1280,7 @@ bool Application::initialize()
 
 bool Application::applyConfig(const config::AppConfig& config)
 {
+    if (dataTransferStatus().active && !applyingImportContext_) return false;
     captureProtocolConfigOverride_.reset();
     runtimeConfig_ = config;
     adaptivePerformance_.configure(config.performance.adaptive);
@@ -1268,6 +1289,11 @@ bool Application::applyConfig(const config::AppConfig& config)
     const auto postprocessWorkerThreads = scripting::resolvePipelineWorkerThreads(
         config.scripting.pipeline.workerThreads, std::thread::hardware_concurrency());
     scriptWorker_.configure(scripting::ScriptRuntimeWorkerConfig{
+        .execution = config.scripting.execution,
+        .storageRoot = config.scripting.storageRootDir.empty()
+            ? config::embedded::executableDirectory() / "data"
+            : std::filesystem::absolute(config.scripting.storageRootDir),
+        .storageConfig = config.scripting.storage,
         .enabled = config.scripting.workerEnabled,
         .postprocessWorkerThreads = postprocessWorkerThreads,
         .rxQueueLimitBytes = config.scripting.workerRxQueueLimitBytes,
@@ -1302,8 +1328,14 @@ void Application::setLogLevel(const config::LogLevel level)
 
 void Application::setGuiTheme(const config::GuiTheme theme)
 {
+    setGuiTheme(config::guiThemeId(theme));
+}
+
+void Application::setGuiTheme(const std::string_view theme)
+{
     // 主题是纯 GUI 全局偏好，只更新运行态配置，避免无关协议重载。
     runtimeConfig_.gui.theme = theme;
+    dockStore_.markDirty("主题已更改");
 }
 
 config::AppConfig Application::captureConfig() const
@@ -1319,6 +1351,8 @@ config::AppConfig Application::captureConfig() const
     captured.gui.rendererBackend = runtimeConfig_.gui.rendererBackend;
     captured.gui.logHistory = runtimeConfig_.gui.logHistory;
     captured.gui.rawCapture = runtimeConfig_.gui.rawCapture;
+    captured.gui.lastDataExport = runtimeConfig_.gui.lastDataExport;
+    captured.gui.fileDialogs = runtimeConfig_.gui.fileDialogs;
     captured.gui.realtimeBacklog = runtimeConfig_.gui.realtimeBacklog;
     captured.gui.elfSymbolCombo = runtimeConfig_.gui.elfSymbolCombo;
     captured.gui.interactionFeedback = runtimeConfig_.gui.interactionFeedback;
@@ -1359,6 +1393,7 @@ bool Application::loadedConfigFromDisk() const
 
 bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool forceReload)
 {
+    if (dataTransferStatus().active && !applyingImportContext_) return false;
     auto& lua = dockStore_.luaState();
     try {
         const auto resolvedDir = configStore_.normalizeProtocolDir(lua.protocolRootDir, protocolDir);
@@ -1405,12 +1440,14 @@ void Application::applyLuaScriptSnapshot(const scripting::ScriptRuntimeSnapshot&
     lua.docks = snapshot.docks;
     lua.controls = snapshot.controls;
     lua.controlStates = snapshot.controlStates;
+    lua.businessUi = snapshot.businessUi;
 }
 
 bool Application::probeProtocolDirectory(const std::string& resolvedDirText)
 {
     scripting::ScriptHost probeHost;
     probeHost.setFileIoConfig(runtimeConfig_.scripting.fileIo);
+    probeHost.setExecutionConfig(runtimeConfig_.scripting.execution);
     if (probeHost.loadProtocolDirectory(resolvedDirText)) {
         return true;
     }
@@ -1455,6 +1492,8 @@ bool Application::applyProtocolLoadResult(const std::string& resolvedDirText,
         return false;
     }
 
+    // 辅助游标只属于当前数据会话，协议成功切换后立即清理；加载失败保留旧会话。
+    dockStore_.waveState().view.auxiliaryCursors.clear();
     lua.protocolDir = resolvedDirText;
     lua.protocolName = protocolName;
     lua.scriptPath = scriptPath;
@@ -1479,6 +1518,7 @@ void Application::refreshTransferFrameDisplayAfterProtocolReload()
 
 bool Application::pumpOnce()
 {
+    if (dataImportActive_) return pumpDataImport();
     bool changed = false;
     const bool hadPendingScriptPlotAppends = !pendingScriptPlotAppends_.empty();
     changed = handleTransportEvents() || changed;
@@ -1504,6 +1544,7 @@ bool Application::pumpOnce()
 
 void Application::shutdown()
 {
+    dataTransfer_.cancel();
     if (rawCaptureReplay_.loaded) {
         cancelRawCaptureImportReplay();
         rawCaptureReplay_ = RawCaptureReplayState{};
@@ -1524,16 +1565,23 @@ const dock::DockStore& Application::docks() const
 
 void Application::openTransport()
 {
+    if (dataImportActive_) {
+        dockStore_.commState().lastError = "数据导入期间不能连接设备";
+        return;
+    }
     if (rawCaptureReplay_.loaded) {
         dockStore_.commState().lastError = "原始回放时间轴已载入，请先卸载后再打开实时连接";
         loggingFacade_.warn("transport", dockStore_.commState().lastError);
         syncDockState();
         return;
     }
+    if (dockStore_.waveState().buffer.importedLabelsReadOnly()) resetWaveHistory();
     if (replayReceiveHistory_) {
         // 核心流程：离线回放可能停在半帧，重新连接前必须丢弃回放 parser 状态，
         // 但保留当前收发记录供用户继续查看。
         replayReceiveHistory_ = false;
+        dockStore_.waveState().rawCapture = {};
+        retainedRawBytes_ = 0;
         pendingTransferFrameRows_.clear();
         resetTransferFrameParser();
     }
@@ -1598,6 +1646,7 @@ void Application::closeTransport()
 
 bool Application::sendManualPayload(const std::string& payload, bool hexMode)
 {
+    if (dataImportActive_ || rawCaptureReplay_.loaded || replayReceiveHistory_) return false;
     if (!transport_ || transport_->state() != transport::TransportState::Open) {
         dockStore_.commState().lastError = "连接未打开，无法发送";
         loggingFacade_.warn("transport", dockStore_.commState().lastError);
@@ -1671,7 +1720,7 @@ void Application::appendLiveRawCapture(const transport::TransportBytesEvent& eve
         (wave.rawCapture.protocolDir != lua.protocolDir || wave.rawCapture.protocolName != lua.protocolName)) {
         wave.rawCapture = {};
     }
-    if (wave.rawCapture.payload.empty()) {
+    if (wave.rawCapture.events.empty()) {
         wave.rawCapture.capturedAtMs = event.context.timestampMs;
     }
     wave.rawCapture.protocolName = lua.protocolName;
@@ -1683,6 +1732,7 @@ void Application::appendLiveRawCapture(const transport::TransportBytesEvent& eve
         .bytes = event.bytes,
         .profile = {},
         .plotSetup = {},
+        .endpoint = event.context.endpoint,
     });
 
     const auto limit = runtimeConfig_.gui.rawCapture.liveLimitBytes;
@@ -1708,10 +1758,38 @@ void Application::appendLiveRawCapture(const transport::TransportBytesEvent& eve
 
 void Application::appendRawCaptureEvent(const plot::RawCaptureEvent& event)
 {
+    if (replayReceiveHistory_ && !activeConnection_) return;
     auto& rawCapture = dockStore_.waveState().rawCapture;
+    if (rawCapture.protocolName.empty()) rawCapture.protocolName = dockStore_.luaState().protocolName;
+    if (rawCapture.protocolDir.empty()) rawCapture.protocolDir = dockStore_.luaState().protocolDir;
+    if (rawCapture.events.empty()) retainedRawBytes_ = 0;
     rawCapture.events.push_back(event);
+    rawCapture.events.back().sequence = ++rawEventSequence_;
+    rawCapture.source = "live";
+    if (event.type == plot::RawCaptureEventType::TxBytes) rawCapture.rxOnly = false;
+    if (rawCapture.capturedAtMs == 0) rawCapture.capturedAtMs = event.timestampMs;
+    if (rawCaptureRecording_.isOpen()) {
+        std::string error;
+        if (!rawCaptureRecording_.appendEvent(rawCapture.events.back(), error)) {
+            std::string ignored;
+            rawCaptureRecording_.close(ignored);
+            setStatusMessage("原始录制失败: " + error);
+        }
+    }
     if (event.type == plot::RawCaptureEventType::RxBytes) {
         rawCapture.payload.insert(rawCapture.payload.end(), event.bytes.begin(), event.bytes.end());
+    }
+    retainedRawBytes_ += event.bytes.size();
+    const auto limit = runtimeConfig_.gui.rawCapture.liveLimitBytes;
+    // RX/TX 共用保留预算，配置事件仍保留；文件导入不经过此实时裁剪入口。
+    if (retainedRawBytes_ > limit) {
+        rawCapture.events = trimRawCaptureEventsToPayloadWindow(rawCapture.events, retainedRawBytes_ - limit, true);
+        retainedRawBytes_ = limit;
+        rawCapture.truncated = true;
+        rawCapture.payload.clear();
+        for (const auto& retained : rawCapture.events)
+            if (retained.type == plot::RawCaptureEventType::RxBytes)
+                rawCapture.payload.insert(rawCapture.payload.end(), retained.bytes.begin(), retained.bytes.end());
     }
 }
 
@@ -1784,6 +1862,26 @@ bool Application::applyResetViewportPolicy(const WaveResetViewportTrigger trigge
 bool Application::applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup)
 {
     auto& wave = dockStore_.waveState();
+    if (wave.buffer.importedLabelsReadOnly()) {
+        bool changed = false;
+        // 导入数据只接受共有通道的 Bit 总开关，不应用清历史、通道身份或视窗配置。
+        const auto count = (std::min)(setup.channels.size(), wave.buffer.channelCount());
+        for (std::size_t index = 0; index < count; ++index) {
+            const bool enabled = setup.channels[index].bitDisplay.enabled;
+            auto spec = *wave.buffer.channelSpec(index);
+            if (spec.bitDisplay.enabled != enabled) {
+                spec.bitDisplay.enabled = enabled;
+                wave.buffer.setChannelSpec(index, std::move(spec));
+                changed = true;
+            }
+            if (index < wave.defaultChannelSpecs.size() &&
+                wave.defaultChannelSpecs[index].bitDisplay.enabled != enabled) {
+                wave.defaultChannelSpecs[index].bitDisplay.enabled = enabled;
+                changed = true;
+            }
+        }
+        return changed;
+    }
     const auto previousConfig = wave.buffer.viewConfig();
     const auto previousDefaultChannelSpecs = wave.defaultChannelSpecs;
     const bool configChanged = !nearlyEqual(previousConfig.timeScale, setup.view.timeScale) ||
@@ -1865,39 +1963,6 @@ void Application::recordPlotSetupSnapshot(const plot::RawCapturePlotSetupEventDa
     if (!suppressRawCapturePlotSetupEvents_) {
         appendRawCaptureEvent(event);
     }
-    if (!suppressRawCapturePlotSetupEvents_ && rawCaptureRecording_.isOpen()) {
-        std::string error;
-        if (!rawCaptureRecording_.appendEvent(event, error)) {
-            loggingFacade_.error("raw_capture", "录制 plot.setup 事件失败: " + error);
-        }
-    }
-}
-
-void Application::appendRawCaptureRecording(const transport::TransportBytesEvent& event)
-{
-    if (!rawCaptureRecording_.isOpen() || event.bytes.empty()) {
-        return;
-    }
-
-    std::string error;
-    if (rawCaptureRecording_.appendEvent(
-            plot::RawCaptureEvent{
-                .type = plot::RawCaptureEventType::RxBytes,
-                .timestampMs = event.context.timestampMs,
-                .bytes = event.bytes,
-                .profile = {},
-                .plotSetup = {},
-            },
-            error)) {
-        return;
-    }
-
-    const auto path = rawCaptureRecording_.path();
-    std::string closeError;
-    static_cast<void>(rawCaptureRecording_.close(closeError));
-    const auto message = "完整原始数据录制失败: " + error + " (" + path.generic_string() + ")";
-    setStatusMessage(message, true);
-    loggingFacade_.error("raw_capture", message);
 }
 
 std::optional<Application::TransferFrameParserState> Application::makeTransferFrameParserState() const
@@ -2022,7 +2087,8 @@ void Application::applyHistoryLimits(const config::GuiLogHistoryConfig& config)
     trimPendingTransferFrameRowsToLimit();
 }
 
-void Application::updateControlValue(const std::string& id, const scripting::ControlValue& value)
+void Application::updateControlValue(const std::string& id, const scripting::ControlValue& value,
+                                     std::optional<std::uint64_t> generation)
 {
     transport::ConnectionContext context;
     if (activeConnection_.has_value()) {
@@ -2034,7 +2100,7 @@ void Application::updateControlValue(const std::string& id, const scripting::Con
         context.timestampMs = nowMs();
         context.readyForIo = false;
     }
-    scriptWorker_.postControl(context, id, value);
+    scriptWorker_.postControl(context, id, value, generation);
     scriptWorker_.waitIdle();
     flushScriptOutputs();
     syncDockState();
@@ -2042,6 +2108,8 @@ void Application::updateControlValue(const std::string& id, const scripting::Con
 
 bool Application::requestOscilloscopeToggle(bool currentRunning, bool targetRunning)
 {
+    if (dataTransferStatus().active) return false;
+    if (targetRunning && dockStore_.waveState().buffer.importedLabelsReadOnly()) resetWaveHistory();
     transport::ConnectionContext context;
     if (activeConnection_.has_value()) {
         context = *activeConnection_;
@@ -2197,6 +2265,7 @@ bool Application::exportWaveRawCapture(const std::filesystem::path& path,
 
 bool Application::importWaveCsvData(const plot::WaveCsvData& data, std::string& error)
 {
+    if (!validateOfflineReplayTransport(error)) return false;
     if (data.channels.empty()) {
         error = "波形 CSV 未包含任何通道";
         return false;
@@ -2205,37 +2274,37 @@ bool Application::importWaveCsvData(const plot::WaveCsvData& data, std::string& 
     auto& wave = dockStore_.waveState();
     wave.buffer.clear();
     wave.buffer.setHistoryTrimSuspended(true);
+    wave.buffer.setViewConfig(data.view);
     wave.buffer.configureChannels(data.channels.size());
     wave.defaultChannelSpecs.clear();
+    wave.channelOverrides.clear();
     wave.defaultChannelSpecs.reserve(data.channels.size());
     std::size_t maxSampleCount = 0;
     for (std::size_t channelIndex = 0; channelIndex < data.channels.size(); ++channelIndex) {
         const auto& csvChannel = data.channels[channelIndex];
-        plot::ChannelSpec spec{
-            .label = csvChannel.label.empty() ? "CH" + std::to_string(channelIndex + 1) : csvChannel.label,
-            .unit = csvChannel.unit,
-        };
+        auto spec = csvChannel.spec;
+        spec.label = csvChannel.label.empty() ? "CH" + std::to_string(channelIndex + 1) : csvChannel.label;
+        spec.unit = csvChannel.unit;
         wave.buffer.setChannelSpec(channelIndex, spec);
         wave.defaultChannelSpecs.push_back(spec);
         if (!csvChannel.samples.empty()) {
             // 核心流程：CSV time 是外部数据的显示时间，直接作为脚本时间轴写入，不再按采样率重解释。
-            wave.buffer.append(channelIndex,
-                               plot::WaveAppendRequest{
-                                   .source = "csv_wave",
-                                   .samples = csvChannel.samples,
-                               });
+            wave.buffer.appendImported(channelIndex, csvChannel.samples, csvChannel.sampleIndexOffset);
             maxSampleCount = (std::max)(maxSampleCount, csvChannel.samples.size());
         }
     }
-    wave.buffer.setHistoryTrimSuspended(false);
+    wave.buffer.setImportedLabelsReadOnly(true);
+    wave.buffer.setImportedSource(data.source);
+    importedWaveIncomplete_ = data.incomplete;
+    importedWaveRange_ = data.rangeDescription;
     wave.buffer.preserveHistoryLimitAtLeast(maxSampleCount);
-    wave.rawCapture = {};
     wave.analysisMarkers.clear();
     wave.channelSummaries.clear();
     wave.hiddenChannelIndices.clear();
-    wave.view.sampleFrequencyHz = 0.0;
-    wave.view.sampleFrequencyInput.clear();
-    wave.view.timeAxisSource = plot::WaveTimeAxisSource::ScriptTime;
+    wave.view.sampleFrequencyHz = data.timeAxis == "frequency" ? data.sampleFrequencyHz : 0.0;
+    wave.view.sampleFrequencyInput = formatFrequencyInput(wave.view.sampleFrequencyHz);
+    wave.view.timeAxisSource = data.timeAxis == "frequency" ? plot::WaveTimeAxisSource::SampleFrequency :
+        data.timeAxis == "index" ? plot::WaveTimeAxisSource::SampleIndex : plot::WaveTimeAxisSource::ScriptTime;
     wave.view.defaultViewportPending = true;
     wave.view.defaultViewportLegacyBehavior = false;
     wave.view.autoFollowLatest = false;
@@ -2249,27 +2318,376 @@ bool Application::exportWaveCsv(const std::filesystem::path& path,
                                 const plot::CsvExportRange& range,
                                 std::string& error) const
 {
+    const auto data = captureWaveData(range, error);
+    return data && plot::writeWaveCsvFile(path, *data, shape, {}, error);
+}
+
+void Application::activateBusinessMenu(const std::string& id, bool checked,
+                                       std::uint64_t generation, std::uint64_t revision)
+{
+    auto context = activeConnection_.value_or(transport::ConnectionContext{});
+    if (!activeConnection_) {
+        context.endpoint = "detached";
+        context.timestampMs = nowMs();
+    }
+    // 菜单只入 worker 队列，主线程不等待 Lua 回调执行完毕。
+    scriptWorker_.postMenu(std::move(context),id,checked,generation,revision);
+}
+void Application::interactDataTable(scripting::DataTableEvent event)
+{
+    auto context=activeConnection_.value_or(transport::ConnectionContext{});
+    if (!activeConnection_) {context.endpoint="detached";context.timestampMs=nowMs();}
+    scriptWorker_.postDataTable(std::move(context),std::move(event));
+}
+
+std::optional<plot::WaveCsvData> Application::captureWaveData(const plot::CsvExportRange& range, std::string& error) const
+{
+    if (!plot::validateCsvExportRange(range, error)) return std::nullopt;
     const auto& wave = dockStore_.waveState();
     auto snapshot =
         wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), false);
-    const auto displayData = plot::buildDisplayData(snapshot, wave.view.sampleFrequencyHz);
+    plot::WaveDisplayData displayData;
+    plot::buildQueryDisplayDataInto(snapshot, wave.view.sampleFrequencyHz, 2, displayData);
 
     plot::WaveCsvData data;
-    data.shape = shape;
     data.sampleFrequencyHz = wave.view.sampleFrequencyHz;
     data.view = wave.buffer.viewConfig();
+    data.source = snapshot.source;
+    data.incomplete = importedWaveIncomplete_;
+    data.timeAxis = displayData.axisSource == plot::WaveTimeAxisSource::SampleFrequency ? "frequency" :
+        displayData.axisSource == plot::WaveTimeAxisSource::SampleIndex ? "index" : "script";
+    const auto resolved = plot::resolveCsvExportTimeRange(range);
+    data.rangeDescription = importedWaveRange_;
+    if (resolved) {
+        std::ostringstream description;
+        description << (range.kind == plot::CsvExportRangeKind::CurrentView ? "view:" :
+                        range.kind == plot::CsvExportRangeKind::CursorPair ? "cursors:" : "manual:")
+                    << std::setprecision(17) << resolved->first << ',' << resolved->second;
+        data.rangeDescription = description.str();
+    }
+    std::size_t sampleCount = 0;
     data.channels.reserve(snapshot.channels.size());
     for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
         plot::WaveCsvChannel channel{
             .label = snapshot.channels[channelIndex].label,
             .unit = snapshot.channels[channelIndex].unit,
         };
-        if (channelIndex < displayData.channels.size()) {
-            channel.samples = displayData.channels[channelIndex].samples;
+        const auto& source = snapshot.channels[channelIndex];
+        channel.spec = *wave.buffer.channelSpec(channelIndex);
+        channel.sampleIndexOffset = source.sampleIndexOffset;
+        for (std::size_t i = 0; i < source.totalSamples; ++i) {
+            const double time = data.timeAxis == "frequency" ?
+                static_cast<double>(source.sampleIndexOffset + i) / data.sampleFrequencyHz :
+                data.timeAxis == "index" ? static_cast<double>(source.sampleIndexOffset + i) : source.samples[i].time;
+            if (resolved && (time < resolved->first || time > resolved->second)) continue;
+            if (channel.samples.empty()) channel.sampleIndexOffset += i;
+            channel.samples.push_back(source.samples[i]);
+            ++sampleCount;
         }
         data.channels.push_back(std::move(channel));
     }
-    return plot::writeWaveCsvFile(path, data, shape, range, error);
+    if (sampleCount == 0) {
+        error = "所选波形范围没有样本";
+        return std::nullopt;
+    }
+    return data;
+}
+
+bool Application::importRawRecords(const plot::RawCaptureFileData& data, std::string& error)
+{
+    if (!validateOfflineReplayTransport(error)) return false;
+    dockStore_.clearReceiveRows();
+    resetTransferFrameParser();
+    pendingTransferFrameRows_.clear();
+    dockStore_.waveState().rawCapture = data;
+    replayReceiveHistory_ = true;
+    for (const auto& event : data.events) {
+        if (event.type != plot::RawCaptureEventType::RxBytes && event.type != plot::RawCaptureEventType::TxBytes) continue;
+        dockStore_.appendReceiveRow({.timestampMs = event.timestampMs,
+            .direction = event.type == plot::RawCaptureEventType::TxBytes ? "TX" : "RX",
+            .endpoint = event.endpoint, .bytes = event.bytes, .message = event.writeStatus});
+    }
+    if (data.events.empty() && !data.payload.empty())
+        dockStore_.appendReceiveRow({.timestampMs = data.capturedAtMs, .direction = "RX",
+            .endpoint = data.source, .bytes = data.payload});
+    return true;
+}
+
+bool Application::startDataImport(const std::filesystem::path& path, std::string& error)
+{
+    if (dataTransferStatus().active) { error = "已有数据任务正在执行"; return false; }
+    if (!validateOfflineReplayTransport(error)) return false;
+    if (rawCaptureRecording_.isOpen()) { error = "请先停止原始录制"; return false; }
+    if (rawCaptureReplay_.loaded) unloadRawCaptureReplayTimeline();
+    cancelAllTxRequests("开始离线导入");
+    importReplacedWave_ = false;
+    parseImportedWave_ = false;
+    importReplacedRecords_ = false;
+    importReset_.reset();
+    importProfile_.reset();
+    dataImportActive_ = dataTransfer_.startImport(path);
+    return dataImportActive_;
+}
+
+bool Application::pumpDataImport()
+{
+    const auto status = dataTransfer_.status();
+    const auto started = std::chrono::steady_clock::now();
+    std::size_t samples = 0;
+    std::size_t bytes = 0;
+    try {
+        // 配置操作由脚本线程执行；UI 只轮询完成状态，不能等待正在运行的 Lua 回调。
+        if (importReset_) {
+            if (importReset_->wait_for(std::chrono::seconds(0)) != std::future_status::ready) return true;
+            if (!importReset_->get()) throw std::runtime_error("重置离线解析状态失败");
+            importReset_.reset();
+        }
+        if (importProfile_) {
+            if (importProfile_->wait_for(std::chrono::seconds(0)) != std::future_status::ready) return true;
+            const auto result = importProfile_->get();
+            importProfile_.reset();
+            if (!result.first) throw std::runtime_error(result.second);
+        }
+        if (parseImportedWave_) {
+            flushScriptOutputs();
+            if (scriptWorker_.pendingRxBytes() > 65536) return true;
+        }
+        while (samples < 8192 && bytes < 65536 &&
+               std::chrono::steady_clock::now() - started < std::chrono::milliseconds(4)) {
+            if (parseImportedWave_ && (importReset_ || importProfile_ || !scriptWorker_.idle())) break;
+            auto batch = dataTransfer_.take(8192 - samples, 65536 - bytes);
+            if (!batch) break;
+            if (batch->id != status.id) continue;
+            samples += batch->samples.size();
+            if (batch->event) bytes += (std::max<std::size_t>)(1, batch->event->bytes.size());
+            for (const auto& event : batch->events) bytes += (std::max<std::size_t>)(1, event.bytes.size());
+            if (batch->event) batch->events.push_back(std::move(*batch->event));
+            auto& wave = dockStore_.waveState();
+            auto& receive = dockStore_.receiveState();
+            if (batch->metadata) {
+                std::string error;
+                if (batch->session) {
+                    applyingImportContext_ = true;
+                    const bool restored = applySessionPackage(*batch->session, false, error,
+                                                               batch->metadata->waveform.has_value());
+                    applyingImportContext_ = false;
+                    if (!restored) throw std::runtime_error(error);
+                    if (!batch->metadata->waveform) parseImportedWave_ = true;
+                }
+                if (batch->metadata->waveform) {
+                    parseImportedWave_ = false;
+                    if (!importWaveCsvData(*batch->metadata->waveform, error)) throw std::runtime_error(error);
+                    importReplacedWave_ = true;
+                    importedWaveIncomplete_ = true;
+                }
+                if (status.includesRecords) {
+                    if (!importRawRecords(*batch->metadata, error)) throw std::runtime_error(error);
+                    importReplacedRecords_ = true;
+                    wave.rawCapture.incomplete = true;
+                    if (parseImportedWave_ && !batch->metadata->waveform) {
+                        if (!dockStore_.luaState().loaded) throw std::runtime_error("当前协议不可用");
+                        importReset_ = scriptWorker_.resetStreamReplayStateAsync();
+                        wave.buffer.clear();
+                        wave.buffer.setHistoryTrimSuspended(true);
+                        wave.defaultChannelSpecs.clear();
+                        wave.channelOverrides.clear();
+                        wave.view.sampleFrequencyHz = batch->metadata->sampleFrequencyHz;
+                        importReplacedWave_ = true;
+                        importedWaveIncomplete_ = true;
+                        suppressRawCaptureProfileEvents_ = true;
+                        suppressRawCapturePlotSetupEvents_ = true;
+                    }
+                }
+            } else if (!batch->samples.empty()) {
+                wave.buffer.appendImported(batch->channel, batch->samples, batch->sampleIndexOffset);
+                dataTransfer_.submitted(batch->samples.size());
+            } else for (auto& event : batch->events) {
+                auto& capture = wave.rawCapture;
+                if (event.type == plot::RawCaptureEventType::TxBytes) capture.rxOnly = false;
+                if (parseImportedWave_) {
+                    auto context = makeRawCaptureReplayContext(capture);
+                    context.timestampMs = event.timestampMs;
+                    context.endpoint = event.endpoint;
+                    if (event.type == plot::RawCaptureEventType::RxBytes)
+                        scriptWorker_.postTransportBytes({context, event.bytes}, false);
+                    else if (event.type == plot::RawCaptureEventType::ProfileSet ||
+                             event.type == plot::RawCaptureEventType::ProfileClear) {
+                        importProfile_ = scriptWorker_.applyStreamRuntimeProfileEventAsync({
+                            .cleared = event.type == plot::RawCaptureEventType::ProfileClear,
+                            .frameName = event.profile.frameName, .length = event.profile.length,
+                            .channelMap = event.profile.channelMap});
+                    } else if (event.type != plot::RawCaptureEventType::TxBytes) {
+                        std::string error;
+                        if (!replayRawCaptureEvent(event, context, error)) throw std::runtime_error(error);
+                    }
+                }
+                const bool bytesEvent = event.type == plot::RawCaptureEventType::RxBytes ||
+                                        event.type == plot::RawCaptureEventType::TxBytes;
+                if (event.type == plot::RawCaptureEventType::RxBytes)
+                    capture.payload.insert(capture.payload.end(), event.bytes.begin(), event.bytes.end());
+                if (batch->eventContinuation && !capture.events.empty()) {
+                    auto& bytes = capture.events.back().bytes;
+                    bytes.insert(bytes.end(), event.bytes.begin(), event.bytes.end());
+                    if (bytesEvent && !receive.rows.empty()) {
+                        auto& rowBytes = receive.rows.back().bytes;
+                        rowBytes.insert(rowBytes.end(), event.bytes.begin(), event.bytes.end());
+                    }
+                } else {
+                    capture.events.push_back(event);
+                    if (bytesEvent) {
+                        // 离线文件不受实时面板行数上限裁剪，完整文件计数以原始事件为准。
+                        receive.rows.push_back({.timestampMs = event.timestampMs,
+                            .direction = event.type == plot::RawCaptureEventType::TxBytes ? "TX" : "RX",
+                            .endpoint = event.endpoint, .bytes = event.bytes, .message = event.writeStatus});
+                    }
+                    dataTransfer_.submitted(1);
+                }
+                ++receive.rowsVersion;
+            }
+        }
+    } catch (const std::exception& ex) {
+        applyingImportContext_ = false;
+        importReset_.reset();
+        importProfile_.reset();
+        dataTransfer_.fail(std::string("导入提交失败，已保留部分数据: ") + ex.what());
+    }
+    const auto current = dataTransfer_.status();
+    if (!current.active && current.complete) {
+        if (parseImportedWave_) {
+            flushScriptOutputs();
+            if (importReset_ || importProfile_ || !scriptWorker_.idle() || !pendingScriptPlotAppends_.empty()) return true;
+            dockStore_.waveState().buffer.setImportedLabelsReadOnly(true);
+            suppressRawCaptureProfileEvents_ = false;
+            suppressRawCapturePlotSetupEvents_ = false;
+        }
+        dataImportActive_ = false;
+        const bool incomplete = current.canceled || !current.error.empty();
+        if (importReplacedWave_)
+            importedWaveIncomplete_ = incomplete || (current.metadata.waveform && current.metadata.waveform->incomplete);
+        if (importReplacedRecords_)
+            dockStore_.waveState().rawCapture.incomplete = incomplete || current.metadata.incomplete;
+        setStatusMessage(!current.error.empty() ? "导入失败: " + current.error :
+            current.canceled ? "导入已取消，已提交数据可再次导出" : "数据导入完成");
+        syncDockState();
+    }
+    return true;
+}
+
+bool Application::startDataExport(const std::filesystem::path& path, int content, int format,
+                                  const plot::CsvExportRange& waveRange, int recordRange,
+                                  std::uint64_t recordBeginMs, std::uint64_t recordEndMs,
+                                  plot::WaveCsvShape shape, std::string& error)
+{
+    if (dataTransferStatus().active) { error = "已有数据任务正在执行"; return false; }
+    if (content < 0 || content > 3 || format < 0 || format > 3 ||
+        (content == 0 && format > 1) || (content == 1 && format > 2) ||
+        (content == 2 && format != 0 && format != 2) || (content == 3 && format != 3)) {
+        error = "所选内容不支持该格式";
+        return false;
+    }
+    if (content != 0 && (recordRange < 0 || recordRange > 2 ||
+                        (recordRange == 2 && recordEndMs < recordBeginMs))) {
+        error = "收发时间范围无效"; return false;
+    }
+    plot::RawCaptureFileData capture;
+    if (content == 0 || content == 3) {
+        capture.waveform = captureWaveData(waveRange, error);
+        if (!capture.waveform) return false;
+    }
+    std::vector<dock::ReceiveRow> textRows;
+    if (content == 1 || content == 3) {
+        auto waveform = std::move(capture.waveform);
+        capture = dockStore_.waveState().rawCapture;
+        capture.waveform = std::move(waveform);
+        capture.events.clear();
+        capture.payload.clear();
+        auto events = dockStore_.waveState().rawCapture.events;
+        if (events.empty() && !dockStore_.waveState().rawCapture.payload.empty())
+            events.push_back({.timestampMs = capture.capturedAtMs, .bytes = dockStore_.waveState().rawCapture.payload});
+        std::size_t byteEvents = 0;
+        for (const auto& event : events) {
+            const bool bytesEvent = event.type == plot::RawCaptureEventType::RxBytes ||
+                                    event.type == plot::RawCaptureEventType::TxBytes;
+            dock::ReceiveRow row{.timestampMs = event.timestampMs,
+                .direction = event.type == plot::RawCaptureEventType::TxBytes ? "TX" : "RX",
+                .endpoint = event.endpoint, .bytes = event.bytes, .message = event.writeStatus};
+            if (bytesEvent && recordRange == 1 &&
+                !dock::matchesLogFilter(row, dockStore_.receiveState().filter, true)) continue;
+            if (recordRange == 2 && ((bytesEvent && event.timestampMs < recordBeginMs) ||
+                                    event.timestampMs > recordEndMs)) continue;
+            capture.events.push_back(event);
+            if (event.type == plot::RawCaptureEventType::RxBytes)
+                capture.payload.insert(capture.payload.end(), event.bytes.begin(), event.bytes.end());
+            if (bytesEvent) { ++byteEvents; textRows.push_back(std::move(row)); }
+        }
+        if (byteEvents == 0) { error = "所选收发范围没有记录"; return false; }
+        capture.filtered = capture.filtered || recordRange != 0;
+        if (recordRange == 1) capture.rangeDescription = "filter";
+        else if (recordRange == 2)
+            capture.rangeDescription = "timestamp_ms:" + std::to_string(recordBeginMs) + ',' + std::to_string(recordEndMs);
+    }
+    if (content == 2) {
+        for (const auto& row : dockStore_.receiveState().frameRows) {
+            if (recordRange == 1 && !dock::matchesLogFilter(row, dockStore_.receiveState().filter, true)) continue;
+            if (recordRange == 2 && (row.timestampMs < recordBeginMs || row.timestampMs > recordEndMs)) continue;
+            textRows.push_back(row);
+        }
+        if (textRows.empty()) { error = "没有逐帧分析结果"; return false; }
+    }
+    session::SessionPackageData package;
+    if (content == 3) {
+        std::string configYaml;
+        if (!configStore_.saveText(captureConfig(), configYaml, error)) return false;
+        std::vector<session::SessionPackageEntry> protocolEntries;
+        const auto& lua = dockStore_.luaState();
+        // 快照不依赖协议重解析；缺失的协议不应阻止离线现场再次导出。
+        if (!lua.protocolDir.empty() && std::filesystem::is_directory(lua.protocolDir) &&
+            !collectProtocolDirectoryEntries(lua.protocolDir, protocolEntries, error)) return false;
+        package = buildSessionPackage(nowMs(), std::move(configYaml), {}, std::move(protocolEntries),
+            encodeAnalysisMarkersYaml(dockStore_.waveState().analysisMarkers), {},
+            dock::formatReceiveRowsText(copyReceiveRows(dockStore_.logState().rows), true, true),
+            dock::formatReceiveRowsText(copyReceiveRows(dockStore_.scriptState().rows), true, true),
+            dock::formatRequestTraceRowsCsv(copyRequestTraceRows(dockStore_.requestTraceState().rows), true),
+            lua.protocolName, lua.protocolDir, capture.sampleFrequencyHz);
+    }
+    std::size_t total = content == 2 ? textRows.size() : capture.events.size();
+    if (capture.waveform) for (const auto& channel : capture.waveform->channels) total += channel.samples.size();
+    return dataTransfer_.startExport([path, content, format, shape, capture = std::move(capture),
+                                      rows = std::move(textRows), package = std::move(package)]
+                                     (std::stop_token stop, std::string& taskError) mutable {
+        if (stop.stop_requested()) return false;
+        if (format == 1) return plot::writeRawCaptureFile(path, capture, taskError);
+        if (format == 0 && content == 0)
+            return plot::writeWaveCsvFile(path, *capture.waveform, shape, {}, taskError);
+        if (format == 0 && content == 1) return plot::writeRawCaptureCsvFile(path, capture, {}, taskError);
+        if (format == 3) {
+            std::vector<std::uint8_t> bytes;
+            if (!plot::encodeRawCaptureFile(capture, bytes, taskError)) return false;
+            for (auto& entry : package.entries) if (entry.name == "raw_capture.psraw") entry.bytes = std::move(bytes);
+            if (stop.stop_requested()) return false;
+            return session::writeSessionPackage(path, package, taskError);
+        }
+        plot::DataFileOutput output(path);
+        output.stream << (content == 2 ? "# kind=analysis_output\n" : "# kind=readable_log\n");
+        if (format == 0) {
+            output.stream << "# protoscope_csv_version=2\n";
+            output.stream << "timestamp_ms,direction,endpoint,bytes_hex,analysis\n";
+            for (const auto& row : rows) {
+                if (stop.stop_requested()) return false;
+                output.stream << row.timestampMs << ',' << csvEscape(row.direction) << ','
+                              << csvEscape(row.endpoint) << ',' << protocol_utils::bytesToHex(row.bytes, false)
+                              << ',' << csvEscape(row.message) << '\n';
+                plot::reportDataFileProgress(1);
+            }
+        } else {
+            for (const auto& row : rows) {
+                if (stop.stop_requested()) return false;
+                output.stream << dock::formatReceiveRowsText(std::span<const dock::ReceiveRow>(&row, 1), true, true);
+                plot::reportDataFileProgress(1);
+            }
+        }
+        return !stop.stop_requested() && output.commit(taskError);
+    }, total);
 }
 
 bool Application::exportRawCaptureCsv(const std::filesystem::path& path,
@@ -2361,7 +2779,14 @@ bool Application::exportSessionPackage(const std::filesystem::path& path, std::s
 
 bool Application::importSessionPackage(const std::filesystem::path& path, std::string& error)
 {
-    loggingFacade_.info("session", "session import requested kind=session endpoint=" + path.generic_string());
+    const auto package = session::readSessionPackage(path, error);
+    return package && applySessionPackage(*package, true, error);
+}
+
+bool Application::applySessionPackage(const session::SessionPackageData& packageData, bool restoreCapture,
+                                      std::string& error, bool allowMissingProtocol)
+{
+    const auto* package = &packageData;
     if (!validateOfflineReplayTransport(error)) {
         return false;
     }
@@ -2391,10 +2816,6 @@ bool Application::importSessionPackage(const std::filesystem::path& path, std::s
         }
     };
 
-    const auto package = session::readSessionPackage(path, error);
-    if (!package.has_value()) {
-        return false;
-    }
     if (!validateSessionPackageEntries(*package, error)) {
         return false;
     }
@@ -2413,6 +2834,7 @@ bool Application::importSessionPackage(const std::filesystem::path& path, std::s
     loaded.config.configPath = runtimeConfig_.configPath;
     // 现场包只恢复采集和协议现场，不覆盖本机全局界面偏好。
     loaded.config.gui.theme = previousConfig.gui.theme;
+    loaded.config.gui.fileDialogs = previousConfig.gui.fileDialogs;
 
     std::optional<config::ProtocolConfig> persistentProtocolConfig;
     std::optional<std::string> importedProtocolDir;
@@ -2424,7 +2846,8 @@ bool Application::importSessionPackage(const std::filesystem::path& path, std::s
         if (!releaseSessionProtocolEntries(protocolEntries, protocolDir, error)) {
             return false;
         }
-        if (!validateReleasedProtocolDirectory(protocolDir, loaded.config.scripting.fileIo, error)) {
+        if (!validateReleasedProtocolDirectory(protocolDir, loaded.config.scripting.fileIo,
+                                               loaded.config.scripting.execution, error)) {
             return false;
         }
         loaded.config.protocol.rootDir = protocolDir.parent_path().generic_string();
@@ -2433,7 +2856,7 @@ bool Application::importSessionPackage(const std::filesystem::path& path, std::s
     }
 
     std::optional<plot::RawCaptureFileData> rawCapture;
-    if (!decodeSessionRawCaptureEntry(*package, importedProtocolDir, rawCapture, error)) {
+    if (restoreCapture && !decodeSessionRawCaptureEntry(*package, importedProtocolDir, rawCapture, error)) {
         return false;
     }
 
@@ -2442,7 +2865,8 @@ bool Application::importSessionPackage(const std::filesystem::path& path, std::s
         return false;
     }
 
-    if (!applyConfig(loaded.config)) {
+    if (!applyConfig(loaded.config) &&
+        !(protocolEntries.empty() && (allowMissingProtocol || (rawCapture && rawCapture->waveform)))) {
         error = "应用现场包配置失败";
         rollbackImport();
         return false;
@@ -2452,7 +2876,12 @@ bool Application::importSessionPackage(const std::filesystem::path& path, std::s
     }
 
     if (rawCapture.has_value()) {
-        if (!loadRawCaptureReplayTimeline(*rawCapture, error)) {
+        if (rawCapture->waveform) {
+            if (!importWaveCsvData(*rawCapture->waveform, error) || !importRawRecords(*rawCapture, error)) {
+                rollbackImport();
+                return false;
+            }
+        } else if (!loadRawCaptureReplayTimeline(*rawCapture, error)) {
             rollbackImport();
             return false;
         }
@@ -2462,8 +2891,8 @@ bool Application::importSessionPackage(const std::filesystem::path& path, std::s
     wave.analysisMarkers.clear();
     wave.analysisMarkers = std::move(importedMarkers);
 
-    setStatusMessage("现场包已导入，原始回放时间轴已载入并暂停在起点: " + path.generic_string());
-    loggingFacade_.info("session", "session imported kind=session endpoint=" + path.generic_string());
+    setStatusMessage("现场包已导入");
+    loggingFacade_.info("session", "session imported kind=session");
     return true;
 }
 
@@ -2485,10 +2914,7 @@ bool Application::startRawCaptureRecording(const std::filesystem::path& path, st
         .payload = {},
         .events = {},
     };
-    if (metadata.protocolName.empty() || metadata.protocolDir.empty()) {
-        error = "当前协议元数据不完整，无法开始录制";
-        return false;
-    }
+    if (dataTransferStatus().active) { error = "数据任务进行中，不能开始录制"; return false; }
 
     if (!rawCaptureRecording_.open(path, metadata, error)) {
         return false;
@@ -2541,6 +2967,7 @@ std::uint64_t Application::rawCaptureRecordingBytes() const
 
 bool Application::validateRawCaptureImport(const plot::RawCaptureFileData& capture, std::string& error) const
 {
+    if (dataTransferStatus().active) { error = "数据任务进行中，不能载入回放"; return false; }
     if (!validateOfflineReplayTransport(error)) {
         return false;
     }
@@ -2576,6 +3003,10 @@ void Application::prepareRawCaptureImportReplay(const plot::RawCaptureFileData& 
     wave.view.sampleFrequencyInput = formatFrequencyInput(capture.sampleFrequencyHz);
     wave.view.sampleFrequencyError.clear();
     wave.buffer.setHistoryTrimSuspended(true);
+    rawCaptureReplayChunkBytes_ = resolveRawCaptureReplayChunkBytes(scriptWorker_.snapshot().streamBuffer);
+    rawCaptureReplayPendingBytes_ = 0U;
+    rawCaptureReplayBatchBytes_.clear();
+    rawCaptureReplayBatchContext_ = {};
     loggingFacade_.info("raw_capture",
                         "raw import prepared kind=raw_import endpoint=" + capture.protocolDir +
                             " bytes=" + std::to_string(capture.payload.size()) +
@@ -2604,13 +3035,20 @@ bool Application::replayRawCaptureEvents(const plot::RawCaptureFileData& capture
     for (const auto& recordedEvent : capture.events) {
         replayContext.timestampMs =
             recordedEvent.timestampMs == 0 ? replayContext.timestampMs : recordedEvent.timestampMs;
+        if (recordedEvent.type == plot::RawCaptureEventType::RxBytes) {
+            enqueueRawCaptureBytes(replayContext, recordedEvent.bytes);
+            continue;
+        }
+        // 核心流程：配置事件必须在前一批 RX 字节完全处理后再生效，保持导入事件顺序。
+        flushRawCaptureReplayBatch();
         if (!replayRawCaptureEvent(recordedEvent, replayContext, error)) {
             cancelRawCaptureImportReplay();
             return false;
         }
     }
 
-    flushScriptOutputs();
+    flushRawCaptureReplayBatch();
+    flushScriptOutputsUnbounded();
     suppressRawCaptureProfileEvents_ = false;
     suppressRawCapturePlotSetupEvents_ = false;
     return true;
@@ -2712,6 +3150,11 @@ bool Application::replayRawCaptureEvent(const plot::RawCaptureEvent& event,
                                         transport::ConnectionContext& replayContext,
                                         std::string& error)
 {
+    if (event.type == plot::RawCaptureEventType::TxBytes) {
+        appendTransferRow({.timestampMs = event.timestampMs, .direction = "TX",
+            .endpoint = event.endpoint, .bytes = event.bytes, .message = event.writeStatus});
+        return true;
+    }
     if (event.type == plot::RawCaptureEventType::ProfileSet) {
         return applyRawCaptureRuntimeProfileEvent(event, false, error);
     }
@@ -2787,6 +3230,17 @@ bool Application::applyTransferFrameRuntimeProfileEvent(const scripting::StreamR
 void Application::replayRawCaptureBytes(const transport::ConnectionContext& replayContext,
                                         const std::vector<std::uint8_t>& bytes)
 {
+    enqueueRawCaptureBytes(replayContext, bytes);
+    flushRawCaptureReplayBatch();
+}
+
+void Application::enqueueRawCaptureBytes(const transport::ConnectionContext& replayContext,
+                                         const std::vector<std::uint8_t>& bytes)
+{
+    if (bytes.empty()) {
+        return;
+    }
+
     loggingFacade_.trace("raw_capture",
                          "raw replay bytes" + transportContextFields("raw_replay", replayContext) +
                              " bytes=" + std::to_string(bytes.size()) +
@@ -2798,9 +3252,10 @@ void Application::replayRawCaptureBytes(const transport::ConnectionContext& repl
         .bytes = bytes,
         .message = {},
     });
+    const auto chunkBytes = (std::max)(std::size_t{1U}, rawCaptureReplayChunkBytes_);
     std::size_t cursor = 0;
     while (cursor < bytes.size()) {
-        const auto chunkSize = (std::min)(kRawCaptureReplayChunkBytes, bytes.size() - cursor);
+        const auto chunkSize = (std::min)(chunkBytes, bytes.size() - cursor);
         std::vector<std::uint8_t> chunk(bytes.begin() + static_cast<std::ptrdiff_t>(cursor),
                                         bytes.begin() + static_cast<std::ptrdiff_t>(cursor + chunkSize));
         appendTransferFrameRows(dock::ReceiveRow{
@@ -2810,21 +3265,71 @@ void Application::replayRawCaptureBytes(const transport::ConnectionContext& repl
             .bytes = chunk,
             .message = {},
         });
-        scriptWorker_.postTransportBytes(transport::TransportBytesEvent{replayContext, std::move(chunk)});
-        if (runtimeConfig_.scripting.workerEnabled) {
-            // 核心流程：异步 worker 需要先等到脚本消费完当前 chunk，再把输出合并到回放结果。
-            scriptWorker_.waitIdle();
-        }
-        flushScriptOutputs();
         cursor += chunkSize;
     }
+
+    rawCaptureReplayBatchContext_ = replayContext;
+    cursor = 0;
+    if (!rawCaptureReplayBatchBytes_.empty()) {
+        const auto required = chunkBytes - rawCaptureReplayBatchBytes_.size();
+        const auto copied = (std::min)(required, bytes.size());
+        rawCaptureReplayBatchBytes_.insert(
+            rawCaptureReplayBatchBytes_.end(), bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(copied));
+        cursor = copied;
+        if (rawCaptureReplayBatchBytes_.size() == chunkBytes) {
+            scriptWorker_.postTransportBytes(
+                transport::TransportBytesEvent{rawCaptureReplayBatchContext_, std::move(rawCaptureReplayBatchBytes_)},
+                false);
+            rawCaptureReplayBatchBytes_.clear();
+            rawCaptureReplayPendingBytes_ += chunkBytes;
+        }
+    }
+    while (bytes.size() - cursor >= chunkBytes) {
+        std::vector<std::uint8_t> chunk(bytes.begin() + static_cast<std::ptrdiff_t>(cursor),
+                                        bytes.begin() + static_cast<std::ptrdiff_t>(cursor + chunkBytes));
+        scriptWorker_.postTransportBytes(
+            transport::TransportBytesEvent{rawCaptureReplayBatchContext_, std::move(chunk)}, false);
+        cursor += chunkBytes;
+        rawCaptureReplayPendingBytes_ += chunkBytes;
+        if (rawCaptureReplayPendingBytes_ >= kRawCaptureReplaySyncBatchBytes) {
+            flushRawCaptureReplayBatch();
+        }
+    }
+    if (cursor < bytes.size()) {
+        rawCaptureReplayBatchBytes_.insert(
+            rawCaptureReplayBatchBytes_.end(), bytes.begin() + static_cast<std::ptrdiff_t>(cursor), bytes.end());
+    }
+    if (rawCaptureReplayPendingBytes_ + rawCaptureReplayBatchBytes_.size() >= kRawCaptureReplaySyncBatchBytes) {
+        flushRawCaptureReplayBatch();
+    }
+}
+
+void Application::flushRawCaptureReplayBatch()
+{
+    if (!rawCaptureReplayBatchBytes_.empty()) {
+        rawCaptureReplayPendingBytes_ += rawCaptureReplayBatchBytes_.size();
+        scriptWorker_.postTransportBytes(
+            transport::TransportBytesEvent{rawCaptureReplayBatchContext_, std::move(rawCaptureReplayBatchBytes_)},
+            false);
+        rawCaptureReplayBatchBytes_.clear();
+    }
+    if (rawCaptureReplayPendingBytes_ == 0U) {
+        return;
+    }
+    rawCaptureReplayPendingBytes_ = 0U;
+    if (runtimeConfig_.scripting.workerEnabled) {
+        // 核心流程：连续 RX 事件只在此处等待一次，避免每个录制小块都做一次线程往返。
+        scriptWorker_.waitIdle();
+    }
+    // 导入期间必须无预算清空脚本输出，避免 pending 波形追加影响最终快照。
+    flushScriptOutputsUnbounded();
     flushPendingTransferFrameRows(std::numeric_limits<std::size_t>::max());
 }
 
 void Application::finishRawCaptureImportReplay()
 {
     auto& wave = dockStore_.waveState();
-    flushScriptOutputs();
+    flushScriptOutputsUnbounded();
     flushPendingTransferFrameRows(std::numeric_limits<std::size_t>::max());
     const auto importedSnapshot =
         wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), false);
@@ -2844,11 +3349,17 @@ void Application::cancelRawCaptureImportReplay()
 {
     suppressRawCaptureProfileEvents_ = false;
     suppressRawCapturePlotSetupEvents_ = false;
+    rawCaptureReplayPendingBytes_ = 0U;
+    rawCaptureReplayBatchBytes_.clear();
     dockStore_.waveState().buffer.setHistoryTrimSuspended(false);
 }
 
 bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error)
 {
+    if (capture.waveform) {
+        if (!importWaveCsvData(*capture.waveform, error)) return false;
+        return (capture.events.empty() && capture.payload.empty()) || importRawRecords(capture, error);
+    }
     if (!validateRawCaptureImport(capture, error)) {
         return false;
     }
@@ -3051,6 +3562,7 @@ void Application::refreshSelectedElfSymbolControls()
     }
 
     const auto luaSnapshot = scriptWorker_.snapshot();
+    std::string missingLabels;
     for (const auto& control : luaSnapshot.controlStates) {
         if (control.descriptor.type != scripting::ControlType::ElfSymbolCombo) {
             continue;
@@ -3061,7 +3573,13 @@ void Application::refreshSelectedElfSymbolControls()
         }
 
         const auto refreshed = elfStaticView_.findExactLabel(current->label);
-        if (!refreshed.has_value() || (refreshed->value == current->value && refreshed->type == current->type)) {
+        // 完整名称消失时保留原值，集中报告，避免误绑定同名或近似变量。
+        if (!refreshed.has_value()) {
+            if (!missingLabels.empty()) missingLabels += ", ";
+            missingLabels += current->label;
+            continue;
+        }
+        if (refreshed->value == current->value && refreshed->type == current->type) {
             continue;
         }
 
@@ -3079,13 +3597,21 @@ void Application::refreshSelectedElfSymbolControls()
     }
     flushScriptOutputs();
     syncDockState();
+    if (!missingLabels.empty()) {
+        const auto warning = "未找到变量，旧地址未更新: " + missingLabels;
+        setStatusMessage(warning, true);
+        loggingFacade_.warn("elf", warning);
+    }
 }
 
 void Application::resetWaveHistoryForTrigger(const WaveResetViewportTrigger trigger)
 {
+    importedWaveIncomplete_ = false;
+    importedWaveRange_ = "full";
     auto& wave = dockStore_.waveState();
     wave.buffer.clear();
     wave.rawCapture = {};
+    wave.view.auxiliaryCursors.clear();
     wave.analysisMarkers.clear();
     wave.channelSummaries.clear();
     wave.view.autoFollowLatest = true;
@@ -3109,6 +3635,7 @@ void Application::resetWaveHistoryForTrigger(const WaveResetViewportTrigger trig
 
 void Application::resetWaveHistory()
 {
+    if (dataTransferStatus().active) return;
     resetWaveHistoryForTrigger(WaveResetViewportTrigger::ManualClear);
 }
 
@@ -3160,6 +3687,7 @@ bool Application::exportWaveAnalysisReport(const std::filesystem::path& path, st
 
 std::optional<std::uint64_t> Application::nextWakeupAtMs() const
 {
+    if (dataTransferStatus().active) return nowMs();
     const auto scriptSnapshot = scriptWorker_.snapshot();
     const auto pendingWorkerRxBytes = scriptWorker_.pendingRxBytes();
     if (rawCaptureReplay_.loaded && rawCaptureReplay_.playing) {
@@ -3269,6 +3797,7 @@ void Application::syncDockState()
     lua.docks = scriptSnapshot.docks;
     lua.controls = scriptSnapshot.controls;
     lua.controlStates = scriptSnapshot.controlStates;
+    lua.businessUi = scriptSnapshot.businessUi;
 
     auto& wave = dockStore_.waveState();
     const auto waveRevision = wave.buffer.dataRevision();
@@ -3702,6 +4231,21 @@ bool Application::processTransportEvent(const transport::TransportEvent& event)
                 return processTransportBytesEvent(evt);
             } else if constexpr (std::is_same_v<T, transport::TransportTxEvent>) {
                 return processTransportTxEvent(evt);
+            } else if constexpr (std::is_same_v<T, transport::TransportWriteEvent>) {
+                plot::RawCaptureEvent raw{
+                    .type = plot::RawCaptureEventType::TxBytes,
+                    .timestampMs = evt.context.timestampMs,
+                    .bytes = evt.bytes,
+                    .endpoint = evt.context.endpoint,
+                    .sequence = rawEventSequence_ + 1,
+                    .writeStatus = evt.status,
+                };
+                appendRawCaptureEvent(raw);
+                if (evt.status != "sent") {
+                    appendTransferRow({.timestampMs = evt.context.timestampMs, .direction = "TX",
+                        .endpoint = evt.context.endpoint, .bytes = evt.bytes, .message = evt.status});
+                }
+                return true;
             }
             return false;
         },
@@ -3776,7 +4320,6 @@ bool Application::processTransportBytesEvent(const transport::TransportBytesEven
         return false;
     }
     replayReceiveHistory_ = false;
-    appendRawCaptureRecording(event);
     appendLiveRawCapture(event);
     scriptWorker_.postTransportBytes(event);
     loggingFacade_.trace("transport",
@@ -3879,6 +4422,8 @@ bool Application::applyScriptTransportStats(const scripting::ScriptRuntimeOutput
 
 bool Application::applyScriptTxOutputs(const scripting::ScriptRuntimeOutputBatch& batch)
 {
+    // 离线回调的发送意图直接丢弃，不能留在队列里等重新连接后执行。
+    if (dataImportActive_ || rawCaptureReplay_.loaded || replayReceiveHistory_) return false;
     bool changed = false;
     for (const auto& connection : batch.requestGuardResets) {
         txRequestGuardHalted_ = false;
@@ -3977,12 +4522,6 @@ bool Application::applyScriptRuntimeProfileEvents(const scripting::ScriptRuntime
         if (!suppressRawCaptureProfileEvents_) {
             appendRawCaptureEvent(event);
         }
-        if (!suppressRawCaptureProfileEvents_ && rawCaptureRecording_.isOpen()) {
-            std::string error;
-            if (!rawCaptureRecording_.appendEvent(event, error)) {
-                loggingFacade_.error("raw_capture", "录制 stream profile 事件失败: " + error);
-            }
-        }
         changed = true;
     }
     return changed;
@@ -4042,10 +4581,11 @@ bool Application::applyScriptPlotSetups(const std::vector<scripting::PlotSetup>&
     bool changed = false;
     for (const auto& setup : setups) {
         auto rawSetup = toRawPlotSetup(setup);
-        applyPlotSetup(rawSetup);
+        changed = applyPlotSetup(rawSetup) || changed;
+        // 导入保护只应用 Bit 开关，不能把被拒绝的整份 Lua 配置记成实际采集事件。
+        if (dockStore_.waveState().buffer.importedLabelsReadOnly()) continue;
         const auto timestampMs = activeConnection_.has_value() ? activeConnection_->timestampMs : nowMs();
         recordPlotSetupSnapshot(rawSetup, timestampMs);
-        changed = true;
     }
     return changed;
 }
@@ -4074,6 +4614,7 @@ std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> Application::drainS
 
 bool Application::appendScriptPlotRequestsToWave(std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> requests)
 {
+    if (dockStore_.waveState().buffer.importedLabelsReadOnly()) return false;
     bool changed = false;
     auto mergedRequests = mergeNonEmptyScriptPlotAppends(std::move(requests));
     auto& wave = dockStore_.waveState();
@@ -4188,6 +4729,7 @@ bool Application::processRequestTimeouts()
 
 bool Application::driveTxScheduler()
 {
+    if (dataImportActive_ || rawCaptureReplay_.loaded || replayReceiveHistory_) return false;
     bool changed = false;
     while (!activeWrite_.has_value() && !activeHalfDuplexRequest_.has_value() && !pendingTxQueue_.empty()) {
         if (!transport_ || transport_->state() != transport::TransportState::Open) {
@@ -4593,7 +5135,9 @@ void Application::respondDialog(const scripting::DialogEvent& event)
         dialogDedupeKeys_.erase(request.dedupeKey);
     }
     openDialogs_.erase(iter);
-    scriptWorker_.postDialogEvent(request.connection, event);
+    auto response = event;
+    response.runtimeGeneration = request.runtimeGeneration;
+    scriptWorker_.postDialogEvent(request.connection, std::move(response));
 }
 
 std::vector<scripting::FileDialogRequest> Application::drainFileDialogRequests()
@@ -4615,7 +5159,9 @@ void Application::respondFileDialog(const scripting::FileDialogEvent& event)
     }
     const auto request = iter->second;
     openFileDialogs_.erase(iter);
-    scriptWorker_.postFileDialogEvent(request.connection, event);
+    auto response = event;
+    response.runtimeGeneration = request.runtimeGeneration;
+    scriptWorker_.postFileDialogEvent(request.connection, std::move(response));
 }
 
 bool Application::flushScriptPlots()

@@ -3,8 +3,10 @@
 #include "protoscope/plot/oscilloscope.hpp"
 #include "protoscope/plot/wave_math.hpp"
 #include "protoscope/plot/wave_state.hpp"
+#include "protoscope/ui/ui_theme.hpp"
 
 #include <array>
+#include <cstdarg>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -19,10 +21,136 @@
 
 namespace protoscope::ui {
 
+inline ImVec4 cursorRgb(std::uint32_t rgb)
+{
+    return displayColor(ImVec4(((rgb >> 16) & 255) / 255.0F, ((rgb >> 8) & 255) / 255.0F,
+                               (rgb & 255) / 255.0F, 1.0F), activeWaveStyleTokens().plotBackground);
+}
+
+inline ImVec4 cursorImVec(plot::OverviewColor color)
+{
+    return {float(color.r), float(color.g), float(color.b), float(color.a)};
+}
+
+inline plot::OverviewColor cursorOverviewColor(ImVec4 color)
+{
+    return {color.x, color.y, color.z, color.w};
+}
+
+inline ImVec4 measurementCursorColor(const plot::WaveViewState& view, std::size_t index)
+{
+    return cursorImVec(view.cursorColors.resolve(index, index).color);
+}
+
+inline ImVec4 auxiliaryCursorColor(const plot::WaveViewState& view, const plot::WaveAuxiliaryCursor& cursor)
+{
+    return cursorImVec(view.cursorColors.resolve(cursor.id + 2, cursor.colorIndex + 2).color);
+}
+
+inline float wavePhosphorDepositionAlpha(ImVec4 color)
+{
+    const float initial = .20F * std::clamp(color.w, 0.F, 1.F);
+    if (!activeWaveStyleTokens().correctContrast || initial == 0.F) return initial;
+    const auto bg = activeWaveStyleTokens().plotBackground;
+    const plot::OverviewColor background{bg.x, bg.y, bg.z, 1};
+    for (int i = 0; i <= 64; ++i) {
+        const float alpha = std::lerp(initial, 1.F, i / 64.F);
+        if (plot::overviewContrast(plot::compositeOverviewColor(
+            {color.x, color.y, color.z, alpha}, background), background) >= 3) return alpha;
+    }
+    return 1.F;
+}
+
+inline ImU32 cursorGuardColor(ImVec4 color)
+{
+    return plot::overviewLuminance(cursorOverviewColor(color)) > .35 ? IM_COL32(0, 0, 0, 255) : IM_COL32(255, 255, 255, 255);
+}
+
+inline void drawCursorGuard(double x, ImVec4 color, float width = 4.F)
+{
+    const auto limits = ImPlot::GetPlotLimits();
+    ImPlot::PushPlotClipRect();
+    ImPlot::GetPlotDrawList()->AddLine(ImPlot::PlotToPixels(x, limits.Y.Min),
+        ImPlot::PlotToPixels(x, limits.Y.Max), cursorGuardColor(color), width);
+    ImPlot::PopPlotClipRect();
+}
+
+inline ImVec4 cursorLabelBackground(const plot::WaveViewState& view)
+{
+    return cursorImVec(view.cursorColors.labelBackground);
+}
+
+inline ImVec4 cursorLabelText(const plot::WaveViewState& view, std::uint64_t identity, std::size_t manualIndex)
+{
+    const auto choice = view.cursorColors.resolve(identity, manualIndex);
+    const bool highContrast = activeThemeDefinition().base == "debug_high_contrast";
+    const bool readable = choice.textPass && (!view.cursorColors.key.automatic || !highContrast || choice.textContrast >= 12);
+    return cursorImVec(readable ? choice.color : view.cursorColors.labelText);
+}
+
+// 不使用 ImPlot::Annotation 的身份色填充/经验黑白正文；所有读数共享可验收的表面。
+inline ImRect drawCursorReadoutLabel(const plot::WaveViewState& view, ImVec4 identityColor,
+    double x, double y, ImVec2 offset, const char* format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    const char* text = nullptr;
+    const char* end = nullptr;
+    ImFormatStringToTempBufferV(&text, &end, format, args);
+    va_end(args);
+    const auto textSize = ImGui::CalcTextSize(text, end);
+    const auto anchor = ImPlot::PlotToPixels(x, y);
+    const auto pos = ImPlot::GetPlotPos(), size = ImPlot::GetPlotSize();
+    const ImVec2 boxSize(textSize.x+12, textSize.y+8);
+    const ImVec2 min(std::clamp(anchor.x+offset.x, pos.x, (std::max)(pos.x, pos.x+size.x-boxSize.x)),
+                     std::clamp(anchor.y+offset.y-boxSize.y, pos.y, (std::max)(pos.y, pos.y+size.y-boxSize.y)));
+    const ImRect bounds(min, ImVec2(min.x+boxSize.x, min.y+boxSize.y));
+    // 读数是正文，不因手动游标身份色降低高对比主题12:1目标。
+    const auto background = cursorLabelBackground(view);
+    const auto foreground = cursorImVec(view.cursorColors.labelText);
+    ImPlot::PushPlotClipRect();
+    auto* draw = ImPlot::GetPlotDrawList();
+    draw->AddRectFilled(bounds.Min, bounds.Max, ImGui::ColorConvertFloat4ToU32(background), 3);
+    // ImGui 1.92.8 将 thickness/flags 换序；显式浮点厚度避免命中旧兼容重载。
+    draw->AddRect(bounds.Min, bounds.Max, ImGui::ColorConvertFloat4ToU32(identityColor), 3.F, 2.F, ImDrawFlags_None);
+    draw->AddText(ImVec2(min.x+6,min.y+4), ImGui::ColorConvertFloat4ToU32(foreground), text, end);
+    ImPlot::PopPlotClipRect();
+    return bounds;
+}
+
+inline plot::OverviewSelectionStyle overviewSelectionStyle(const plot::OverviewSelectionConfig& config)
+{
+    const auto& theme = activeWaveStyleTokens();
+    plot::OverviewSelectionStyle result;
+    result.automatic = config.automatic;
+    const auto color = config.fixedColor.value_or(std::array{theme.selectionColor.x, theme.selectionColor.y, theme.selectionColor.z});
+    result.fixedColor = {color[0], color[1], color[2], 1};
+    result.minAlpha = config.minAlpha.value_or(theme.selectionMinAlpha);
+    result.maxAlpha = config.maxAlpha.value_or(theme.selectionMaxAlpha);
+    // 单侧用户覆盖跨主题后冲突时，以显式覆盖为准收缩另一侧。
+    if (result.minAlpha > result.maxAlpha) {
+        if (config.minAlpha) result.maxAlpha = result.minAlpha;
+        else result.minAlpha = result.maxAlpha;
+    }
+    return result;
+}
+
+std::optional<plot::ChannelSpec> channelDisplayAffineTransform(
+    const plot::ChannelSpec& spec, plot::WaveDisplayFormula formula, double a, double b);
+bool fitChannelDisplayRange(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot,
+                           std::size_t channelIndex, double center, double height);
+bool alignWaveLayoutChannels(plot::WaveDockState& wave);
+bool commitWaveVerticalViewport(plot::WaveDockState& wave, const plot::WaveViewport& baseline,
+                                const std::vector<std::size_t>& channels);
+
 struct RenderBudget {
     std::size_t pointsPerChannel{1};
     std::size_t estimatedVerticesPerPoint{4};
 };
+
+void updateBitTransitionCounts(plot::WaveDockState& wave, const plot::ChannelView& channel,
+                                std::size_t channelIndex, plot::WaveTimeAxisSource axis,
+                                double minTime, double maxTime);
 
 struct WaveFrameData {
     plot::WaveSnapshot snapshot;
@@ -50,6 +178,14 @@ struct PlotRenderResult {
     std::optional<plot::MeasurementReadout> measurement;
     OverlayGeometry measurementOverlay{};
     OverlayGeometry legendOverlay{};
+};
+
+void normalizeOverviewEnvelope(std::vector<plot::EnvelopePoint>& envelope);
+void releaseOverviewDrag(plot::WaveDockState& wave);
+
+struct WaveMetricChip {
+    std::string label;
+    std::string value;
 };
 
 struct WavePlotOverlayPolicy {
@@ -162,9 +298,6 @@ float resolveMeasurementSafeRightX(float contentLeftX,
 MeasurementOverlayPlacementSize resolveMeasurementOverlayPlacementSize(const ImVec2& plotPos,
                                                                        const ImVec2& plotSize,
                                                                        float measurementSafeRightX);
-void drawWaveStatusOverlay(const plot::WaveViewState& view,
-                           const plot::WaveDisplayData* displayData = nullptr,
-                           const std::vector<std::size_t>* channelIndices = nullptr);
 bool drawRightPanelSplitter(
     const char* id, float& rightWidth, float minRightWidth, float minLeftWidth, float totalWidth, float thickness);
 bool drawHorizontalSplitter(
@@ -197,6 +330,10 @@ bool startViewportAnimation(plot::WaveViewState& view,
                             WaveViewportAutoFollowPolicy policy,
                             double durationSec = 0.16);
 bool advanceViewportAnimation(plot::WaveViewState& view, double deltaSec);
+bool applyFitVisibleWaveforms(plot::WaveDockState& wave,
+                              const plot::WaveSnapshot& fullSnapshot,
+                              const plot::WaveDisplayData& displayData,
+                              const std::vector<std::size_t>& visibleChannelIndices);
 bool applyFitVisibleWaveforms(plot::WaveViewState& view,
                               const plot::WaveSnapshot& fullSnapshot,
                               const plot::WaveDisplayData& displayData,
@@ -204,13 +341,11 @@ bool applyFitVisibleWaveforms(plot::WaveViewState& view,
 ZoomSelectionResult handleMainPlotZoomSelection(plot::WaveViewState& view, bool suppressEscapeCancel = false);
 bool handleActiveWaveformDoubleClickOffsetReset(plot::WaveDockState& wave,
                                                 const plot::WaveSnapshot& snapshot,
-                                                const BitLaneLayout& bitLayout,
                                                 const plot::WaveDisplayData& displayData,
                                                 const std::vector<std::size_t>& visibleChannelIndices,
                                                 const ImPlotPoint& mousePos,
                                                 double timeSnapDistance,
                                                 double valueSnapDistance);
-bool resetBitLaneYOffsetFromHit(plot::WaveDockState& wave, const BitLaneLayoutEntry& lane);
 const char* axisSourceName(plot::WaveTimeAxisSource source);
 plot::WaveViewport currentViewport(const plot::WaveViewState& view);
 void applyViewport(plot::WaveViewState& view,
@@ -300,6 +435,7 @@ BitLaneLayout buildBitLaneLayout(const plot::WaveSnapshot& snapshot,
                                  const ImVec2& plotSize);
 std::optional<BitLaneHit> findBitLaneAtPlotValue(const BitLaneLayout& layout, double plotY, double maxDistance);
 std::optional<plot::CursorReadout> findNearestBitTransition(const plot::WaveSnapshot& snapshot,
+                                                            const plot::WaveDisplayData& displayData,
                                                             const BitLaneLayout& layout,
                                                             double time,
                                                             double plotY,
@@ -316,16 +452,23 @@ std::optional<HoverReadout> findHoverReadout(
     double maxValueDistance,
     bool preferWaveformHoverReadout = true,
     plot::WaveBitDisplayReadoutPolicy bitDisplayReadoutPolicy = plot::WaveBitDisplayReadoutPolicy::MixedNearest,
-    bool activeBitLaneVisibleForReadout = false);
+    bool showHoverReadout = true);
 std::vector<CursorIntersectionReadout> collectCursorIntersectionReadouts(
     const plot::WaveViewState& view,
     const plot::WaveSnapshot& snapshot,
     const plot::WaveDisplayData& displayData,
     const std::vector<std::size_t>& visibleChannelIndices,
     double maxTimeDistance);
-bool bitLaneMeasurementActive(const plot::WaveViewState& view);
-bool activeBitLaneVisible(const plot::WaveViewState& view, const BitLaneLayout& layout);
+bool cursorPairHasCompleteReadouts(const std::array<std::optional<plot::CursorReadout>, 2>& cursorReadouts);
 bool cursorPairUsesBitLanes(const std::array<std::optional<plot::CursorReadout>, 2>& cursorReadouts);
+std::vector<WaveMetricChip> buildCursorMetricChips(const plot::WaveViewState& view,
+                                                   const plot::WaveSnapshot& snapshot,
+                                                   const plot::WaveDisplayData& displayData,
+                                                   const PlotRenderResult& result);
+std::vector<WaveMetricChip> buildMeasurementMetricChips(const plot::WaveViewState& view,
+                                                        const plot::WaveSnapshot& snapshot,
+                                                        const plot::WaveDisplayData& displayData,
+                                                        const PlotRenderResult& result);
 plot::MeasurementReadout makeBitIntervalMeasurement(const plot::CursorReadout& left, const plot::CursorReadout& right);
 std::optional<std::size_t> findBitDisplayChannelAtValue(const plot::WaveDockState& wave,
                                                         const plot::WaveSnapshot& snapshot,
@@ -379,6 +522,8 @@ int resolveMainPlotFitMouseButton(plot::WaveControlMode controlMode,
                                   int middleMouseButton);
 bool updateActiveChannelOffset(plot::WaveDockState& wave, double displayDelta);
 bool allowsMouseYOffsetDrag(plot::WaveMouseYOffsetDragMode mode, bool shiftDown);
+bool canHandleOscilloscopeChannelInteractions(const plot::WaveViewState& view, bool cursorDragClaimed);
+bool canDragWaveYOffset(const plot::WaveViewState& view, bool shiftDown, bool cursorDragClaimed);
 bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
                                            const plot::WaveSnapshot& snapshot,
                                            const plot::WaveDisplayData& displayData,
@@ -386,9 +531,12 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
                                            const ImPlotRect& limits,
                                            const ImPlotPoint& mousePos,
                                            double timeSnapDistance,
-                                           double valueSnapDistance);
+                                           double valueSnapDistance,
+                                           bool cursorDragClaimed);
 bool applyPendingVerticalAutoFitOverride(plot::WaveViewState& view, const plot::WaveDataBounds& bounds);
-bool resetChannelBitYOffsetToZero(plot::WaveDockState& wave, std::size_t channelIndex);
+bool applyWaveViewModeVerticalRange(plot::WaveViewState& view,
+                                    const std::optional<plot::WaveDataBounds>& stackedBounds);
+bool setWaveViewMode(plot::WaveViewState& view, plot::WaveViewMode mode);
 bool excludesLegendHiddenChannels(const plot::WaveViewState& view);
 std::string waveChannelItemLabel(std::string_view label, std::size_t channelIndex);
 bool channelHiddenByLegendState(const plot::WaveDockState& wave, std::size_t channelIndex);
@@ -457,19 +605,26 @@ plot::MeasurementReadout measureDisplayWindow(const plot::WaveDisplayData& displ
                                               double endTime,
                                               std::optional<std::size_t> referenceChannelIndex = std::nullopt,
                                               std::optional<double> manualReferenceValue = std::nullopt);
-void drawCursorIntervalHint(const plot::CursorReadout& left,
+void drawCursorIntervalHint(const plot::WaveViewState& view, const plot::CursorReadout& left,
                             const plot::CursorReadout& right,
                             const plot::CursorIntervalText& intervalText,
                             const ImPlotRect& limits);
-void drawCursorAnnotation(std::size_t cursorIndex,
+void drawCursorIntervalHint(const plot::WaveViewState& view, double leftTime,
+                            double rightTime,
+                            const plot::CursorIntervalText& intervalText,
+                            const ImPlotRect& limits);
+void drawCursorAnnotation(const plot::WaveViewState& view, std::size_t cursorIndex,
                           const plot::CursorReadout& readout,
                           const plot::ChannelView& channel,
                           std::string_view timeUnit,
                           std::string_view snapLabel);
-void drawCursorIntersectionReadouts(const std::vector<CursorIntersectionReadout>& readouts,
+void drawCursorIntersectionReadouts(const plot::WaveViewState& view, const std::vector<CursorIntersectionReadout>& readouts,
                                     const plot::WaveSnapshot& snapshot);
 
-void drawOverviewWindow(plot::WaveViewState& view,
+const plot::WaveDockState::OverviewRenderEntry& cachedOverviewChannel(
+    plot::WaveDockState& wave, const plot::ChannelView& channel, std::size_t channelIndex,
+    plot::WaveTimeAxisSource axis, double minTime, double maxTime, std::size_t width, std::size_t budget);
+void drawOverviewWindow(plot::WaveDockState& wave,
                         const plot::ViewConfig& config,
                         const plot::WaveSnapshot& fullSnapshot,
                         const plot::WaveDisplayData& displayData,
@@ -504,7 +659,7 @@ void renderWaveChannels(plot::WaveDockState& wave,
                         std::vector<std::size_t>& visibleChannelIndices,
                         BitLaneLayout& outBitLayout);
 PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
-                                      const WaveFrameData& frame,
+                                      WaveFrameData& frame,
                                       const WavePlotOverlayPolicy& overlayPolicy = {},
                                       WaveFrameState* frameState = nullptr);
 PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave,
