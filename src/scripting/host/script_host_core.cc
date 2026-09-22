@@ -3655,6 +3655,7 @@ std::optional<StreamParseBatch> ScriptHost::lastStreamParseBatch() const
 
 void ScriptHost::resetRuntime()
 {
+    ++runtimeGeneration_;
     scriptLoaded_ = false;
     lastError_.clear();
     docks_.clear();
@@ -3877,8 +3878,10 @@ void ScriptHost::onTransportBytes(const transport::TransportBytesEvent& event)
     handleRawTransportBytes(event, startedAt);
 }
 
-void ScriptHost::onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value)
+void ScriptHost::onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value,
+                           std::optional<std::uint64_t> generation)
 {
+    if (generation && *generation != runtimeGeneration_) return;
     if (executionFaulted()) return;
     const auto* descriptor = findControlDescriptor(controls_, id);
     if (descriptor == nullptr || !descriptor->visible || descriptor->disabled || descriptor->readOnly ||
@@ -4249,11 +4252,14 @@ void ScriptHost::onTxEvent(const transport::ConnectionContext& ctx, const TxEven
 
 void ScriptHost::onDialogEvent(const transport::ConnectionContext& ctx, const DialogEvent& event)
 {
+    if (event.runtimeGeneration && *event.runtimeGeneration != runtimeGeneration_) return;
     callbackOnDialog(ScriptHostContext{ctx}, event);
 }
 
 void ScriptHost::onFileDialogEvent(const transport::ConnectionContext& ctx, const FileDialogEvent& event)
 {
+    // 必须先验证代次，再授予文件路径权限；旧窗口不能授权新协议访问路径。
+    if (event.runtimeGeneration && *event.runtimeGeneration != runtimeGeneration_) return;
     if (event.state == "selected" && !event.path.empty() && fileIoConfig_.allowDialogPaths) {
         std::error_code errorCode;
         auto path = std::filesystem::weakly_canonical(std::filesystem::absolute(event.path), errorCode);
@@ -4487,6 +4493,7 @@ std::optional<DialogRequest> ScriptHost::protoDialog(DialogKind kind, const sol:
         .dedupeKey = luaStringField(table, "dedupe_key").value_or(""),
         .window = *window,
         .createdAtMs = createdAtMs,
+        .runtimeGeneration = scriptLoaded_ ? runtimeGeneration_ : runtimeGeneration_ + 1,
     };
     if (request.title.empty() || request.message.empty()) {
         error = "title 和 message 不能为空";
@@ -4529,12 +4536,13 @@ std::optional<FileDialogRequest> ScriptHost::protoFileDialog(FileDialogKind kind
     }
 
     // 成员函数只补齐宿主状态，Lua 参数解析保持在无状态 helper 中。
-    const FileDialogRequest request = makeFileDialogRequest(nextFileDialogId(),
+    FileDialogRequest request = makeFileDialogRequest(nextFileDialogId(),
                                                             *resolvedKind,
                                                             fileDialogConnectionContext(activeConnection_, createdAtMs),
                                                             table,
                                                             std::move(*filters),
                                                             createdAtMs);
+    request.runtimeGeneration = scriptLoaded_ ? runtimeGeneration_ : runtimeGeneration_ + 1;
     fileDialogRequests_.push_back(request);
     return request;
 }

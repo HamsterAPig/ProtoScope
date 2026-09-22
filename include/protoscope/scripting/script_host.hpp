@@ -158,6 +158,7 @@ struct ControlDescriptor {
     bool txSequenceLoop{false};
     std::vector<TxSequenceFieldDescriptor> txSequenceFields;
     TxSequenceValue txSequenceDefault;
+    std::uint64_t runtimeGeneration{0};
 };
 
 using ControlValue =
@@ -360,6 +361,7 @@ struct FileDialogRequest {
     std::string defaultPath{};
     std::vector<FileDialogFilter> filters{};
     std::uint64_t createdAtMs{0};
+    std::uint64_t runtimeGeneration{0};
 };
 
 struct FileDialogEvent {
@@ -369,6 +371,7 @@ struct FileDialogEvent {
     std::string path{};
     std::string error{};
     std::uint64_t timestampMs{0};
+    std::optional<std::uint64_t> runtimeGeneration;
 };
 
 struct DialogWindowOptions {
@@ -391,6 +394,7 @@ struct DialogRequest {
     std::string dedupeKey{};
     DialogWindowOptions window{};
     std::uint64_t createdAtMs{0};
+    std::uint64_t runtimeGeneration{0};
 };
 
 struct DialogEvent {
@@ -403,6 +407,7 @@ struct DialogEvent {
     std::string level{"info"};
     std::string dedupeKey{};
     std::uint64_t timestampMs{0};
+    std::optional<std::uint64_t> runtimeGeneration;
 };
 
 struct RealtimeOutputDiscardCounts {
@@ -449,7 +454,9 @@ public:
     bool applyStreamRuntimeProfileEvent(const StreamRuntimeProfileEvent& event, std::string& error);
     void clearAllStreamRuntimeProfiles();
     void resetStreamReplayState();
-    void onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value);
+    void onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value,
+                   std::optional<std::uint64_t> generation = {});
+    [[nodiscard]] std::uint64_t runtimeGeneration() const { return runtimeGeneration_; }
     [[nodiscard]] bool requestOscilloscopeToggle(const transport::ConnectionContext& ctx,
                                                  bool currentRunning,
                                                  bool targetRunning);
@@ -627,6 +634,7 @@ private:
     };
 
     bool scriptLoaded_{false};
+    std::uint64_t runtimeGeneration_{0};
     std::string scriptPath_;
     std::string protocolDirectory_;
     std::string lastError_;

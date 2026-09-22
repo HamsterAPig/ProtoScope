@@ -267,8 +267,9 @@ void ScriptHost::commitLoadedScript(std::unique_ptr<Runtime> runtime,
 {
     std::vector<ControlDescriptor> nextControls;
     std::unordered_map<std::string, ControlValue> nextControlValues;
-    for (const auto& dock : loadedScript->docks) {
-        for (const auto& control : dock.controls) {
+    for (auto& dock : loadedScript->docks) {
+        for (auto& control : dock.controls) {
+            control.runtimeGeneration = runtimeGeneration_ + 1;
             nextControls.push_back(control);
             const auto existing = previousControlValues.find(control.id);
             const auto* previous = findControlDescriptor(controls_, control.id);
@@ -285,6 +286,7 @@ void ScriptHost::commitLoadedScript(std::unique_ptr<Runtime> runtime,
 
     runtime->stream = std::move(loadedScript->streamSchema);
     runtime_ = std::move(runtime);
+    ++runtimeGeneration_;
     docks_ = std::move(loadedScript->docks);
     controls_ = std::move(nextControls);
     controlValues_ = std::move(nextControlValues);

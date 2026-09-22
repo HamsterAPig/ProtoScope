@@ -2085,7 +2085,8 @@ void Application::applyHistoryLimits(const config::GuiLogHistoryConfig& config)
     trimPendingTransferFrameRowsToLimit();
 }
 
-void Application::updateControlValue(const std::string& id, const scripting::ControlValue& value)
+void Application::updateControlValue(const std::string& id, const scripting::ControlValue& value,
+                                     std::optional<std::uint64_t> generation)
 {
     transport::ConnectionContext context;
     if (activeConnection_.has_value()) {
@@ -2097,7 +2098,7 @@ void Application::updateControlValue(const std::string& id, const scripting::Con
         context.timestampMs = nowMs();
         context.readyForIo = false;
     }
-    scriptWorker_.postControl(context, id, value);
+    scriptWorker_.postControl(context, id, value, generation);
     scriptWorker_.waitIdle();
     flushScriptOutputs();
     syncDockState();
@@ -5113,7 +5114,9 @@ void Application::respondDialog(const scripting::DialogEvent& event)
         dialogDedupeKeys_.erase(request.dedupeKey);
     }
     openDialogs_.erase(iter);
-    scriptWorker_.postDialogEvent(request.connection, event);
+    auto response = event;
+    response.runtimeGeneration = request.runtimeGeneration;
+    scriptWorker_.postDialogEvent(request.connection, std::move(response));
 }
 
 std::vector<scripting::FileDialogRequest> Application::drainFileDialogRequests()
@@ -5135,7 +5138,9 @@ void Application::respondFileDialog(const scripting::FileDialogEvent& event)
     }
     const auto request = iter->second;
     openFileDialogs_.erase(iter);
-    scriptWorker_.postFileDialogEvent(request.connection, event);
+    auto response = event;
+    response.runtimeGeneration = request.runtimeGeneration;
+    scriptWorker_.postFileDialogEvent(request.connection, std::move(response));
 }
 
 bool Application::flushScriptPlots()

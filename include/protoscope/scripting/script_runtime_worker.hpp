@@ -43,6 +43,7 @@ struct ScriptRuntimeSnapshot {
     std::size_t outputQueueSize{0};
     std::size_t postprocessWorkerThreads{1U};
     ScriptHostTransportStats lastTransportStats{};
+    std::uint64_t runtimeGeneration{0};
 };
 
 struct ScriptRuntimeOutputBatch {
@@ -88,7 +89,8 @@ public:
     void postTransportClose(transport::TransportCloseEvent event);
     void postTransportError(transport::TransportErrorEvent event);
     void postTransportBytes(transport::TransportBytesEvent event, bool mergeAdjacent = true);
-    void postControl(transport::ConnectionContext context, std::string id, ControlValue value);
+    void postControl(transport::ConnectionContext context, std::string id, ControlValue value,
+                     std::optional<std::uint64_t> generation = {});
     void postTick(std::uint64_t currentMs);
     void postTxEvent(transport::ConnectionContext context, TxEvent event);
     void postDialogEvent(transport::ConnectionContext context, DialogEvent event);

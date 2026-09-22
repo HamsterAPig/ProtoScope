@@ -1427,7 +1427,7 @@ void GuiRuntime::updateDynamicControlValueWithFeedback(const scripting::ControlD
 {
     const bool feedbackEnabled = application_.runtimeConfig().gui.interactionFeedback.enabled;
     const std::string previousStatus = application_.docks().configState().statusMessage;
-    application_.updateControlValue(descriptor.id, value);
+    application_.updateControlValue(descriptor.id, value, descriptor.runtimeGeneration);
     if (!feedbackEnabled) {
         return;
     }

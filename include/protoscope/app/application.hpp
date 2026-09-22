@@ -44,7 +44,8 @@ public:
     void openTransport();
     void closeTransport();
     bool sendManualPayload(const std::string& payload, bool hexMode);
-    void updateControlValue(const std::string& id, const scripting::ControlValue& value);
+    void updateControlValue(const std::string& id, const scripting::ControlValue& value,
+                            std::optional<std::uint64_t> generation = {});
     bool requestOscilloscopeToggle(bool currentRunning, bool targetRunning);
     bool restoreControlValue(const std::string& id, const scripting::ControlValue& value);
     void markCommConfigEdited(bool reconnectRequired);
