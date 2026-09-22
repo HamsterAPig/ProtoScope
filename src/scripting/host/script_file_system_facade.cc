@@ -60,6 +60,18 @@ bool ScriptHost::isFsPathAuthorized(const std::filesystem::path& path, bool writ
     return false;
 }
 
+std::pair<std::filesystem::path,std::uint64_t> ScriptHost::authorizeRecordExport(const std::string& pathText) const
+{
+    if (!fileIoConfig_.enabled) throw std::runtime_error("scripting.file_io is disabled");
+    if (pathText.empty() || pathText.size()>32768 || pathText.find('\0')!=std::string::npos)
+        throw std::invalid_argument("invalid record export path");
+    auto path=std::filesystem::u8path(pathText);
+    if (path.is_relative() && !protocolDirectory_.empty()) path=std::filesystem::path(protocolDirectory_)/path;
+    path=canonicalPath(path);
+    if (!isFsPathAuthorized(path,true)) throw std::runtime_error("record export path is not authorized");
+    return {std::move(path),fileIoConfig_.maxWriteFileSizeBytes};
+}
+
 bool ScriptHost::validateFsOpenRequest(const FsOpenRequest& request, std::string& error) const
 {
     if (!isFsPathAuthorized(request.path, request.writeMode)) {

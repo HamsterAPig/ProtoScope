@@ -674,6 +674,7 @@ private:
                                                     const sol::object& opts,
                                                     std::string& error) const;
     bool isFsPathAuthorized(const std::filesystem::path& path, bool writeAccess) const;
+    std::pair<std::filesystem::path,std::uint64_t> authorizeRecordExport(const std::string& path) const;
     bool validateFsOpenRequest(const FsOpenRequest& request, std::string& error) const;
     std::unique_ptr<FileHandle> createFsOpenHandle(const FsOpenRequest& request, std::string& error);
     std::tuple<sol::object, sol::object> protoFsRead(sol::state_view lua,

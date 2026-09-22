@@ -747,6 +747,10 @@ function on_file_dialog(ctx, evt) end
 ---@class ProtoFieldSort
 ---@field field string
 ---@field descending? boolean
+---@class ProtoRecordExport : ProtoRecordQuery
+---@field path string @遵循 file_io 授权，不能指向记录或 KV 目录。
+---@field format? 'psrec'|'csv' @默认 psrec。
+---@field overwrite? boolean @默认 false；提交时原子检查，不覆盖竞争者的新文件。
 ---@class ProtoStorageEvent
 ---@field status table
 ---@field task integer
@@ -756,6 +760,8 @@ function on_file_dialog(ctx, evt) end
 ---@field records ProtoDataRow[]
 ---@field snapshot? integer
 ---@field more boolean
+---@field processed integer @导出成功记录数；失败为 0，原目标保持不变。
+---@field path? string @导出目标。
 ---@class ProtoRecordStatus
 ---@field recording boolean
 ---@field recovered boolean
@@ -813,6 +819,10 @@ function proto.record.status() end
 ---@param options ProtoRecordQuery
 ---@return integer task
 function proto.record.query(options) end
+-- 导出全部匹配记录，保留 snapshot/conditions/sort，忽略 offset/limit。
+---@param options ProtoRecordExport
+---@return integer task
+function proto.record.export(options) end
 ---@param task integer
 function proto.record.cancel(task) end
 ---@param ctx ProtoConnectionContext

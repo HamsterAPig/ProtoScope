@@ -23,6 +23,8 @@ public:
     void setPublishObserver(std::function<void(const data::Record&)> observer) { publishObserver_ = std::move(observer); }
     std::uint64_t query(storage::Query query) { return store().query(std::move(query)); }
     void cancel(std::uint64_t task) { if (store_) store_->cancel(task); }
+    using ExportAuthorizer=std::function<std::pair<std::filesystem::path,std::uint64_t>(const std::string&)>;
+    void setExportAuthorizer(ExportAuthorizer authorizer) { exportAuthorizer_=std::move(authorizer); }
 
 private:
     storage::Store& store();
@@ -40,6 +42,7 @@ private:
     bool faultReported_{false};
     std::uint64_t nextPollAtMs_{0};
     std::function<void(const data::Record&)> publishObserver_;
+    ExportAuthorizer exportAuthorizer_;
 };
 
 } // namespace protoscope::scripting

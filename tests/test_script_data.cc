@@ -307,6 +307,52 @@ void workerCallbacks()
     }
     throw std::runtime_error("worker storage callback timeout");
 }
+
+void recordExport()
+{
+    Fixture f;
+    require(f.load(declaration+R"(
+        local exports=0
+        function on_open(ctx)
+            assert(not pcall(proto.record.export,{path="../outside.psrec"}))
+            assert(not pcall(proto.record.export,{path="x",format="unknown"}))
+            proto.record.start()
+        end
+        function on_record(ctx,evt)
+            if evt.operation=="start" then
+                assert(evt.ok,evt.error)
+                for i=1,4 do proto.data.publish(row(i)) end
+                proto.record.stop()
+            elseif evt.operation=="stop" then
+                assert(evt.ok,evt.error)
+                proto.record.export({path="result.psrec",dataset="sample",format="psrec",
+                    conditions={{field="counter",op="gt",value=2}},sort={field="counter",descending=true}})
+            elseif evt.operation=="export" then
+                exports=exports+1
+                if exports==1 then
+                    assert(evt.ok and evt.processed==2 and evt.snapshot and evt.path,evt.error)
+                    assert(#evt.records==0)
+                    proto.record.export({path="result.psrec",format="csv"})
+                elseif exports==2 then
+                    assert(not evt.ok and evt.processed==0)
+                    proto.emit("done","")
+                end
+            end
+        end
+    )"),"record export Lua fixture");
+    f.open();f.done();
+    require(std::filesystem::exists(f.directory.path()/"result.psrec"),"Lua export file exists");
+    scripting::FileIoConfig disabled;disabled.enabled=false;f.host.setFileIoConfig(disabled);
+    require(f.load(R"(
+        function on_open(ctx)
+            assert(not pcall(proto.record.export,{path="disabled.psrec"}))
+            proto.emit("done","")
+        end
+    )"),"disabled file I/O fixture");
+    f.open();
+    require(f.host.drainEvents().size()==1,"record export obeys file I/O disable");
+    require(!std::filesystem::exists(f.directory.path()/"disabled.psrec"),"disabled export creates no file");
+}
 }
 
 int main()
@@ -315,7 +361,7 @@ int main()
     for (const auto& [name, run] : std::initializer_list<std::pair<const char*,void(*)()>>{
              {"recording",recording},{"kv_reload",kvAndReload},{"validation",validation},
              {"declarations",declarations},{"worker_callbacks",workerCallbacks},{"field_bindings",fieldBindings},
-             {"binding_failures",bindingFailures},{"query_fields",queryFields}}) {
+             {"binding_failures",bindingFailures},{"query_fields",queryFields},{"record_export",recordExport}}) {
         try { std::cout << "[RUN] " << name << std::endl; run(); std::cout << "[PASS] " << name << std::endl; }
         catch (const std::exception& error) { ++failed; std::cerr << "[FAIL] " << name << ": " << error.what() << '\n'; }
     }

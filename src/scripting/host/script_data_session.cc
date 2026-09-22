@@ -304,6 +304,11 @@ sol::table ScriptDataSession::completionTable(sol::state_view lua, const storage
     result["ok"] = event.ok;
     result["error"] = event.error;
     result["more"] = event.more;
+    result["processed"] = event.processed;
+    if (!event.path.empty()) {
+        const auto utf8=event.path.generic_u8string();
+        result["path"] = std::string(utf8.begin(),utf8.end());
+    }
     if (event.snapshot) result["snapshot"] = *event.snapshot;
     auto rows = lua.create_table();
     for (std::size_t i = 0; i < event.records.size(); ++i) {
@@ -380,7 +385,7 @@ void ScriptDataSession::registerApi(sol::state_view lua, sol::table& proto)
         table["error"] = status.error;
         return table;
     });
-    record.set_function("query", [this](const sol::table& options) {
+    const auto queryOptions=[](const sol::table& options) {
         storage::Query query;
         query.dataset = options.get_or<std::string>("dataset", "");
         if (const auto value = options.get<sol::optional<std::string>>("device")) query.device = *value;
@@ -418,7 +423,22 @@ void ScriptDataSession::registerApi(sol::state_view lua, sol::table& proto)
                 throw std::invalid_argument("descending must be boolean");
             query.sort=data::FieldSort{entry.get<std::string>("field"),entry.get_or("descending",false)};
         }
-        return store().query(std::move(query));
+        return query;
+    };
+    record.set_function("query", [this,queryOptions](const sol::table& options) {
+        return store().query(queryOptions(options));
+    });
+    record.set_function("export", [this,queryOptions](const sol::table& options) {
+        requireActive();
+        if (!exportAuthorizer_) throw std::runtime_error("record export authorization unavailable");
+        const auto format=options.get_or<std::string>("format","psrec");
+        if (format!="psrec" && format!="csv") throw std::invalid_argument("export format must be psrec/csv");
+        const sol::object overwrite=options["overwrite"];
+        if (overwrite.valid() && overwrite.get_type()!=sol::type::lua_nil && overwrite.get_type()!=sol::type::boolean)
+            throw std::invalid_argument("overwrite must be boolean");
+        const auto [path,maxBytes]=exportAuthorizer_(options.get<std::string>("path"));
+        return store().exportRecords(path,format=="psrec" ? storage::ExportFormat::Psrec:storage::ExportFormat::Csv,
+            queryOptions(options),{maxBytes,options.get_or("overwrite",false)});
     });
     proto["record"] = record;
 }

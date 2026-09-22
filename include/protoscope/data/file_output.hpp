@@ -49,7 +49,7 @@ public:
         std::error_code ignored;
         if (!committed_) std::filesystem::remove(temporary_,ignored);
     }
-    bool commit(std::string& error)
+    bool commit(std::string& error,bool overwrite=true)
     {
         if (stop_.stop_requested()) {error="数据任务已取消";return false;}
         stream.flush();
@@ -57,12 +57,18 @@ public:
         stream.close();
         if (stream.fail()) {error="数据文件关闭失败";return false;}
 #ifdef _WIN32
-        if (!MoveFileExW(temporary_.c_str(),target_.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)) {
+        const auto flags=MOVEFILE_WRITE_THROUGH|(overwrite ? MOVEFILE_REPLACE_EXISTING:0);
+        if (!MoveFileExW(temporary_.c_str(),target_.c_str(),flags)) {
             error="数据文件替换失败: "+std::to_string(GetLastError());return false;
         }
 #else
         std::error_code ec;
-        std::filesystem::rename(temporary_,target_,ec);
+        if (overwrite) std::filesystem::rename(temporary_,target_,ec);
+        else {
+            // 硬链接原子创建目标，不能先 exists 再 rename 而覆盖竞争者的新文件。
+            std::filesystem::create_hard_link(temporary_,target_,ec);
+            if (!ec) {std::error_code ignored;std::filesystem::remove(temporary_,ignored);}
+        }
         if (ec) {error="数据文件替换失败: "+ec.message();return false;}
 #endif
         committed_=true;

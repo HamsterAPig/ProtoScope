@@ -97,3 +97,26 @@ descending 反转字段类型和值顺序；缺字段排在显式 null 之前（
 `data_table` 选择回调使用同一 ID 的十进制字符串，避免 UI 值转换损失精度。
 数据表内部查询由宿主消费，不进入脚本 `on_record`；脚本显式
 `proto.record.query` 仍按原有回调返回结果。
+# 异步记录导出
+
+```lua
+local task = proto.record.export({
+    path="telemetry.psrec", format="psrec", overwrite=false,
+    dataset="telemetry", snapshot=last_snapshot,
+    conditions={{field="temperature",op="gt",value=20.0}},
+    sort={field="temperature",descending=true}
+})
+-- on_record(ctx, evt): operation="export", task, ok, error, path, processed, snapshot
+```
+
+支持 `psrec` 与工具 `csv`，导出全部匹配记录，忽略分页的 `offset/limit`。
+未指定 snapshot 时创建固定快照；逐条读取，不复制全历史。结果的 `records` 为空，
+`processed` 在成功时报告总数，失败时为 0；导出不影响实时记录计数。
+`proto.record.cancel(task)` 可取消查询或导出；写入成功后再取消不会撤回已提交文件。
+
+遵循既有 `scripting.file_io.enabled`、协议目录、额外根和文件对话框写权限，
+并执行 `max_write_file_size_bytes`。默认不覆盖，`overwrite=true` 必须显式指定。
+存储层另外禁止导出到 records/KV 目录，避免覆盖数据库或 WAL。
+目录应已存在；超限、取消、磁盘写入或最终替换失败保留原文件，错误异步返回。
+数据读取线程串行处理查询与导出，长导出期间后续查询可能等待，取消请求不阻塞 UI。
+授权检查不构成针对恶意目录竞争的完整文件系统沙箱。

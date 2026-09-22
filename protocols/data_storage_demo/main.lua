@@ -1,6 +1,8 @@
--- 工业控件、数据发布、记录、固定快照历史表和 KV 示例；尚不包含文件交换。
+-- 连续发布、记录、历史表、异步导出与 KV 示例；暂存导入尚未接入。
 local sequence = 0
 local snapshot
+local export_dialogs = {}
+local export_task
 
 assert(proto.ui.set_menu({
     {id="telemetry_show",label="Telemetry",checkable=true,checked=true},
@@ -8,7 +10,11 @@ assert(proto.ui.set_menu({
     {id="record_actions",label="Recording",children={
         {id="record_start",label="Start"},
         {id="record_stop",label="Stop"},
-        {id="record_query",label="Query"}
+        {id="record_query",label="Query"},
+        {separator=true},
+        {id="export_psrec",label="Export PSREC"},
+        {id="export_csv",label="Export CSV"},
+        {id="export_cancel",label="Cancel Export",disabled=true}
     }}
 }))
 
@@ -68,7 +74,26 @@ function on_control(ctx, id, value)
         proto.record.stop()
     elseif id == "record_query" then
         proto.record.query({dataset = "telemetry", limit = 200})
+    elseif id == "export_psrec" or id == "export_csv" then
+        local format = id == "export_psrec" and "psrec" or "csv"
+        local dialog, err = proto.fs.open_file_dialog({mode="save", title="Export Records",
+            default_path="telemetry." .. format, filters={{name=format, patterns={"*." .. format}}}})
+        if dialog then export_dialogs[dialog] = format else proto.log("error", err) end
+    elseif id == "export_cancel" and export_task then
+        proto.record.cancel(export_task)
     end
+end
+
+function on_file_dialog(ctx, evt)
+    local format = export_dialogs[evt.id]
+    export_dialogs[evt.id] = nil
+    if not format or evt.state ~= "selected" or not evt.path then return end
+    if export_task then return end
+    local ok, task = pcall(proto.record.export, {path=evt.path, format=format, overwrite=true,
+        dataset="telemetry", snapshot=snapshot})
+    if not ok then proto.log("error", tostring(task)); return end
+    export_task = task
+    proto.ui.update_menu("export_cancel", {disabled=false})
 end
 
 function data()
@@ -85,6 +110,11 @@ function on_open(ctx)
 end
 
 function on_record(ctx, evt)
+    if evt.operation == "export" and evt.task == export_task then
+        export_task = nil
+        proto.ui.update_menu("export_cancel", {disabled=true})
+        if evt.ok then proto.status.set("Exported " .. evt.processed .. " records") end
+    end
     if not evt.ok then
         proto.log("error", evt.error)
         return
@@ -110,10 +140,8 @@ function on_timer(ctx, name)
     proto.status.set(string.format("Sample %d  %.2f C", sequence, latest.values.temperature))
     if sequence % 100 == 0 then
         proto.kv.set("device-a/sequence", sequence)
-        proto.record.stop()
-    else
-        proto.set_timer("sample", 100)
     end
+    proto.set_timer("sample", 100)
 end
 
 function on_kv(ctx, evt)

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -47,6 +48,12 @@ struct Query {
     std::optional<data::FieldSort> sort;
 };
 
+enum class ExportFormat { Psrec, Csv };
+struct ExportOptions {
+    std::uint64_t maxBytes{std::numeric_limits<std::uint64_t>::max()};
+    bool overwrite{true};
+};
+
 struct Completion {
     std::uint64_t task{0};
     std::string operation;
@@ -57,6 +64,8 @@ struct Completion {
     bool more{false};
     std::map<std::uint64_t, data::Schema> schemas;
     std::vector<std::uint64_t> rowIds;
+    std::filesystem::path path;
+    std::uint64_t processed{0};
 };
 
 class Store {
@@ -70,6 +79,8 @@ public:
     std::uint64_t stop();
     bool publish(std::vector<data::Record> records, std::string& error);
     std::uint64_t query(Query query);
+    // 导出所有匹配记录，复用固定快照、筛选及排序；不使用分页 offset/limit。
+    std::uint64_t exportRecords(std::filesystem::path path,ExportFormat format,Query query={},ExportOptions options={});
     void cancel(std::uint64_t task);
     std::optional<data::Value> get(const std::string& key) const;
     std::uint64_t set(std::string key, data::Value value);

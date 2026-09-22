@@ -1,5 +1,6 @@
 #include "protoscope/storage/store.hpp"
 #include "query_functions.hpp"
+#include "record_export.hpp"
 
 #include <sqlite3.h>
 
@@ -135,6 +136,39 @@ namespace {
         statement.text(1, key);
         return statement.row() ? statement.text(0) : std::string{};
     }
+
+    void validateQuery(const Query& query)
+    {
+        data::validateConditions(query.conditions);
+        if (query.sort && (query.sort->field.empty() || query.sort->field.size()>4096 ||
+                          query.sort->field.find('\0')!=query.sort->field.npos))
+            throw std::invalid_argument("无效排序字段");
+        if (query.limit==0 || query.limit>1000 || query.offset>static_cast<std::size_t>(INT64_MAX) ||
+            (query.snapshot && *query.snapshot<0) || (query.fromUs && query.toUs && *query.fromUs>*query.toUs) ||
+            query.dataset.size()>128 || (query.device && query.device->size()>4096))
+            throw std::invalid_argument("历史查询参数无效");
+    }
+
+    std::filesystem::path exportPath(const std::filesystem::path& root,const std::filesystem::path& path)
+    {
+        if (path.empty() || path.native().size()>32768 ||
+            path.native().find(std::filesystem::path::value_type{})!=std::filesystem::path::string_type::npos)
+            throw std::invalid_argument("invalid record export path");
+        const auto target=std::filesystem::weakly_canonical(std::filesystem::absolute(path));
+        const auto records=std::filesystem::weakly_canonical(root/"records");
+        const auto kv=std::filesystem::weakly_canonical(root/"kv");
+        // 导出不能覆盖数据库、WAL 或未来分卷；链接先解析到真实路径再判定目录边界。
+        for (auto parent=target;!parent.empty();) {
+            std::error_code ec;
+            if (parent==records || parent==kv ||
+                std::filesystem::equivalent(parent,records,ec) || std::filesystem::equivalent(parent,kv,ec))
+                throw std::invalid_argument("record export cannot target storage directories");
+            const auto next=parent.parent_path();
+            if (next==parent) break;
+            parent=next;
+        }
+        return target;
+    }
 }
 
 struct Store::Impl {
@@ -149,7 +183,10 @@ struct Store::Impl {
     struct ReadCommand {
         std::uint64_t task;
         Query query;
-        std::shared_ptr<std::atomic_bool> canceled;
+        std::shared_ptr<std::stop_source> canceled;
+        std::filesystem::path exportPath;
+        ExportFormat format{ExportFormat::Psrec};
+        ExportOptions exportOptions;
     };
 
     std::filesystem::path root;
@@ -161,7 +198,7 @@ struct Store::Impl {
     std::condition_variable idle;
     std::deque<Command> writes;
     std::deque<ReadCommand> reads;
-    std::map<std::uint64_t, std::shared_ptr<std::atomic_bool>> cancellations;
+    std::map<std::uint64_t, std::shared_ptr<std::stop_source>> cancellations;
     std::vector<Completion> completions;
     std::map<std::string, data::Bytes> cache;
     std::size_t cacheBytes{0};
@@ -253,7 +290,7 @@ struct Store::Impl {
         {
             std::lock_guard lock(mutex);
             stopping = true;
-            for (const auto& [id, canceled] : cancellations) canceled->store(true);
+            for (const auto& [id, canceled] : cancellations) canceled->request_stop();
         }
         changed.notify_all();
         writer.join();
@@ -435,13 +472,15 @@ struct Store::Impl {
                 reads.pop_front();
                 reading = true;
             }
-            Completion result{command.task, "query", false};
+            const bool exporting=!command.exportPath.empty();
+            Completion result{command.task, exporting ? "export":"query", false};
+            result.path=command.exportPath;
             try {
-                if (command.canceled->load()) throw std::runtime_error("查询已取消");
+                if (command.canceled->stop_requested()) throw std::runtime_error("查询已取消");
                 Database db(root / "records" / "records.sqlite", true);
                 registerQueryFunctions(db.get());
                 sqlite3_progress_handler(db.get(), 1000, [](void* flag) {
-                    return static_cast<std::atomic_bool*>(flag)->load() ? 1 : 0;
+                    return static_cast<std::stop_source*>(flag)->stop_requested() ? 1 : 0;
                 }, command.canceled.get());
                 db.exec("BEGIN");
                 auto cutoff = command.query.snapshot;
@@ -484,11 +523,31 @@ struct Store::Impl {
                     statement.text(parameter++,query.sort->field);
                     statement.text(parameter++,query.sort->field);
                 }
-                statement.integer(parameter++, static_cast<std::int64_t>(query.limit + 1));
-                statement.integer(parameter, static_cast<std::int64_t>(query.offset));
+                statement.integer(parameter++, exporting ? -1:static_cast<std::int64_t>(query.limit + 1));
+                statement.integer(parameter, exporting ? 0:static_cast<std::int64_t>(query.offset));
+                if (exporting) {
+                    std::map<std::uint64_t,data::Schema> definitions;
+                    Statement versions(db,"SELECT id,definition FROM schemas WHERE (?='' OR dataset=?) LIMIT 1025");
+                    versions.text(1,query.dataset);versions.text(2,query.dataset);
+                    std::size_t schemaBytes=0;
+                    while (versions.row()) {
+                        if (command.canceled->stop_requested()) throw std::runtime_error("record export canceled");
+                        const auto encoded=versions.blob(1);
+                        if (definitions.size()>=1024 || encoded.size()>kRecordLimits.maxBytes-schemaBytes)
+                            throw std::runtime_error("export schema metadata exceeds limit");
+                        schemaBytes+=encoded.size();
+                        definitions.emplace(static_cast<std::uint64_t>(versions.integer(0)),
+                            data::schemaFromValue(data::decodeValue(encoded,kRecordLimits)));
+                    }
+                    result.processed=exportRecordFile(command.exportPath,command.format,definitions,[&]() -> std::optional<data::Record> {
+                        if (command.canceled->stop_requested()) throw std::runtime_error("record export canceled");
+                        if (!statement.row()) return std::nullopt;
+                        return data::recordFromValue(data::decodeValue(statement.blob(1),kRecordLimits));
+                    },command.canceled->get_token(),command.exportOptions);
+                } else {
                 std::size_t resultBytes = 0;
                 while (statement.row()) {
-                    if (command.canceled->load()) throw std::runtime_error("查询已取消");
+                    if (command.canceled->stop_requested()) throw std::runtime_error("查询已取消");
                     if (result.records.size() == query.limit) { result.more = true; break; }
                     const auto payload = statement.blob(1);
                     // 最多 16 个未消费查询共享结果内存预算，页大小不等于无界字节数。
@@ -520,7 +579,8 @@ struct Store::Impl {
                     result.records.push_back(std::move(record));
                     result.rowIds.push_back(static_cast<std::uint64_t>(statement.integer(0)));
                 }
-                if (command.canceled->load()) throw std::runtime_error("查询已取消");
+                if (command.canceled->stop_requested()) throw std::runtime_error("查询已取消");
+                }
                 result.ok = true;
             } catch (const std::exception& error) {
                 result.error = error.what();
@@ -607,20 +667,13 @@ bool Store::publish(std::vector<data::Record> records, std::string& error)
 
 std::uint64_t Store::query(Query query)
 {
-    data::validateConditions(query.conditions);
-    if (query.sort && (query.sort->field.empty() || query.sort->field.size()>4096 ||
-                      query.sort->field.find('\0')!=query.sort->field.npos))
-        throw std::invalid_argument("无效排序字段");
-    if (query.limit == 0 || query.limit > 1000 || query.offset > static_cast<std::size_t>(INT64_MAX) ||
-        (query.snapshot && *query.snapshot < 0) || (query.fromUs && query.toUs && *query.fromUs > *query.toUs)) {
-        throw std::invalid_argument("历史查询参数无效");
-    }
+    validateQuery(query);
     std::lock_guard lock(impl_->mutex);
     if (impl_->stopping || impl_->pendingQueries >= 16 || impl_->pendingTasks >= 1024) {
         throw std::runtime_error("查询队列已满或正在关闭");
     }
     const auto task = impl_->nextTask++;
-    auto canceled = std::make_shared<std::atomic_bool>(false);
+    auto canceled = std::make_shared<std::stop_source>();
     impl_->cancellations.emplace(task, canceled);
     impl_->reads.push_back({task, std::move(query), std::move(canceled)});
     ++impl_->pendingTasks;
@@ -629,11 +682,29 @@ std::uint64_t Store::query(Query query)
     return task;
 }
 
+std::uint64_t Store::exportRecords(std::filesystem::path path,ExportFormat format,Query query,ExportOptions options)
+{
+    validateQuery(query);
+    if (format!=ExportFormat::Psrec && format!=ExportFormat::Csv)
+        throw std::invalid_argument("unsupported record export format");
+    path=exportPath(impl_->root,path);
+    std::lock_guard lock(impl_->mutex);
+    if (impl_->stopping || impl_->pendingQueries>=16 || impl_->pendingTasks>=1024)
+        throw std::runtime_error("export queue full or closing");
+    const auto task=impl_->nextTask++;
+    auto canceled=std::make_shared<std::stop_source>();
+    impl_->cancellations.emplace(task,canceled);
+    impl_->reads.push_back({task,std::move(query),std::move(canceled),std::move(path),format,options});
+    ++impl_->pendingTasks;++impl_->pendingQueries;
+    impl_->changed.notify_all();
+    return task;
+}
+
 void Store::cancel(std::uint64_t task)
 {
     std::lock_guard lock(impl_->mutex);
     const auto found = impl_->cancellations.find(task);
-    if (found != impl_->cancellations.end()) found->second->store(true);
+    if (found != impl_->cancellations.end()) found->second->request_stop();
 }
 
 std::optional<data::Value> Store::get(const std::string& key) const
@@ -668,7 +739,7 @@ std::vector<Completion> Store::poll()
     result.swap(impl_->completions);
     impl_->pendingTasks -= result.size();
     for (const auto& completion : result) {
-        if (completion.operation == "query") --impl_->pendingQueries;
+        if (completion.operation == "query" || completion.operation == "export") --impl_->pendingQueries;
     }
     return result;
 }
