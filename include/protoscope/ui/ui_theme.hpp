@@ -3,6 +3,9 @@
 #include "protoscope/config/config.hpp"
 
 #include <imgui.h>
+#include <cstdint>
+#include <string>
+#include <vector>
 
 namespace protoscope::ui {
 
@@ -58,6 +61,13 @@ struct WaveStyleTokens {
     ImVec4 measurementChipBorder;
     ImVec4 measurementChipLabel;
     ImVec4 measurementChipValue;
+    ImVec4 selectionColor{0.267F, 0.467F, 0.667F, 1.F};
+    std::vector<ImVec4> channelPalette{};
+    std::vector<ImVec4> cursorPalette{};
+    bool correctContrast{true};
+    bool lightPersistence{false};
+    float selectionMinAlpha{0.10F};
+    float selectionMaxAlpha{0.28F};
     float gridMajorWidth{1.0F};
     float gridMinorTickWidth{1.0F};
     float gridCenterWidth{1.4F};
@@ -68,12 +78,19 @@ struct UiThemeDefinition {
     config::GuiTheme theme{config::GuiTheme::ProfessionalDark};
     UiStyleTokens ui{};
     WaveStyleTokens wave{};
+    std::string id{"professional_dark"};
+    std::string name{"专业深色"};
+    std::string base{"professional_dark"};
 };
 
 const UiThemeDefinition& uiThemeDefinition(config::GuiTheme theme);
 const UiStyleTokens& activeUiStyleTokens();
 const WaveStyleTokens& activeWaveStyleTokens();
 void applyUiTheme(config::GuiTheme theme);
+void applyUiTheme(const UiThemeDefinition& definition);
+std::uint64_t activeThemeRevision();
+const UiThemeDefinition& activeThemeDefinition();
+ImVec4 displayColor(ImVec4 color, ImVec4 background, float opacity = 1.F, float minimumContrast = 3.F);
 
 // 兼容既有调用；返回当前活动主题令牌。
 const UiStyleTokens& defaultUiStyleTokens();
@@ -92,5 +109,8 @@ bool drawToolbarSectionButton(const char* label,
 void drawHeaderBadge(const char* label, const ImVec4& color, bool filled = false);
 bool drawDangerIconButton(const char* label, const char* tooltip);
 bool drawGhostIconButton(const char* label, const char* tooltip);
+// 成对调用；高对比禁用正文与表面分开淡化，保留字体核心对比度和边界状态反馈。
+void beginDisabled(bool disabled = true);
+void endDisabled();
 
 } // namespace protoscope::ui

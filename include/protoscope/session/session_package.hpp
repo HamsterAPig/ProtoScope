@@ -19,10 +19,16 @@ struct SessionPackageData {
     std::vector<SessionPackageEntry> entries;
 };
 
+struct SessionRawCaptureSlice {
+    std::uint64_t offset{0};
+    std::uint64_t size{0};
+};
+
 std::string encodeSessionPackage(const SessionPackageData& package);
 std::optional<SessionPackageData> decodeSessionPackage(std::string_view bytes, std::string& error);
 bool writeSessionPackage(const std::filesystem::path& path, const SessionPackageData& package, std::string& error);
-std::optional<SessionPackageData> readSessionPackage(const std::filesystem::path& path, std::string& error);
+std::optional<SessionPackageData> readSessionPackage(const std::filesystem::path& path, std::string& error,
+                                                    SessionRawCaptureSlice* rawSlice = nullptr);
 const SessionPackageEntry* findSessionPackageEntry(const SessionPackageData& package, std::string_view name);
 
 } // namespace protoscope::session

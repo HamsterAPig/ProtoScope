@@ -37,17 +37,18 @@ namespace {
         return host + ":" + std::to_string(port);
     }
 
-    std::pair<bool, std::string> sendUdpBytes(asio::ip::udp::socket& socket,
+    std::pair<std::size_t, std::string> sendUdpBytes(asio::ip::udp::socket& socket,
                                               std::mutex& mutex,
                                               const asio::ip::udp::endpoint& remote,
                                               const std::vector<std::uint8_t>& bytes)
     {
         try {
             std::lock_guard lock(mutex);
-            socket.send_to(asio::buffer(bytes), remote);
-            return {true, {}};
+            asio::error_code error;
+            const auto written = socket.send_to(asio::buffer(bytes), remote, 0, error);
+            return {written, error ? error.message() : std::string{}};
         } catch (const std::exception& ex) {
-            return {false, ex.what()};
+            return {0, ex.what()};
         }
     }
 
@@ -199,9 +200,9 @@ bool UdpPeerTransport::send(std::vector<std::uint8_t> bytes)
         return false;
     }
 
-    const auto [ok, error] = sendUdpBytes(runtime_->socket, runtime_->socketMutex, runtime_->remoteEndpoint, bytes);
-    if (ok) {
-        addTx(bytes.size());
+    const auto [written, error] = sendUdpBytes(runtime_->socket, runtime_->socketMutex, runtime_->remoteEndpoint, bytes);
+    recordWrite(*context_, bytes, written, "sent");
+    if (error.empty() && written == bytes.size()) {
         return true;
     }
 
@@ -219,12 +220,12 @@ bool UdpPeerTransport::enqueueSend(TransportTxTask task)
     }
     asio::post(runtime_->ioContext, [this, txTask = std::move(task)]() mutable {
         const auto writeStartedAtMs = nowMs();
-        const auto [ok, error] =
+        const auto [written, error] =
             sendUdpBytes(runtime_->socket, runtime_->socketMutex, runtime_->remoteEndpoint, txTask.payload);
         const auto finishedAtMs = nowMs();
 
         TransportTxState state = TransportTxState::Sent;
-        if (!ok) {
+        if (!error.empty() || written != txTask.payload.size()) {
             setState(TransportState::Error);
             if (context_.has_value()) {
                 auto errorContext = *context_;
@@ -233,19 +234,20 @@ bool UdpPeerTransport::enqueueSend(TransportTxTask task)
             }
             state = TransportTxState::Rejected;
         } else {
-            addTx(txTask.payload.size());
             if (txTask.timeoutMs > 0 && finishedAtMs > writeStartedAtMs &&
                 finishedAtMs - writeStartedAtMs > txTask.timeoutMs) {
                 state = TransportTxState::Timeout;
             }
         }
 
+        if (context_) recordWrite(*context_, txTask.payload, written,
+            state == TransportTxState::Timeout ? "written_timeout" : "sent");
         pushEvent(TransportTxEvent{
             .requestId = txTask.requestId,
             .kind = txTask.kind,
             .state = state,
             .error = error,
-            .bytes = txTask.payload.size(),
+            .bytes = written,
             .queuedAtMs = txTask.queuedAtMs,
             .finishedAtMs = finishedAtMs,
         });

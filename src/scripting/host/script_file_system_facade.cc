@@ -60,6 +60,31 @@ bool ScriptHost::isFsPathAuthorized(const std::filesystem::path& path, bool writ
     return false;
 }
 
+std::pair<std::filesystem::path,std::uint64_t> ScriptHost::authorizeRecordExport(const std::string& pathText) const
+{
+    if (!fileIoConfig_.enabled) throw std::runtime_error("scripting.file_io is disabled");
+    if (pathText.empty() || pathText.size()>32768 || pathText.find('\0')!=std::string::npos)
+        throw std::invalid_argument("invalid record export path");
+    auto path=std::filesystem::u8path(pathText);
+    if (path.is_relative() && !protocolDirectory_.empty()) path=std::filesystem::path(protocolDirectory_)/path;
+    path=canonicalPath(path);
+    if (!isFsPathAuthorized(path,true)) throw std::runtime_error("record export path is not authorized");
+    return {std::move(path),fileIoConfig_.maxWriteFileSizeBytes};
+}
+
+std::pair<std::filesystem::path,std::uint64_t> ScriptHost::authorizeRecordImport(const std::string& pathText) const
+{
+    if (!fileIoConfig_.enabled) throw std::runtime_error("scripting.file_io is disabled");
+    if (pathText.empty() || pathText.size()>32768 || pathText.find('\0')!=std::string::npos)
+        throw std::invalid_argument("invalid record import path");
+    auto path=std::filesystem::u8path(pathText);
+    if (path.is_relative() && !protocolDirectory_.empty()) path=std::filesystem::path(protocolDirectory_)/path;
+    path=canonicalPath(path);
+    // 保存对话框给出的仅写授权不能被导入借用；源大小由后台读取时再次校验。
+    if (!isFsPathAuthorized(path,false)) throw std::runtime_error("record import path is not authorized");
+    return {std::move(path),fileIoConfig_.maxFileSizeBytes};
+}
+
 bool ScriptHost::validateFsOpenRequest(const FsOpenRequest& request, std::string& error) const
 {
     if (!isFsPathAuthorized(request.path, request.writeMode)) {
@@ -106,6 +131,7 @@ std::unique_ptr<ScriptHost::FileHandle> ScriptHost::createFsOpenHandle(const FsO
     handle->path = request.path;
     handle->readable = request.readMode;
     handle->writable = request.writeMode;
+    handle->append = request.mode == "append";
 
     auto openMode = std::ios::binary;
     if (request.readMode) {
@@ -118,6 +144,15 @@ std::unique_ptr<ScriptHost::FileHandle> ScriptHost::createFsOpenHandle(const FsO
     if (!handle->stream.is_open()) {
         error = "打开文件失败: " + request.path.generic_string();
         return nullptr;
+    }
+    if (request.mode == "append") {
+        std::error_code sizeError;
+        handle->bytesWritten = std::filesystem::file_size(request.path, sizeError);
+        if (sizeError || handle->bytesWritten > fileIoConfig_.maxWriteFileSizeBytes) {
+            error = sizeError ? "读取文件大小失败: " + sizeError.message()
+                             : "文件大小超过 max_write_file_size_bytes";
+            return nullptr;
+        }
     }
     return handle;
 }
@@ -179,6 +214,9 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsRead(sol::state_view lua
     auto& stream = iter->second->stream;
     stream.read(reinterpret_cast<char*>(buffer.bytes.data()), static_cast<std::streamsize>(buffer.bytes.size()));
     const auto readCount = stream.gcount();
+    if (stream.bad() || (stream.fail() && !stream.eof())) {
+        return fail("读取文件失败");
+    }
     if (readCount <= 0) {
         return fail("eof");
     }
@@ -201,10 +239,23 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsWrite(sol::state_view lu
         return fail(error);
     }
     auto& handle = *iter->second;
-    if (handle.bytesWritten + bytes->size() > fileIoConfig_.maxWriteFileSizeBytes) {
+    if (handle.append) {
+        // 同一文件可以有多个追加句柄；每次写入重新读取已提交长度。
+        std::error_code sizeError;
+        handle.bytesWritten = std::filesystem::file_size(handle.path, sizeError);
+        if (sizeError) {
+            return fail("读取文件大小失败: " + sizeError.message());
+        }
+    }
+    // 限额包含追加前的文件内容，并用减法避免长度相加溢出。
+    if (handle.bytesWritten > fileIoConfig_.maxWriteFileSizeBytes ||
+        bytes->size() > fileIoConfig_.maxWriteFileSizeBytes - handle.bytesWritten) {
         return fail("写入大小超过 max_write_file_size_bytes");
     }
     handle.stream.write(reinterpret_cast<const char*>(bytes->data()), static_cast<std::streamsize>(bytes->size()));
+    if (handle.append) {
+        handle.stream.flush();
+    }
     if (!handle.stream.good()) {
         return fail("写入文件失败");
     }
@@ -218,8 +269,18 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsClose(sol::state_view lu
     if (iter == fileHandles_.end()) {
         return script_host_lua::luaOkResult(lua, false, "文件句柄已关闭");
     }
+    auto& handle = *iter->second;
+    bool failed = handle.stream.bad() || (handle.writable && handle.stream.fail());
+    if (handle.writable) {
+        handle.stream.flush();
+        failed = failed || handle.stream.fail();
+    }
+    // EOF 是读取结束而非关闭失败；先保存真实 I/O 错误，再单独检查 close。
+    handle.stream.clear();
+    handle.stream.close();
+    failed = failed || handle.stream.fail();
     fileHandles_.erase(iter);
-    return script_host_lua::luaOkResult(lua, true, std::string{});
+    return script_host_lua::luaOkResult(lua, !failed, failed ? "刷新或关闭文件失败" : std::string{});
 }
 
 std::tuple<sol::object, sol::object> ScriptHost::protoFsStat(sol::state_view lua, const std::string& pathText)
@@ -337,13 +398,16 @@ void ScriptHost::pumpFileSendJob(std::uint64_t jobId)
     }
     auto& job = jobIter->second;
     const std::size_t maxInflight = std::max<std::size_t>(1, fileIoConfig_.sendFile.maxInflightChunks);
-    while (!job.eof && job.inflight < maxInflight) {
+    while (!job.eof && job.inflight.size() < maxInflight) {
         sol::table readOpts = runtime_->lua.create_table();
         readOpts["max_bytes"] = static_cast<int>(job.chunkSize);
         const auto offset = job.nextOffset;
         const auto [bufferObject, readError] =
             protoFsRead(luaView(), job.handleId, sol::make_object(runtime_->lua, readOpts));
         if (!bufferObject.valid() || bufferObject.get_type() == sol::type::lua_nil) {
+            if (readError.is<std::string>() && readError.as<std::string>() != "eof") {
+                protoLog("error", "proto.fs.send_file 读取分块失败: " + readError.as<std::string>());
+            }
             job.eof = true;
             break;
         }
@@ -363,10 +427,10 @@ void ScriptHost::pumpFileSendJob(std::uint64_t jobId)
         txRequests_.back().fileOffset = offset;
         txRequests_.back().fileTotal = job.total;
         job.nextOffset += txRequests_.back().payload.size();
-        ++job.inflight;
+        job.inflight.insert(request->id);
     }
 
-    if (job.eof && job.inflight == 0) {
+    if (job.eof && job.inflight.empty()) {
         const auto handleId = job.handleId;
         fileSendJobs_.erase(jobIter);
         protoFsClose(luaView(), handleId);

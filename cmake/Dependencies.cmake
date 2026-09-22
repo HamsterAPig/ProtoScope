@@ -2,6 +2,11 @@ include_guard(GLOBAL)
 
 include(FetchContent)
 
+add_library(protoscope_sqlite STATIC ${PROJECT_SOURCE_DIR}/3rdparty/sqlite/sqlite3.c)
+target_include_directories(protoscope_sqlite PUBLIC ${PROJECT_SOURCE_DIR}/3rdparty/sqlite)
+target_compile_definitions(protoscope_sqlite PRIVATE SQLITE_THREADSAFE=1 SQLITE_OMIT_LOAD_EXTENSION)
+target_link_libraries(protoscope_sqlite PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+
 add_subdirectory(3rdparty/spdlog)
 add_subdirectory(3rdparty/yaml-cpp)
 

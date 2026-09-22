@@ -1,6 +1,7 @@
 #pragma once
 
 #include "protoscope/app/adaptive_performance.hpp"
+#include "protoscope/app/data_transfer_task.hpp"
 #include "protoscope/config/config.hpp"
 #include "protoscope/dock/docks.hpp"
 #include "protoscope/logging/logging.hpp"
@@ -43,9 +44,12 @@ public:
     void openTransport();
     void closeTransport();
     bool sendManualPayload(const std::string& payload, bool hexMode);
-    void updateControlValue(const std::string& id, const scripting::ControlValue& value);
+    void updateControlValue(const std::string& id, const scripting::ControlValue& value,
+                            std::optional<std::uint64_t> generation = {});
     bool requestOscilloscopeToggle(bool currentRunning, bool targetRunning);
     bool restoreControlValue(const std::string& id, const scripting::ControlValue& value);
+    void activateBusinessMenu(const std::string& id, bool checked, std::uint64_t generation, std::uint64_t revision);
+    void interactDataTable(scripting::DataTableEvent event);
     void markCommConfigEdited(bool reconnectRequired);
     void markProtocolEdited();
     void setStatusMessage(std::string message, bool markDirty = false);
@@ -53,12 +57,29 @@ public:
     void clearExpiredTransientStatus(std::uint64_t nowMs);
     void setLogLevel(config::LogLevel level);
     void setGuiTheme(config::GuiTheme theme);
+    void setGuiTheme(std::string_view theme);
     bool setSendHexMode(bool enabled);
     bool exportWaveRawCapture(const std::filesystem::path& path, std::string& error) const;
     bool exportWaveRawCapture(const std::filesystem::path& path,
                               const plot::CsvExportRange& range,
                               std::string& error) const;
     bool importWaveCsvData(const plot::WaveCsvData& data, std::string& error);
+    std::optional<plot::WaveCsvData> captureWaveData(const plot::CsvExportRange& range, std::string& error) const;
+    bool importRawRecords(const plot::RawCaptureFileData& data, std::string& error);
+    bool startDataImport(const std::filesystem::path& path, std::string& error);
+    void confirmDataImport(bool parseWaveform = false) { parseImportedWave_ = parseWaveform; dataTransfer_.confirm(); }
+    void cancelDataTransfer() { dataTransfer_.cancel(); }
+    DataTransferStatus dataTransferStatus() const {
+        auto status = dataTransfer_.status();
+        status.active = status.active || dataImportActive_;
+        return status;
+    }
+    void rememberDataExport(const config::DataExportConfig& value) { runtimeConfig_.gui.lastDataExport = value; }
+    void rememberFileDialogPreferences(const config::GuiFileDialogConfig& value) { runtimeConfig_.gui.fileDialogs = value; }
+    bool startDataExport(const std::filesystem::path& path, int content, int format,
+                         const plot::CsvExportRange& waveRange, int recordRange,
+                         std::uint64_t recordBeginMs, std::uint64_t recordEndMs,
+                         plot::WaveCsvShape shape, std::string& error);
     bool exportWaveCsv(const std::filesystem::path& path,
                        plot::WaveCsvShape shape,
                        const plot::CsvExportRange& range,
@@ -68,6 +89,8 @@ public:
                              std::string& error) const;
     bool exportSessionPackage(const std::filesystem::path& path, std::string& error) const;
     bool importSessionPackage(const std::filesystem::path& path, std::string& error);
+    bool applySessionPackage(const session::SessionPackageData& package, bool restoreCapture, std::string& error,
+                             bool allowMissingProtocol = false);
     bool importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error);
 
     struct RawCaptureReplayStatus {
@@ -270,7 +293,6 @@ private:
     void appendTransferRow(dock::ReceiveRow row);
     [[nodiscard]] bool validateOfflineReplayTransport(std::string& error) const;
     void appendLiveRawCapture(const transport::TransportBytesEvent& event);
-    void appendRawCaptureRecording(const transport::TransportBytesEvent& event);
     void appendRawCaptureEvent(const plot::RawCaptureEvent& event);
     bool validateRawCaptureImport(const plot::RawCaptureFileData& capture, std::string& error) const;
     void prepareRawCaptureImportReplay(const plot::RawCaptureFileData& capture);
@@ -283,8 +305,11 @@ private:
                                transport::ConnectionContext& replayContext,
                                std::string& error);
     bool applyRawCaptureRuntimeProfileEvent(const plot::RawCaptureEvent& event, bool cleared, std::string& error);
+    void enqueueRawCaptureBytes(const transport::ConnectionContext& replayContext,
+                                const std::vector<std::uint8_t>& bytes);
     void replayRawCaptureBytes(const transport::ConnectionContext& replayContext,
                                const std::vector<std::uint8_t>& bytes);
+    void flushRawCaptureReplayBatch();
     bool applyTransferFrameRuntimeProfileEvent(const scripting::StreamRuntimeProfileEvent& event, std::string& error);
     void finishRawCaptureImportReplay();
     void cancelRawCaptureImportReplay();
@@ -331,6 +356,10 @@ private:
     std::optional<TransferFrameParserState> transferFrameParser_;
     plot::RawCaptureStreamWriter rawCaptureRecording_;
     RawCaptureReplayState rawCaptureReplay_;
+    std::size_t rawCaptureReplayChunkBytes_{1024U};
+    std::size_t rawCaptureReplayPendingBytes_{0U};
+    std::vector<std::uint8_t> rawCaptureReplayBatchBytes_;
+    transport::ConnectionContext rawCaptureReplayBatchContext_{};
     bool replayReceiveHistory_{false};
     std::deque<transport::TransportEvent> pendingTransportEvents_;
     std::deque<PendingRxBytes> pendingRxByteChunks_;
@@ -339,6 +368,19 @@ private:
     CommPressureDebugLogState commPressureDebugLog_{};
     bool suppressRawCaptureProfileEvents_{false};
     bool suppressRawCapturePlotSetupEvents_{false};
+    std::uint64_t rawEventSequence_{0};
+    std::size_t retainedRawBytes_{0};
+    DataTransferTask dataTransfer_;
+    bool dataImportActive_{false};
+    bool importedWaveIncomplete_{false};
+    std::string importedWaveRange_{"full"};
+    bool importReplacedWave_{false};
+    bool importReplacedRecords_{false};
+    bool applyingImportContext_{false};
+    bool parseImportedWave_{false};
+    std::optional<std::future<bool>> importReset_;
+    std::optional<std::future<std::pair<bool, std::string>>> importProfile_;
+    bool pumpDataImport();
 };
 
 } // namespace protoscope::app

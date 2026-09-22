@@ -122,11 +122,11 @@ void GuiRuntime::handleGlobalShortcuts()
         return;
     }
     if (shortcutPressed(ShortcutAction::ImportRawWave)) {
-        openRawCaptureImportDialog();
+        openUnifiedDataImport();
         return;
     }
     if (shortcutPressed(ShortcutAction::ExportRawWave)) {
-        openRawCaptureExportDialog();
+        openUnifiedDataExport(0);
         return;
     }
     if (shortcutPressed(ShortcutAction::ToggleRawRecording)) {

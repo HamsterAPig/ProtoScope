@@ -1,9 +1,28 @@
+add_library(protoscope_data STATIC
+    data/model.cc data/query.cc data/table.cc data/psrec.cc data/csv.cc data/record_csv.cc)
+target_include_directories(protoscope_data PUBLIC ${PROJECT_SOURCE_DIR}/include)
+target_compile_features(protoscope_data PUBLIC cxx_std_20)
+
+add_library(protoscope_storage STATIC
+    storage/store.cc storage/query_functions.cc storage/record_export.cc storage/record_import.cc storage/volume_catalog.cc
+    storage/record_query.cc storage/record_volume.cc storage/record_session.cc storage/legacy_record_migration.cc
+    storage/record_volume_coordinator.cc)
+target_include_directories(protoscope_storage PUBLIC ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(protoscope_storage PUBLIC protoscope_data PRIVATE protoscope_sqlite Threads::Threads)
+target_compile_features(protoscope_storage PUBLIC cxx_std_20)
+if(MSVC)
+    target_compile_options(protoscope_data PRIVATE /utf-8)
+    target_compile_options(protoscope_storage PRIVATE /utf-8)
+endif()
+
 add_library(protoscope_plot STATIC
     plot/csv_data_file.cc
     plot/oscilloscope.cc
     plot/raw_capture_file.cc
     plot/wave_fft.cc
     plot/wave_math.cc
+    plot/wave_query.cc
+    plot/wave_analysis.cc
 )
 target_include_directories(protoscope_plot
     PUBLIC
@@ -12,6 +31,7 @@ target_include_directories(protoscope_plot
 target_link_libraries(protoscope_plot
     PUBLIC
         protoscope_pocketfft
+        Threads::Threads
 )
 target_compile_features(protoscope_plot PUBLIC cxx_std_20)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
@@ -72,6 +92,16 @@ target_link_libraries(protoscope_ui_layout
 target_compile_features(protoscope_ui_layout PUBLIC cxx_std_20)
 
 add_library(protoscope_scripting STATIC
+    scripting/host/industrial_control.cc
+    scripting/host/tabs_layout.cc
+    scripting/host/business_ui_session.cc
+    scripting/host/control_data_binding.cc
+    scripting/host/data_table_session.cc
+    scripting/host/control_properties.cc
+    scripting/host/script_data_session.cc
+    scripting/host/script_data_dispatcher.cc
+    scripting/host/data_api_module.cc
+    scripting/host/lua_execution_guard.cc
     scripting/frame_stream_parser.cc
     scripting/pipeline_threading.cc
     scripting/script_runtime_worker.cc
@@ -96,6 +126,8 @@ target_include_directories(protoscope_scripting
 )
 target_link_libraries(protoscope_scripting
     PUBLIC
+        protoscope_storage
+        protoscope_plot
         protoscope_protocol_utils
         protoscope_transport
         protoscope_lua
@@ -196,6 +228,7 @@ target_compile_features(protoscope_startup_diagnostics PUBLIC cxx_std_20)
 add_library(protoscope_app STATIC
     app/adaptive_performance.cc
     app/application.cc
+    app/data_transfer_task.cc
 )
 target_include_directories(protoscope_app
     PUBLIC
@@ -236,6 +269,7 @@ if(PROTOSCOPE_ENABLE_GUI)
         ui/editable_combo.cc
         ui/keyboard_shortcuts.cc
         ui/ui_theme.cc
+        ui/theme_manager.cc
         ui/runtime/gui_runtime_core.cc
         ui/runtime/shortcut_controller.cc
         ui/runtime/ui_components.cc
@@ -248,6 +282,9 @@ if(PROTOSCOPE_ENABLE_GUI)
         ui/docks/dock_host.cc
         ui/docks/offline_replay_dock.cc
         ui/docks/lua_dock_host.cc
+        ui/docks/lua_tabs.cc
+        ui/docks/data_table_dock.cc
+        ui/runtime/business_menu.cc
         ui/dialogs/dialog_host.cc
         ui/wave/wave_channel_legend.cc
         ui/wave/wave_channel_legend_bar.cc

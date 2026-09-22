@@ -68,20 +68,42 @@ gui:
     chinese_glyph_range: simplified_common
 ```
 
-- `theme`：全局界面主题，支持 `professional_dark`（默认，保持原有专业深色外观）
-  和 `debug_high_contrast`（示波器高对比网格）。缺失或填写非法值时回退到
-  `professional_dark`。
+- `theme`：主题字符串 ID，内置 `professional_dark`（默认，深墨蓝灰分层与蓝青强调）、
+  `debug_high_contrast`（近黑底、明亮信号与清晰焦点）和 `professional_light`（冷白底、白面板与蓝强调）。
+  可选择配置文件旁 `themes` 目录中的 YAML 用户主题。启动加载失败时显示专业深色，
+  但保留原 ID；缺失字段默认 `professional_dark`。详见 [主题管理与模板](theme-management.md)。
 - 运行中可通过 `设置 -> 主题` 即时切换，无需重启，也不会重载当前协议。
   切换会把配置标记为待保存；启用自动保存时自动写回，否则使用
   `文件 -> 保存配置` 持久化。
 - 主题属于本机全局偏好，不随协议切换或现场包导入改变。
+- `gui.wave.overview_selection`：概览缩放框可选覆盖，`mode` 为 `auto`（默认）或 `fixed`，
+  `fixed_color` 为 `"#RRGGBB"`，`min_alpha`、`max_alpha` 满足 `0 <= min <= max <= 1`。
+  未覆盖项随主题变化；主题默认 alpha 范围为 `0.10..0.28`。
+- `gui.wave.cursor_auto_color`：默认 `true`（旧配置缺省也启用），根据实际显示色与背景分配 A/B/T 身份色；
+  `false` 恢复主题 `wave.cursor_palette` 索引映射，与主题 `wave.correct_contrast` 独立。
+  后者保留源 RGBA，先补最小 alpha，再按需修正明暗；显式全透明与关闭修正不变。
+  自动色不能保证任意自定义背景与任意多通道均有解，无解时采用文字回退和图形护边。
 - `show_app_header`：是否显示应用顶部 header。
 - `window.title`：窗口标题。
 - `window.width` / `window.height`：初始窗口尺寸。
 - `window.maximized`：启动时是否最大化。
 - `font.chinese_glyph_range`：`simplified_common` 或 `full`；`full` 适合需要显示更多 CJK 字形的场景。
 
+### gui.file_dialogs
+
+- `last_import_directory`：内置导入及回放载入共用的历史目录。
+- `last_export_directory`：内置导出、报告、日志、请求追踪和录制共用的历史目录。
+
+文件对话框确认后立即保存，取消浏览不更新；目录失效时逐级回退，不创建目录、不改写历史。
+未配置新导出字段时从 `gui.last_data_export.directory` 迁移；目录偏好保存不提交其他未保存设置。
+ELF 文件继续按协议记忆，Lua 自定义文件对话框与协议根目录选择不使用这两个字段。
+
 ### gui.wave
+
+波形状态统一显示在底部状态栏，独立于连接信息和通用操作结果。
+普通状态最多每 500ms 更新一次；等待不足 300ms 不显示，已显示的等待至少保留 1000ms。
+新错误立即显示；关闭功能、切换协议或清空历史时立即清除过期状态。
+这些固定显示时间不影响 FFT 计算、曲线刷新、采集频率或窗口 FPS，也不提供额外配置项。
 
 ```yaml
 gui:
@@ -111,8 +133,12 @@ gui:
     max_render_points_per_channel: 1200
     max_render_vertices: 60000
     peak_detect_downsample: true
+    downsample_mode: stable_edges
+    bit_dense_render_mode: compressed_steps
     downsample_start_multiplier: 2.0
     overview_max_samples: 20000
+    overview_normalize_channels: false
+    overview_show_bit_channels: false
     max_total_samples: 0
     min_visible_time_span: 0.001
     reset_history_on_time_reset: true
@@ -132,7 +158,8 @@ gui:
 - `channel_double_click_action`：`reset_all`、`reset_scale_offset`、`reset_scale`、`reset_offset`。
 - `x_axis_double_click_action`：`fit_full_history` 或 `fit_visible_window`。
 - `y_axis_double_click_action`：`fit_visible_channels` 或 `fit_active_channel`。默认聚合所有图例可见模拟通道；激活通道模式只取当前激活模拟通道，激活通道无效、隐藏或为 bit-display 时回退到可见模拟通道。
-- `y_axis_double_click_adjust_offset`：Y 轴双击拟合时是否同步调整通道 offset，默认 `false`，只调整 Scale 并保留原 Offset；设为 `true` 时保持当前主图 Y 视口不变，并把目标模拟波形完整移入视口内部。
+- `y_axis_double_click_adjust_offset`：保留旧配置的读写兼容；主图适配现在统一写入
+  `scale` 和 `offset`，将目标模拟通道居中适配到固定 Y 基准，此字段不再改变适配行为。
 - `hidden_channel_policy`：`visible_only` 或 `include_hidden`，控制隐藏通道是否参与派生视图。
 - `cursor_extreme_snap_policy`：`nearest_waveform` 或 `viewport_zone`。
 - `mouse_y_offset_drag_mode`：`direct`、`shift` 或 `disabled`，控制鼠标拖动通道 Y 偏移的触发方式。
@@ -143,9 +170,22 @@ gui:
 - `legend_channel_name_max_width`：通道图例名称显示宽度上限，单位为 ImGui 逻辑像素；`0.0`、缺失或非正值表示不限制。作用于展开态表格、紧凑态浮窗和底部通道卡片，超长名称会裁剪并在悬浮时显示完整 tooltip。
 - `vertical_auto_fit_multiplier`：纵向自动适配余量倍数，默认 `1.25`，即数据包络约占视图高度 80%。
 - `max_render_points_per_channel` / `max_render_vertices`：单通道和总顶点渲染预算。
-- `peak_detect_downsample`：高密度主图是否启用示波器式 peak-detect 降采样，默认 `true`。开启时每个桶保留首点、极小值、极大值和末点并连成单条轨迹；关闭时回退旧的 min/max 包络渲染，便于对比。
-- `downsample_start_multiplier`：可见点数超过预算多少倍后开始降采样。
-- `overview_max_samples`：总览数据上限。
+- `downsample_mode`：仅通过配置文件选择模拟波形显示降采样策略，不增加界面控件或专用文件监听。默认、缺省及未知值均为 `stable_edges`，使用固定时间桶并保留边沿相邻点，主图、堆叠和 Split 直接绘制查询轨迹，避免二次压缩。`legacy_uniform` 恢复 `e6320e1` 的快照可见范围、窗口均匀四点分桶，以及主图／Split 的原有绘制分支。启动读取、现有“重新加载配置”和保存均支持此项；重载保留原有工作区与应用配置流程及副作用。模式改变会刷新显示、概览与包络缓存并重建余辉，不改变游标改进、概览配色、FFT 计算、测量读数或数字通道算法。
+- `peak_detect_downsample`：默认 `true`。在 `legacy_uniform` 中，高密度主图开启时按原有 peak-detect 路径绘制首点、极小值、极大值、末点轨迹，关闭时绘制 min/max 包络；Split 开启时直接绘制查询轨迹，关闭且可见点数超过单通道预算时绘制包络。在 `stable_edges` 中，查询轨迹始终直接绘制，此开关不再二次压缩模拟通道。
+- 旧版兼容限制：`legacy_uniform` 且 `peak_detect_downsample: false` 时，查询降采样后的数据还会进入旧包络路径，单点桶或常量桶的 min/max 相等，零高度竖线可能不可见。这是保留的 `e6320e1` 表现；查看连续轨迹可保持 `peak_detect_downsample: true`。
+- `bit_dense_render_mode`：密集 bit 轨迹样式，默认 `compressed_steps`。`compressed_steps` 用预算内阶梯表达首尾状态及桶内跳变活动；`activity_band` 用半透明带标记桶内同时出现高低电平的区间，稳定区间保留电平线。缺省或未知字符串使用默认值。两种模式均在低密度时恢复精确阶梯，不改变原始数据或游标读数，也不增加 Lua 字段。
+- 绘图预算同时约束压缩输出和 Glow/线段的顶点开销。每通道以 256 点基础块建立二合一摘要，追加和裁剪只更新边界及其上层；改变颜色、偏移、缩放、布局不重建原始摘要。初次建立摘要和松手后的分析输入提取仍有与输入规模相关的开销。
+- 拖动期间停止提交统计与 FFT 重计算，旧结果显示为待更新；没有旧结果时显示空状态。松手后使用独立输入快照后台计算，过时查询结果不会覆盖新查询。只移动频谱坐标轴不改变 FFT 输入窗口；持续采集可以发布同查询最近完成的快照。
+- 余辉在拖动期间暂停累积，显示轻量轨迹。旧视口纹理在交互后失效，松手按最终坐标重建一次；冻结状态随后继续冻结，不自动恢复数据跟随。触发模式在 32 个时间分区中各选至多一个真实触发，采用原始样本插值确定触发时间，各轨迹共享绘图预算。分屏继续使用普通轨迹回退。
+- `downsample_start_multiplier`：最小为 `1.0`，默认 `2.0`；在 `legacy_uniform` 中控制主图进入峰值检测／包络绘制的原始可见点数阈值，Split 包络仍沿用单通道预算阈值。在 `stable_edges` 中控制稀疏点标记阈值，不延后查询层降采样。两种模式的查询输出均严格遵守点数预算，此倍数不会放大预算；概览高密度填充包络维持原算法，概览显示数据、FFT 显示与触发余辉取点传递同一模式。
+- `overview_max_samples`：概览桶数上限，每桶最多两个极值点；0 仅取消此项限制。
+- `overview_show_bit_channels`：默认 `false`，Bit 通道不参与概览绘制和纵轴范围计算。
+  开启后 Bit 通道先绘制，普通通道覆盖其上，选框与游标位于最上层；遵循现有图例隐藏状态。
+  所有通道均为 Bit 且关闭此项时，概览仍保留完整历史时间导航。仅支持配置文件控制。
+  预算公式、降采样阈值与当前限制见[波形渲染计划](wave-view-render-plan.md#渲染预算)。
+- `overview_normalize_channels`：默认 `false`；开启后各 CH 的全历史概览包络独立映射到
+  `[-1,1]`，常量位于 0，空通道和非有限值跳过。只改变概览绘制，不修改主图
+  `scale`、`offset`、共享缓存或实际读数；隐藏策略、时间导航和游标保持原行为。
 - `max_total_samples`：每通道历史样本上限，`0` 表示不额外限制。
 - `min_visible_time_span`：X 轴最小可见时间跨度。
 - `reset_history_on_time_reset`：时间轴重置时是否清空历史。

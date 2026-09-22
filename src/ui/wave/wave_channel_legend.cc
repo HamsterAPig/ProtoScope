@@ -1,3 +1,4 @@
+#include "protoscope/ui/ui_theme.hpp"
 #include "wave_render_service.hpp"
 
 #include <algorithm>
@@ -101,7 +102,8 @@ void drawChannelLegendPopup(plot::WaveDockState& wave,
 
     char labelBuffer[128]{};
     std::snprintf(labelBuffer, sizeof(labelBuffer), "%s", updated.label.c_str());
-    if (ImGui::InputText("标签", labelBuffer, sizeof(labelBuffer))) {
+    if (ImGui::InputText("标签", labelBuffer, sizeof(labelBuffer),
+        wave.buffer.importedLabelsReadOnly() ? ImGuiInputTextFlags_ReadOnly : 0)) {
         updated.label = labelBuffer;
         applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
     }
@@ -110,20 +112,20 @@ void drawChannelLegendPopup(plot::WaveDockState& wave,
     ImGui::Separator();
     const bool bitChannel = bitDisplayEnabled(updated.bitDisplay);
     if (bitChannel) {
-        ImGui::BeginDisabled();
+        protoscope::ui::beginDisabled();
     }
     if (ImGui::InputDouble("比率", &updated.ratio, 0.01, 0.1, "%.6g") && !bitChannel) {
         applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
     }
     if (bitChannel) {
-        ImGui::EndDisabled();
-        ImGui::BeginDisabled();
+        protoscope::ui::endDisabled();
+        protoscope::ui::beginDisabled();
     }
     if (ImGui::InputDouble("缩放", &updated.scale, 0.0, 0.0, "%.6g") && !bitChannel) {
         applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
     }
     if (bitChannel) {
-        ImGui::EndDisabled();
+        protoscope::ui::endDisabled();
     }
     double& offsetValue = bitChannel ? updated.bitDisplay.yOffset : updated.offset;
     if (ImGui::InputDouble("偏移", &offsetValue, 0.1, 1.0, "%.6g")) {
@@ -142,10 +144,12 @@ void drawChannelLegendPopup(plot::WaveDockState& wave,
     if (ImGui::Button(active ? "激活中" : "设为激活")) {
         wave.view.measurementChannelIndex = channelIndex;
     }
+    protoscope::ui::beginDisabled(wave.buffer.importedLabelsReadOnly());
     if (ImGui::Button("恢复默认标签")) {
         updated.label = defaultSpec.label;
         applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
     }
+    protoscope::ui::endDisabled();
     if (!bitChannel && ImGui::Button("恢复默认变换")) {
         updated.ratio = defaultSpec.ratio;
         updated.scale = defaultSpec.scale;

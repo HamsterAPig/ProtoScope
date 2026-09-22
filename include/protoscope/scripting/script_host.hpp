@@ -3,10 +3,16 @@
 #include "protoscope/plot/oscilloscope.hpp"
 #include "protoscope/protocol_utils/codec.hpp"
 #include "protoscope/scripting/file_io_config.hpp"
+#include "protoscope/scripting/business_ui.hpp"
+#include "protoscope/data/model.hpp"
+#include "protoscope/storage/config.hpp"
+#include "protoscope/scripting/data_table.hpp"
+#include "protoscope/scripting/execution_config.hpp"
 #include "protoscope/scripting/frame_stream_parser.hpp"
 #include "protoscope/transport/transport.hpp"
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -46,7 +52,43 @@ enum class ControlType {
     ElfSymbolCombo,
     ValueTable,
     TxSequence,
+    Label,
+    Readout,
+    Indicator,
+    Progress,
+    SliderInt,
+    SliderFloat,
+    RadioGroup,
+    TextArea,
+    TabSelection,
+    DataTable,
 };
+
+// 新控件复用既有标量值表示，绘制类型和持久化类型仍保持独立。
+constexpr ControlType controlValueKind(ControlType type)
+{
+    switch (type) {
+    case ControlType::Label:
+    case ControlType::Readout:
+    case ControlType::TabSelection:
+    case ControlType::DataTable:
+    case ControlType::TextArea: return ControlType::InputText;
+    case ControlType::Indicator: return ControlType::Checkbox;
+    case ControlType::Progress:
+    case ControlType::SliderFloat: return ControlType::InputFloat;
+    case ControlType::SliderInt: return ControlType::InputInt;
+    case ControlType::RadioGroup: return ControlType::Combo;
+    default: return type;
+    }
+}
+
+constexpr bool isOutputControl(ControlType type)
+{
+    return type == ControlType::Label || type == ControlType::Readout ||
+           type == ControlType::Indicator || type == ControlType::Progress;
+}
+
+enum class ControlCommitMode { Change, Commit };
 
 enum class ControlLabelPosition {
     Left,
@@ -126,12 +168,32 @@ struct TxSequenceValue {
     std::vector<TxSequenceFrameValue> frames;
 };
 
+struct ControlFieldBinding {
+    std::string dataset;
+    std::string field;
+    std::optional<std::string> device;
+    std::size_t fieldIndex{0};
+};
+
+enum class ControlDataState { Unbound, Waiting, Valid, Null, Invalid };
+
+struct ControlBindingStatus {
+    ControlDataState state{ControlDataState::Waiting};
+    std::string error;
+};
+
 struct ControlDescriptor {
     ControlType type{ControlType::Button};
     ControlLabelPosition labelPosition{ControlLabelPosition::Left};
     std::string id;
     std::string label;
     std::string shortLabel;
+    bool visible{true};
+    bool disabled{false};
+    bool readOnly{false};
+    std::string tooltip;
+    std::optional<double> minimum;
+    std::optional<double> maximum;
     std::optional<float> compactLabelBelow;
     std::string textDefault;
     int intDefault{0};
@@ -150,6 +212,20 @@ struct ControlDescriptor {
     bool txSequenceLoop{false};
     std::vector<TxSequenceFieldDescriptor> txSequenceFields;
     TxSequenceValue txSequenceDefault;
+    std::uint64_t runtimeGeneration{0};
+    ControlCommitMode commitMode{ControlCommitMode::Change};
+    std::string unit;
+    int precision{2};
+    std::uint64_t staleAfterMs{0};
+    bool showUpdateTime{false};
+    std::string onText{"On"};
+    std::string offText{"Off"};
+    bool indeterminate{false};
+    std::size_t maxLength{0};
+    bool wrap{true};
+    int rows{5};
+    std::optional<ControlFieldBinding> binding;
+    std::optional<DataTableConfig> dataTable;
 };
 
 using ControlValue =
@@ -158,6 +234,12 @@ using ControlValue =
 struct ControlSnapshot {
     ControlDescriptor descriptor;
     ControlValue value;
+    std::uint64_t updatedAtMs{0};
+    ControlDataState dataState{ControlDataState::Unbound};
+    std::string dataError;
+    std::shared_ptr<const data::TablePage> tablePage;
+    std::optional<data::TableView> tableView;
+    DataTableExportState tableExport;
 };
 
 enum class LayoutNodeKind {
@@ -167,6 +249,7 @@ enum class LayoutNodeKind {
     Table,
     Group,
     Collapse,
+    Tabs,
     Control,
     Text,
     Separator,
@@ -181,6 +264,8 @@ struct LayoutNodeDescriptor {
     std::size_t controlIndex{0};
     std::string text;
     std::string title;
+    std::vector<std::string> tabIds;
+    std::string defaultTab;
     bool defaultOpen{true};
     std::size_t columns{1};
     std::optional<float> minWidth;
@@ -352,6 +437,7 @@ struct FileDialogRequest {
     std::string defaultPath{};
     std::vector<FileDialogFilter> filters{};
     std::uint64_t createdAtMs{0};
+    std::uint64_t runtimeGeneration{0};
 };
 
 struct FileDialogEvent {
@@ -361,6 +447,7 @@ struct FileDialogEvent {
     std::string path{};
     std::string error{};
     std::uint64_t timestampMs{0};
+    std::optional<std::uint64_t> runtimeGeneration;
 };
 
 struct DialogWindowOptions {
@@ -383,6 +470,7 @@ struct DialogRequest {
     std::string dedupeKey{};
     DialogWindowOptions window{};
     std::uint64_t createdAtMs{0};
+    std::uint64_t runtimeGeneration{0};
 };
 
 struct DialogEvent {
@@ -395,6 +483,7 @@ struct DialogEvent {
     std::string level{"info"};
     std::string dedupeKey{};
     std::uint64_t timestampMs{0};
+    std::optional<std::uint64_t> runtimeGeneration;
 };
 
 struct RealtimeOutputDiscardCounts {
@@ -416,7 +505,7 @@ struct ScriptHostTransportStats {
 
 class ScriptHost {
 public:
-    ScriptHost();
+    explicit ScriptHost(std::shared_ptr<std::atomic_bool> stopSignal = {});
     ~ScriptHost();
     ScriptHost(ScriptHost&&) noexcept;
     ScriptHost& operator=(ScriptHost&&) noexcept;
@@ -426,6 +515,11 @@ public:
     bool loadScriptFile(const std::string& path);
     bool loadProtocolDirectory(const std::string& directory);
     void setFileIoConfig(FileIoConfig config);
+    void setExecutionConfig(ExecutionConfig config);
+    void setStorageRoot(std::filesystem::path root);
+    void setStorageConfig(storage::Config config);
+    void requestStop() noexcept;
+    [[nodiscard]] bool executionFaulted() const;
     void resetRuntime();
 
     void onTransportOpen(const transport::TransportOpenEvent& event);
@@ -437,7 +531,15 @@ public:
     bool applyStreamRuntimeProfileEvent(const StreamRuntimeProfileEvent& event, std::string& error);
     void clearAllStreamRuntimeProfiles();
     void resetStreamReplayState();
-    void onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value);
+    void onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value,
+                   std::optional<std::uint64_t> generation = {});
+    [[nodiscard]] std::uint64_t runtimeGeneration() const { return runtimeGeneration_; }
+    void onMenu(const transport::ConnectionContext& context, const std::string& id, bool checked,
+                std::uint64_t generation, std::uint64_t revision);
+    BusinessUiSnapshot businessUiSnapshot() const;
+    void onDataTable(const transport::ConnectionContext& context,const DataTableEvent& event);
+    sol::object selectedTableRow(sol::state_view lua,const std::string& id);
+    bool showBusinessDock(const std::string& id, bool visible, std::string& error);
     [[nodiscard]] bool requestOscilloscopeToggle(const transport::ConnectionContext& ctx,
                                                  bool currentRunning,
                                                  bool targetRunning);
@@ -480,6 +582,10 @@ public:
 
 private:
     struct Runtime;
+    void configureDataBindings();
+    void applyPublishedRecord(const data::Record& record);
+    ControlSnapshot makeControlSnapshot(const ControlDescriptor& descriptor) const;
+    struct CallbackScope;
     struct FileHandle;
     struct AuthorizedPath;
     struct FileSendJob;
@@ -500,6 +606,7 @@ private:
     const std::vector<ControlDescriptor>& controlDescriptors() const;
     const ControlValue* findControlValue(const std::string& id) const;
     void updateControlValue(const std::string& id, ControlValue value);
+    bool updateControlProperties(const sol::table& patches, std::string& error);
 
     void callbackOnOpen(const ScriptHostContext& ctx);
     void callbackOnClose(const ScriptHostContext& ctx);
@@ -529,7 +636,8 @@ private:
     void dispatchStreamFrames(const transport::ConnectionContext& context,
                               const std::vector<StreamParsedFrame>& frames);
 
-    void registerLuaApi(sol::state_view lua, sol::table& proto);
+    void registerLuaApi(Runtime& runtime, sol::table& proto);
+    void pollStorageCompletions();
     LoadSnapshot captureLoadSnapshot();
     void restoreLoadSnapshot(LoadSnapshot&& snapshot, std::string message);
     void resetForScriptLoad(const std::string& path, const std::string& protocolDirectory);
@@ -570,6 +678,8 @@ private:
                                                     const sol::object& opts,
                                                     std::string& error) const;
     bool isFsPathAuthorized(const std::filesystem::path& path, bool writeAccess) const;
+    std::pair<std::filesystem::path,std::uint64_t> authorizeRecordExport(const std::string& path) const;
+    std::pair<std::filesystem::path,std::uint64_t> authorizeRecordImport(const std::string& path) const;
     bool validateFsOpenRequest(const FsOpenRequest& request, std::string& error) const;
     std::unique_ptr<FileHandle> createFsOpenHandle(const FsOpenRequest& request, std::string& error);
     std::tuple<sol::object, sol::object> protoFsRead(sol::state_view lua,
@@ -608,9 +718,11 @@ private:
         std::string name;
         std::uint64_t dueAtMs{0};
         bool active{false};
+        std::uint64_t generation{0};
     };
 
     bool scriptLoaded_{false};
+    std::uint64_t runtimeGeneration_{0};
     std::string scriptPath_;
     std::string protocolDirectory_;
     std::string lastError_;
@@ -635,12 +747,17 @@ private:
     std::vector<AuthorizedPath> dialogAuthorizedPaths_;
     std::optional<transport::ConnectionContext> activeConnection_;
     std::unique_ptr<Runtime> runtime_;
+    std::shared_ptr<std::atomic_bool> stopSignal_;
+    ExecutionConfig executionConfig_{};
+    std::filesystem::path storageRoot_;
+    storage::Config storageConfig_;
     FileIoConfig fileIoConfig_{};
     std::uint64_t nextTxRequestId_{1};
     std::uint64_t nextDialogId_{1};
     std::uint64_t nextFileDialogId_{1};
     std::uint64_t nextFileHandleId_{1};
     std::uint64_t nextFileJobId_{1};
+    std::uint64_t nextTimerGeneration_{1};
     bool requestAwaitingCompletion_{false};
     ScriptHostTransportStats lastTransportStats_{};
 };

@@ -13,6 +13,13 @@
 
 #include <yaml-cpp/yaml.h>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace protoscope::config {
 
 namespace {
@@ -312,7 +319,8 @@ namespace {
         {GuiWaveFullscreenMode::Overlay, "overlay"},
     }};
 
-    constexpr std::array<EnumNamePair<GuiTheme>, 2> kGuiThemeNames{{
+    constexpr std::array<EnumNamePair<GuiTheme>, 3> kGuiThemeNames{{
+        {GuiTheme::ProfessionalLight, "professional_light"},
         {GuiTheme::ProfessionalDark, "professional_dark"},
         {GuiTheme::DebugHighContrast, "debug_high_contrast"},
     }};
@@ -691,6 +699,11 @@ namespace {
             readScalar<bool>(wave, "zoom_selection_auto_exit", config.gui.wave.zoomSelectionAutoExit);
         config.gui.wave.peakDetectDownsample =
             readScalar<bool>(wave, "peak_detect_downsample", config.gui.wave.peakDetectDownsample);
+        config.gui.wave.downsampleMode = readScalar<std::string>(wave, "downsample_mode", "stable_edges") ==
+            "legacy_uniform" ? plot::WaveDownsampleMode::LegacyUniform : plot::WaveDownsampleMode::StableEdges;
+        const auto bitDenseMode = readScalar<std::string>(wave, "bit_dense_render_mode", "compressed_steps");
+        config.gui.wave.bitDenseRenderMode = bitDenseMode == "activity_band"
+            ? plot::WaveBitDenseRenderMode::ActivityBand : plot::WaveBitDenseRenderMode::CompressedSteps;
         config.gui.wave.maxRenderPointsPerChannel =
             readScalar<std::size_t>(wave, "max_render_points_per_channel", config.gui.wave.maxRenderPointsPerChannel);
         config.gui.wave.maxRenderVertices =
@@ -699,6 +712,43 @@ namespace {
             readScalar<double>(wave, "downsample_start_multiplier", config.gui.wave.downsampleStartMultiplier);
         config.gui.wave.overviewMaxSamples =
             readScalar<std::size_t>(wave, "overview_max_samples", config.gui.wave.overviewMaxSamples);
+        config.gui.wave.overviewNormalizeChannels =
+            readScalar<bool>(wave, "overview_normalize_channels", config.gui.wave.overviewNormalizeChannels);
+        config.gui.wave.overviewShowBitChannels =
+            readScalar<bool>(wave, "overview_show_bit_channels", config.gui.wave.overviewShowBitChannels);
+        config.gui.wave.cursorAutoColor =
+            readScalar<bool>(wave, "cursor_auto_color", config.gui.wave.cursorAutoColor);
+        if (const auto selection = wave["overview_selection"]) {
+            const auto fail = [&](const YAML::Node& node, const std::string& field) {
+                throw YAML::Exception(node.Mark(), "gui.wave.overview_selection." + field + ": 非法字段或数值");
+            };
+            if (!selection.IsMap()) fail(selection, "mapping");
+            std::vector<std::string> seen;
+            auto& target = config.gui.wave.overviewSelection;
+            for (const auto& item : selection) {
+                const auto key = item.first.as<std::string>();
+                if (std::find(seen.begin(), seen.end(), key) != seen.end()) fail(item.first, key);
+                seen.push_back(key);
+                if (key == "mode") {
+                    const auto value = item.second.as<std::string>();
+                    if (value != "auto" && value != "fixed") fail(item.second, key);
+                    target.automatic = value == "auto";
+                } else if (key == "fixed_color") {
+                    const auto value = item.second.as<std::string>();
+                    if (value.size() != 7 || value.front() != '#' ||
+                        value.find_first_not_of("0123456789abcdefABCDEF", 1) != std::string::npos) fail(item.second, key);
+                    std::array<float, 3> rgb{};
+                    for (std::size_t i = 0; i < 3; ++i)
+                        rgb[i] = static_cast<float>(std::stoul(value.substr(1 + 2*i, 2), nullptr, 16)) / 255.F;
+                    target.fixedColor = rgb;
+                } else if (key == "min_alpha" || key == "max_alpha") {
+                    const auto value = item.second.as<float>();
+                    if (!std::isfinite(value) || value < 0 || value > 1) fail(item.second, key);
+                    (key == "min_alpha" ? target.minAlpha : target.maxAlpha) = value;
+                } else fail(item.first, key);
+            }
+            if (target.minAlpha && target.maxAlpha && *target.minAlpha > *target.maxAlpha) fail(selection, "min_alpha/max_alpha");
+        }
         config.gui.wave.maxTotalSamples =
             readScalar<std::size_t>(wave, "max_total_samples", config.gui.wave.maxTotalSamples);
         config.gui.wave.minVisibleTimeSpan =
@@ -831,14 +881,33 @@ namespace {
     void loadGuiConfig(const YAML::Node& root, AppConfig& config)
     {
         const auto gui = root["gui"];
-        const auto themeText = readScalar<std::string>(gui, "theme", toGuiThemeText(config.gui.theme));
-        config.gui.theme = lookupEnum(std::string_view{themeText}, kGuiThemeNames, GuiTheme::ProfessionalDark);
+        config.gui.theme = readScalar<std::string>(gui, "theme", config.gui.theme);
         const auto rendererBackendText =
             readScalar<std::string>(gui, "renderer_backend", toRendererBackendText(config.gui.rendererBackend));
         config.gui.rendererBackend = parseGuiRendererBackend(rendererBackendText).value_or(GuiRendererBackend::OpenGL);
         loadGuiWindowConfig(gui, config);
         loadGuiFontConfig(gui, config);
         loadGuiInteractionFeedbackConfig(gui, config);
+        // 目录偏好独立于波形配置；只有新字段缺失时才迁移旧导出目录。
+        const auto dialogs = childNode(gui, "file_dialogs");
+        const auto lastExport = childNode(gui, "last_data_export");
+        config.gui.fileDialogs.lastImportDirectory =
+            readScalar<std::string>(dialogs, "last_import_directory", "");
+        config.gui.fileDialogs.lastExportDirectory = readScalar<std::string>(
+            dialogs, "last_export_directory", readScalar<std::string>(lastExport, "directory", ""));
+        if (lastExport) {
+            auto& value = config.gui.lastDataExport;
+            value.valid = readScalar<bool>(lastExport, "valid", false);
+            value.content = readScalar<int>(lastExport, "content", 0);
+            value.format = readScalar<int>(lastExport, "format", 0);
+            value.waveRange = readScalar<int>(lastExport, "wave_range", 0);
+            value.recordRange = readScalar<int>(lastExport, "record_range", 0);
+            value.csvShape = readScalar<int>(lastExport, "csv_shape", 0);
+            value.directory = readScalar<std::string>(lastExport, "directory", "");
+            if (value.content < 0 || value.content > 3 || value.format < 0 || value.format > 3 ||
+                value.waveRange < 0 || value.waveRange > 2 || value.recordRange < 0 || value.recordRange > 2 ||
+                value.csvShape < 0 || value.csvShape > 1) value.valid = false;
+        }
         if (const auto wave = childNode(gui, "wave")) {
             loadGuiWaveConfig(wave, config);
             loadGuiWaveScopedRuntimeConfig(gui, config);
@@ -882,6 +951,36 @@ namespace {
 
     void loadScriptingWorkerConfig(const YAML::Node& scripting, AppConfig& config)
     {
+        if (const auto storage = childNode(scripting, "storage")) {
+            config.scripting.storageRootDir = readScalar<std::string>(storage, "root_dir", "");
+            auto& options=config.scripting.storage;
+            options.queueBytes=std::clamp<std::size_t>(
+                readScalar<std::size_t>(storage,"queue_bytes",options.queueBytes),1024,1024ULL*1024*1024);
+            options.batchRows=std::clamp<std::size_t>(
+                readScalar<std::size_t>(storage,"batch_rows",options.batchRows),1,100000);
+            options.batchInterval=std::chrono::milliseconds(std::clamp<std::int64_t>(
+                readScalar<std::int64_t>(storage,"batch_interval_ms",options.batchInterval.count()),1,60000));
+            options.recordMaxBytes=std::clamp<std::uint64_t>(
+                readScalar<std::uint64_t>(storage,"max_record_bytes",options.recordMaxBytes),1,1ULL<<50);
+            options.maxVolumeBytes=std::clamp<std::uint64_t>(
+                readScalar<std::uint64_t>(storage,"max_volume_bytes",options.maxVolumeBytes),1,1ULL<<50);
+            const auto days=std::clamp<std::int64_t>(readScalar<std::int64_t>(storage,"retention_days",30),0,36500);
+            options.recordMaxAge=std::chrono::hours(days*24);
+            options.maintenanceInterval=std::chrono::milliseconds(std::clamp<std::int64_t>(
+                readScalar<std::int64_t>(storage,"maintenance_interval_ms",options.maintenanceInterval.count()),1,60000));
+            options.kvValueBytes=std::clamp<std::size_t>(
+                readScalar<std::size_t>(storage,"kv_value_bytes",options.kvValueBytes),1,256U*1024);
+            options.kvTotalBytes=std::clamp<std::size_t>(
+                readScalar<std::size_t>(storage,"kv_total_bytes",options.kvTotalBytes),1,1024U*1024*1024);
+            options.kvDepth=std::clamp<std::size_t>(
+                readScalar<std::size_t>(storage,"kv_depth",options.kvDepth),1,16);
+        }
+        if (const auto execution = childNode(scripting, "execution")) {
+            config.scripting.execution.loadTimeoutMs = std::clamp<std::uint64_t>(
+                readScalar<std::uint64_t>(execution, "load_timeout_ms", 5000), 1, 3600000);
+            config.scripting.execution.callbackTimeoutMs = std::clamp<std::uint64_t>(
+                readScalar<std::uint64_t>(execution, "callback_timeout_ms", 500), 1, 3600000);
+        }
         if (const auto pipeline = childNode(scripting, "pipeline")) {
             if (pipeline["worker_threads"]) {
                 config.scripting.pipeline.workerThreads = readScalar<std::size_t>(pipeline, "worker_threads", 1U);
@@ -1076,6 +1175,10 @@ namespace {
         gui["wave"]["interaction_animation_enabled"] = config.gui.wave.interactionAnimationEnabled;
         gui["wave"]["zoom_selection_auto_exit"] = config.gui.wave.zoomSelectionAutoExit;
         gui["wave"]["peak_detect_downsample"] = config.gui.wave.peakDetectDownsample;
+        gui["wave"]["downsample_mode"] = config.gui.wave.downsampleMode == plot::WaveDownsampleMode::LegacyUniform
+            ? "legacy_uniform" : "stable_edges";
+        gui["wave"]["bit_dense_render_mode"] = config.gui.wave.bitDenseRenderMode == plot::WaveBitDenseRenderMode::ActivityBand
+            ? "activity_band" : "compressed_steps";
         gui["wave"]["channel_card_fixed_width"] = config.gui.wave.channelCardFixedWidth;
         gui["wave"]["channel_card_adaptive_ratio"] = config.gui.wave.channelCardAdaptiveRatio;
         gui["wave"]["legend_channel_name_max_width"] = config.gui.wave.legendChannelNameMaxWidth;
@@ -1084,6 +1187,23 @@ namespace {
         gui["wave"]["max_render_vertices"] = config.gui.wave.maxRenderVertices;
         gui["wave"]["downsample_start_multiplier"] = config.gui.wave.downsampleStartMultiplier;
         gui["wave"]["overview_max_samples"] = config.gui.wave.overviewMaxSamples;
+        gui["wave"]["overview_normalize_channels"] = config.gui.wave.overviewNormalizeChannels;
+        gui["wave"]["overview_show_bit_channels"] = config.gui.wave.overviewShowBitChannels;
+        gui["wave"]["cursor_auto_color"] = config.gui.wave.cursorAutoColor;
+        const auto& selection = config.gui.wave.overviewSelection;
+        auto selectionNode = gui["wave"]["overview_selection"];
+        selectionNode["mode"] = selection.automatic ? "auto" : "fixed";
+        if (selection.minAlpha) selectionNode["min_alpha"] = *selection.minAlpha;
+        if (selection.maxAlpha) selectionNode["max_alpha"] = *selection.maxAlpha;
+        if (selection.fixedColor) {
+            constexpr char hex[] = "0123456789ABCDEF";
+            std::string text = "#";
+            for (float component : *selection.fixedColor) {
+                const auto byte = static_cast<unsigned>(std::lround(std::clamp(component, 0.F, 1.F) * 255.F));
+                text += hex[byte >> 4]; text += hex[byte & 15];
+            }
+            selectionNode["fixed_color"] = text;
+        }
         gui["wave"]["max_total_samples"] = config.gui.wave.maxTotalSamples;
         gui["wave"]["min_visible_time_span"] = config.gui.wave.minVisibleTimeSpan;
         gui["wave"]["reset_history_on_time_reset"] = config.gui.wave.resetHistoryOnTimeReset;
@@ -1118,6 +1238,16 @@ namespace {
         gui["log_history"]["host_limit"] = config.gui.logHistory.hostLimit;
         gui["log_history"]["script_limit"] = config.gui.logHistory.scriptLimit;
         gui["log_history"]["request_trace_limit"] = config.gui.logHistory.requestTraceLimit;
+        const auto& last = config.gui.lastDataExport;
+        gui["last_data_export"]["valid"] = last.valid;
+        gui["last_data_export"]["content"] = last.content;
+        gui["last_data_export"]["format"] = last.format;
+        gui["last_data_export"]["wave_range"] = last.waveRange;
+        gui["last_data_export"]["record_range"] = last.recordRange;
+        gui["last_data_export"]["csv_shape"] = last.csvShape;
+        gui["last_data_export"]["directory"] = last.directory;
+        gui["file_dialogs"]["last_import_directory"] = config.gui.fileDialogs.lastImportDirectory;
+        gui["file_dialogs"]["last_export_directory"] = config.gui.fileDialogs.lastExportDirectory;
         gui["raw_capture"]["live_limit_bytes"] = config.gui.rawCapture.liveLimitBytes;
         gui["raw_capture"]["recording_queue_limit_bytes"] = config.gui.rawCapture.recordingQueueLimitBytes;
         gui["transfer_log"]["replay_raw_history_on_schema_switch"] = config.gui.replayRawHistoryOnSchemaSwitch;
@@ -1169,7 +1299,7 @@ namespace {
     void writeGuiConfig(YAML::Node& root, const AppConfig& config, const AppConfig& scaledDefaults)
     {
         auto gui = root["gui"];
-        gui["theme"] = toGuiThemeText(config.gui.theme);
+        gui["theme"] = config.gui.theme;
         gui["renderer_backend"] = toRendererBackendText(config.gui.rendererBackend);
         gui["window"]["title"] = config.gui.window.title;
         gui["window"]["width"] = config.gui.window.width;
@@ -1212,6 +1342,20 @@ namespace {
         if (config.scripting.pipeline.workerThreads.has_value()) {
             scripting["pipeline"]["worker_threads"] = *config.scripting.pipeline.workerThreads;
         }
+        scripting["execution"]["load_timeout_ms"] = config.scripting.execution.loadTimeoutMs;
+        scripting["storage"]["root_dir"] = config.scripting.storageRootDir;
+        const auto& storage=config.scripting.storage;
+        scripting["storage"]["queue_bytes"]=storage.queueBytes;
+        scripting["storage"]["batch_rows"]=storage.batchRows;
+        scripting["storage"]["batch_interval_ms"]=storage.batchInterval.count();
+        scripting["storage"]["max_record_bytes"]=storage.recordMaxBytes;
+        scripting["storage"]["max_volume_bytes"]=storage.maxVolumeBytes;
+        scripting["storage"]["retention_days"]=std::chrono::duration_cast<std::chrono::hours>(storage.recordMaxAge).count()/24;
+        scripting["storage"]["maintenance_interval_ms"]=storage.maintenanceInterval.count();
+        scripting["storage"]["kv_value_bytes"]=storage.kvValueBytes;
+        scripting["storage"]["kv_total_bytes"]=storage.kvTotalBytes;
+        scripting["storage"]["kv_depth"]=storage.kvDepth;
+        scripting["execution"]["callback_timeout_ms"] = config.scripting.execution.callbackTimeoutMs;
         scripting["worker"]["enabled"] = config.scripting.workerEnabled;
         writePerformanceScalar(scripting["worker"],
                                "rx_queue_limit_bytes",
@@ -1356,6 +1500,11 @@ namespace {
                 return false;
             }
             out << root;
+            out.flush();
+            if (!out.good()) {
+                error = "写入配置文件失败";
+                return false;
+            }
             return true;
         } catch (const std::exception& ex) {
             error = ex.what();
@@ -1463,6 +1612,71 @@ bool ConfigStore::saveText(const AppConfig& config, std::string& yamlText, std::
         return true;
     } catch (const std::exception& ex) {
         error = std::string("生成 YAML 文本失败: ") + ex.what();
+        return false;
+    }
+}
+
+bool ConfigStore::saveFileDialogPreferences(const std::filesystem::path& path,
+                                           const GuiFileDialogConfig& preferences, std::string& error,
+                                           const DataExportConfig* lastExport) const
+{
+    try {
+        error.clear();
+        std::error_code ec;
+        const bool exists = std::filesystem::exists(path, ec);
+        if (ec) {
+            error = ec.message();
+            return false;
+        }
+        YAML::Node root(YAML::NodeType::Map);
+        if (exists) {
+            std::ifstream input(path);
+            if (!input) {
+                error = "无法读取现有配置";
+                return false;
+            }
+            root = YAML::Load(input);
+            if (input.bad() || !root.IsMap() ||
+                (root["gui"] && !root["gui"].IsMap()) ||
+                (root["gui"]["file_dialogs"] && !root["gui"]["file_dialogs"].IsMap())) {
+                error = "配置结构损坏，未保存目录偏好";
+                return false;
+            }
+            // 完整校验已知字段，禁止以默认配置覆盖损坏文件。
+            auto validated = withDefaults();
+            loadConfigYamlRoot(root, validated);
+        }
+        root["gui"]["file_dialogs"]["last_import_directory"] = preferences.lastImportDirectory;
+        root["gui"]["file_dialogs"]["last_export_directory"] = preferences.lastExportDirectory;
+        if (lastExport) {
+            auto last = root["gui"]["last_data_export"];
+            last["valid"] = lastExport->valid;
+            last["content"] = lastExport->content;
+            last["format"] = lastExport->format;
+            last["wave_range"] = lastExport->waveRange;
+            last["record_range"] = lastExport->recordRange;
+            last["csv_shape"] = lastExport->csvShape;
+            last["directory"] = lastExport->directory;
+        }
+        // 先写同目录临时文件再替换，磁盘写满时保留原配置。
+        auto temporary = path;
+        temporary += ".file-dialog.tmp";
+        if (!writeConfigYamlFile(temporary, root, error)) return false;
+#if defined(_WIN32)
+        if (!MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            error = std::system_category().message(static_cast<int>(GetLastError()));
+            return false;
+        }
+#else
+        std::filesystem::rename(temporary, path, ec);
+        if (ec) {
+            error = ec.message();
+            return false;
+        }
+#endif
+        return true;
+    } catch (const std::exception& ex) {
+        error = ex.what();
         return false;
     }
 }
@@ -1619,10 +1833,16 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.mouseYOffsetDragMode = config.gui.wave.mouseYOffsetDragMode;
     wave.zoomSelectionAutoExit = config.gui.wave.zoomSelectionAutoExit;
     wave.peakDetectDownsample = config.gui.wave.peakDetectDownsample;
+    wave.downsampleMode = config.gui.wave.downsampleMode;
+    wave.bitDenseRenderMode = config.gui.wave.bitDenseRenderMode;
     wave.maxRenderPointsPerChannel = config.gui.wave.maxRenderPointsPerChannel;
     wave.maxRenderVertices = config.gui.wave.maxRenderVertices;
     wave.downsampleStartMultiplier = (std::max)(config.gui.wave.downsampleStartMultiplier, 1.0);
     wave.overviewMaxSamples = config.gui.wave.overviewMaxSamples;
+    wave.overviewNormalizeChannels = config.gui.wave.overviewNormalizeChannels;
+    wave.overviewShowBitChannels = config.gui.wave.overviewShowBitChannels;
+    wave.cursorAutoColor = config.gui.wave.cursorAutoColor;
+    wave.overviewSelection = config.gui.wave.overviewSelection;
     wave.minVisibleTimeSpan = config.gui.wave.minVisibleTimeSpan;
     wave.channelCardFixedWidth = positiveOrFallback(config.gui.wave.channelCardFixedWidth, 128.0);
     wave.channelCardAdaptiveRatio = positiveOrFallback(config.gui.wave.channelCardAdaptiveRatio, 0.22);
@@ -1685,10 +1905,16 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
     config.gui.wave.mouseYOffsetDragMode = dockStore.waveState().view.mouseYOffsetDragMode;
     config.gui.wave.zoomSelectionAutoExit = dockStore.waveState().view.zoomSelectionAutoExit;
     config.gui.wave.peakDetectDownsample = dockStore.waveState().view.peakDetectDownsample;
+    config.gui.wave.downsampleMode = dockStore.waveState().view.downsampleMode;
+    config.gui.wave.bitDenseRenderMode = dockStore.waveState().view.bitDenseRenderMode;
     config.gui.wave.maxRenderPointsPerChannel = dockStore.waveState().view.maxRenderPointsPerChannel;
     config.gui.wave.maxRenderVertices = dockStore.waveState().view.maxRenderVertices;
     config.gui.wave.downsampleStartMultiplier = dockStore.waveState().view.downsampleStartMultiplier;
     config.gui.wave.overviewMaxSamples = dockStore.waveState().view.overviewMaxSamples;
+    config.gui.wave.overviewNormalizeChannels = dockStore.waveState().view.overviewNormalizeChannels;
+    config.gui.wave.overviewShowBitChannels = dockStore.waveState().view.overviewShowBitChannels;
+    config.gui.wave.cursorAutoColor = dockStore.waveState().view.cursorAutoColor;
+    config.gui.wave.overviewSelection = dockStore.waveState().view.overviewSelection;
     config.gui.wave.minVisibleTimeSpan = dockStore.waveState().view.minVisibleTimeSpan;
     config.gui.wave.channelCardFixedWidth = dockStore.waveState().view.channelCardFixedWidth;
     config.gui.wave.channelCardAdaptiveRatio = dockStore.waveState().view.channelCardAdaptiveRatio;

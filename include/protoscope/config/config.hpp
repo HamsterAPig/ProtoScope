@@ -2,6 +2,8 @@
 
 #include "protoscope/dock/docks.hpp"
 #include "protoscope/scripting/file_io_config.hpp"
+#include "protoscope/scripting/execution_config.hpp"
+#include "protoscope/storage/config.hpp"
 
 #include <array>
 #include <cstddef>
@@ -96,6 +98,7 @@ enum class GuiWaveFullscreenMode {
 enum class GuiTheme {
     ProfessionalDark,
     DebugHighContrast,
+    ProfessionalLight,
 };
 
 struct GuiWaveResetViewportConfig {
@@ -127,10 +130,16 @@ struct GuiWaveConfig {
     bool interactionAnimationEnabled{true};
     bool zoomSelectionAutoExit{false};
     bool peakDetectDownsample{true};
+    plot::WaveDownsampleMode downsampleMode{plot::WaveDownsampleMode::StableEdges};
+    plot::WaveBitDenseRenderMode bitDenseRenderMode{plot::WaveBitDenseRenderMode::CompressedSteps};
     std::size_t maxRenderPointsPerChannel{1200};
     std::size_t maxRenderVertices{60000};
     double downsampleStartMultiplier{2.0};
     std::size_t overviewMaxSamples{20000};
+    bool overviewNormalizeChannels{false};
+    bool overviewShowBitChannels{false};
+    bool cursorAutoColor{true};
+    plot::OverviewSelectionConfig overviewSelection{};
     double minVisibleTimeSpan{0.001};
     std::size_t maxTotalSamples{0};
     double channelCardFixedWidth{128.0};
@@ -192,8 +201,25 @@ struct GuiInteractionFeedbackConfig {
     std::uint64_t statusDurationMs{2000};
 };
 
+struct DataExportConfig {
+    bool valid{false};
+    int content{0};
+    int format{0};
+    int waveRange{0};
+    int recordRange{0};
+    int csvShape{0};
+    std::string directory;
+};
+
+struct GuiFileDialogConfig {
+    std::string lastImportDirectory;
+    std::string lastExportDirectory;
+};
+
 struct GuiConfig {
-    GuiTheme theme{GuiTheme::ProfessionalDark};
+    GuiFileDialogConfig fileDialogs{};
+    DataExportConfig lastDataExport{};
+    std::string theme{"professional_dark"};
     GuiWindowConfig window{};
     GuiRendererBackend rendererBackend{GuiRendererBackend::OpenGL};
     GuiInteractionFeedbackConfig interactionFeedback{};
@@ -239,6 +265,9 @@ struct ScriptingPipelineConfig {
 };
 
 struct ScriptingConfig {
+    scripting::ExecutionConfig execution{};
+    std::string storageRootDir{};
+    storage::Config storage{};
     scripting::FileIoConfig fileIo{};
     ScriptingPipelineConfig pipeline{};
     bool workerEnabled{true};
@@ -288,6 +317,9 @@ public:
     ConfigLoadResult loadText(std::string_view yamlText, const std::filesystem::path& sourcePath = {}) const;
     bool save(const std::filesystem::path& path, const AppConfig& config, std::string& error) const;
     bool saveText(const AppConfig& config, std::string& yamlText, std::string& error) const;
+    bool saveFileDialogPreferences(const std::filesystem::path& path,
+                                   const GuiFileDialogConfig& preferences, std::string& error,
+                                   const DataExportConfig* lastExport = nullptr) const;
 
     std::filesystem::path normalizeProtocolDir(const std::filesystem::path& dir) const;
     std::filesystem::path normalizeProtocolDir(const std::filesystem::path& rootDir,
@@ -321,5 +353,7 @@ private:
 std::optional<GuiRendererBackend> parseGuiRendererBackend(std::string_view value);
 std::string_view guiRendererBackendId(GuiRendererBackend backend);
 std::string_view guiThemeId(GuiTheme theme);
+// 兼容原内置枚举的比较入口；持久化与用户主题统一使用字符串 ID。
+inline bool operator==(const std::string& id, GuiTheme theme) { return id == guiThemeId(theme); }
 
 } // namespace protoscope::config

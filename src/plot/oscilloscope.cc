@@ -304,10 +304,14 @@ double applyChannelDisplayTransform(double rawValue, const ChannelSpec& spec, Wa
 
 void OscilloscopeBuffer::clear()
 {
+    ++analysisRevision_;
+    ++historyEpoch_;
     source_.clear();
     channels_.clear();
     config_ = ViewConfig{};
     preservedHistoryLimit_ = 0;
+    if (importedLabelsReadOnly_) historyTrimSuspended_ = false;
+    importedLabelsReadOnly_ = false;
     ++dataRevision_;
 }
 
@@ -322,6 +326,7 @@ void OscilloscopeBuffer::configureChannels(std::size_t channelCount)
     }
     if (channels_.size() != previousCount) {
         ++dataRevision_;
+        ++analysisRevision_;
     }
 }
 
@@ -341,10 +346,16 @@ void OscilloscopeBuffer::setChannelSpec(std::size_t channelIndex, ChannelSpec sp
     }
     spec.bitDisplay = sanitizeBitDisplaySpec(spec.bitDisplay);
     auto& channelSpec = channels_[channelIndex].spec;
+    if (importedLabelsReadOnly_) spec.label = channelSpec.label;
+    if (channelSpec.ratio != spec.ratio) ++analysisRevision_;
     if (channelSpec.label != spec.label || channelSpec.unit != spec.unit || channelSpec.ratio != spec.ratio ||
         channelSpec.scale != spec.scale || channelSpec.offset != spec.offset || channelSpec.color != spec.color ||
         channelSpec.lineWidth != spec.lineWidth || channelSpec.bitDisplay != spec.bitDisplay) {
+        const bool digitalChanged = channelSpec.bitDisplay.enabled != spec.bitDisplay.enabled;
         channelSpec = std::move(spec);
+        auto& channel = channels_[channelIndex];
+        if (digitalChanged)
+            channel.summary.synchronize(channel.samples, channel.sampleIndexOffset, channel.spec.bitDisplay.enabled);
         ++dataRevision_;
     }
 }
@@ -357,7 +368,7 @@ void OscilloscopeBuffer::setViewConfig(const ViewConfig& config)
     }
     // 核心流程：协议重载可能只改变 history_limit，停止采集时也要立即约束当前保留窗口。
     for (auto& channel : channels_) {
-        trimHistory(channel);
+        if (trimHistory(channel)) ++analysisRevision_;
     }
     ++dataRevision_;
 }
@@ -379,6 +390,7 @@ void OscilloscopeBuffer::setMaxTotalSamples(std::size_t maxTotalSamples)
     }
     if (trimmedAnyChannel) {
         ++dataRevision_;
+        ++analysisRevision_;
     }
 }
 
@@ -454,6 +466,16 @@ bool OscilloscopeBuffer::append(std::size_t channelIndex, WaveAppendRequest requ
     return appendPreparedSamples(channel, request.samples);
 }
 
+bool OscilloscopeBuffer::appendImported(std::size_t channelIndex, const std::vector<WaveSample>& samples,
+                                       std::size_t sampleIndexOffset)
+{
+    auto& channel = ensureChannel(channelIndex);
+    if (channel.samples.empty()) channel.sampleIndexOffset = sampleIndexOffset;
+    // 离线样本保留重复时间和原始序号，禁止实时重置、平移、去重及历史裁剪。
+    historyTrimSuspended_ = true;
+    return appendPreparedSamples(channel, samples);
+}
+
 OscilloscopeBuffer::ChannelBuffer& OscilloscopeBuffer::ensureChannel(std::size_t channelIndex)
 {
     if (channelIndex >= channels_.size()) {
@@ -471,10 +493,12 @@ void OscilloscopeBuffer::applyAppendSource(const std::string& source)
 
 bool OscilloscopeBuffer::appendAfterHistoryReset(std::size_t channelIndex, const WaveAppendRequest& request)
 {
+    ++historyEpoch_;
     // 核心流程：脚本二次运行常从 t=0 重新输出，默认把它视为新一轮采集，避免旧历史挡住新样本。
     for (auto& existingChannel : channels_) {
         existingChannel.samples.clear();
         existingChannel.sampleIndexOffset = 0;
+        existingChannel.summary.clear();
     }
     preservedHistoryLimit_ = 0;
     auto& resetChannel = ensureChannel(channelIndex);
@@ -489,7 +513,9 @@ bool OscilloscopeBuffer::appendPreparedSamples(ChannelBuffer& channel, const std
     }
     channel.samples.insert(channel.samples.end(), samples.begin(), samples.end());
     trimHistory(channel);
+    channel.summary.synchronize(channel.samples, channel.sampleIndexOffset, channel.spec.bitDisplay.enabled);
     ++dataRevision_;
+    ++analysisRevision_;
     return true;
 }
 
@@ -516,6 +542,7 @@ WaveSnapshot OscilloscopeBuffer::snapshot(double visibleMinTime, double visibleM
         view.totalSamples = channel.samples.size();
         view.sampleIndexOffset = channel.sampleIndexOffset;
         view.samples = channel.samples.data();
+        view.summaryIndex = &channel.summary;
         view.visibleBegin = lowerBoundByTime(channel.samples, visibleMinTime);
         view.visibleEnd = upperBoundByTime(channel.samples, visibleMaxTime);
         // 核心流程：主视图极限放大时仍要保留可视窗口两侧的真实邻接样本，让折线能被 ImPlot 裁剪到视口边界。
@@ -826,6 +853,7 @@ bool OscilloscopeBuffer::trimHistory(ChannelBuffer& channel)
     if (effectiveLimit == 0) {
         channel.sampleIndexOffset += channel.samples.size();
         channel.samples.clear();
+        channel.summary.clear();
         return true;
     }
     const std::size_t keepOffset = channel.samples.size() - effectiveLimit;
@@ -835,6 +863,7 @@ bool OscilloscopeBuffer::trimHistory(ChannelBuffer& channel)
               channel.samples.end(),
               channel.samples.begin());
     channel.samples.resize(effectiveLimit);
+    channel.summary.synchronize(channel.samples, channel.sampleIndexOffset, channel.spec.bitDisplay.enabled);
     return true;
 }
 

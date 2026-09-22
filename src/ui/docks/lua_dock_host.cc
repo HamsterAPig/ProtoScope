@@ -218,6 +218,8 @@ bool GuiRuntime::drawLuaLayoutNode(const scripting::LayoutNodeDescriptor& node,
             return drawLuaGroupLayoutNode(node, controls, stableId, widgetIndex, earlyExit);
         case scripting::LayoutNodeKind::Collapse:
             return drawLuaCollapseLayoutNode(node, controls, stableId, widgetIndex, earlyExit);
+        case scripting::LayoutNodeKind::Tabs:
+            return drawLuaTabsLayoutNode(node, controls, stableId, widgetIndex, earlyExit);
         case scripting::LayoutNodeKind::Control:
             if (node.controlIndex >= controls.size()) {
                 return false;
@@ -458,6 +460,7 @@ void GuiRuntime::drawLuaDockWindows()
     const bool copyMode = application_.docks().configState().luaDockRenderCopyMode;
     const auto layoutKey = luaDockLayoutKey(lua.protocolDir, lua.scriptPath);
     syncLuaDockVisibilityDefaults();
+    applyBusinessDockRequests();
     if (copyMode) {
         // 拷贝模式：深拷贝快照，每帧独立遍历，忽略渲染函数返回值
         const auto dockSnapshots = lua.docks;

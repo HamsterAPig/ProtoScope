@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <future>
 #include <optional>
 #include <string>
 #include <vector>
@@ -12,6 +13,9 @@
 namespace protoscope::scripting {
 
 struct ScriptRuntimeWorkerConfig {
+    ExecutionConfig execution{};
+    std::filesystem::path storageRoot;
+    storage::Config storageConfig;
     bool enabled{true};
     std::size_t postprocessWorkerThreads{1U};
     std::size_t rxQueueLimitBytes{64U * 1024U * 1024U};
@@ -28,6 +32,7 @@ struct ScriptRuntimeSnapshot {
     std::vector<ControlDescriptor> controls;
     std::vector<ControlSnapshot> controlStates;
     std::vector<DockSnapshot> docks;
+    BusinessUiSnapshot businessUi;
     std::optional<StreamBufferDefinition> streamBuffer;
     std::vector<StreamFrameDefinition> streamFrames;
     std::optional<std::uint64_t> nextWakeupAtMs;
@@ -40,6 +45,7 @@ struct ScriptRuntimeSnapshot {
     std::size_t outputQueueSize{0};
     std::size_t postprocessWorkerThreads{1U};
     ScriptHostTransportStats lastTransportStats{};
+    std::uint64_t runtimeGeneration{0};
 };
 
 struct ScriptRuntimeOutputBatch {
@@ -84,17 +90,25 @@ public:
     void postTransportOpen(transport::TransportOpenEvent event);
     void postTransportClose(transport::TransportCloseEvent event);
     void postTransportError(transport::TransportErrorEvent event);
-    void postTransportBytes(transport::TransportBytesEvent event);
-    void postControl(transport::ConnectionContext context, std::string id, ControlValue value);
+    void postTransportBytes(transport::TransportBytesEvent event, bool mergeAdjacent = true);
+    void postControl(transport::ConnectionContext context, std::string id, ControlValue value,
+                     std::optional<std::uint64_t> generation = {});
     void postTick(std::uint64_t currentMs);
+    void postMenu(transport::ConnectionContext context, std::string id, bool checked,
+                  std::uint64_t generation, std::uint64_t revision);
+    void postDataTable(transport::ConnectionContext context,DataTableEvent event);
     void postTxEvent(transport::ConnectionContext context, TxEvent event);
     void postDialogEvent(transport::ConnectionContext context, DialogEvent event);
     void postFileDialogEvent(transport::ConnectionContext context, FileDialogEvent event);
     [[nodiscard]] bool applyStreamRuntimeProfileEvent(StreamRuntimeProfileEvent event, std::string& error);
     void resetStreamReplayState();
+    [[nodiscard]] std::future<bool> resetStreamReplayStateAsync();
+    [[nodiscard]] std::future<std::pair<bool, std::string>>
+        applyStreamRuntimeProfileEventAsync(StreamRuntimeProfileEvent event);
     void postRequestAwaitingCompletion(bool active);
 
     void waitIdle();
+    [[nodiscard]] bool idle() const;
     [[nodiscard]] std::size_t pendingRxBytes() const;
     [[nodiscard]] std::vector<ScriptRuntimeOutputBatch> drainOutputs();
     [[nodiscard]] std::optional<ScriptRuntimeOutputBatch> drainOneOutput();

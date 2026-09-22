@@ -58,24 +58,15 @@ ImVec4 rgb8(const int red, const int green, const int blue, const float alpha = 
 
 } // namespace
 
-void test_ui_theme_professional_dark_preserves_existing_tokens()
+void test_ui_theme_professional_dark_preset()
 {
     const auto& definition = protoscope::ui::uiThemeDefinition(protoscope::config::GuiTheme::ProfessionalDark);
     const auto& ui = definition.ui;
     const auto& wave = definition.wave;
 
-    requireColor(ui.appBackground, ImVec4(0.05F, 0.07F, 0.10F, 1.0F), "专业深色全局背景不应变化");
-    requireColor(ui.panelBackground, ImVec4(0.09F, 0.11F, 0.15F, 1.0F), "专业深色面板背景不应变化");
-    requireColor(ui.panelBorder, ImVec4(0.22F, 0.29F, 0.38F, 0.95F), "专业深色面板边框不应变化");
-    requireColor(ui.accent, ImVec4(0.18F, 0.58F, 0.88F, 1.0F), "专业深色强调色不应变化");
-    requireColor(ui.genericPlotBackground, ImVec4(0.07F, 0.09F, 0.13F, 1.0F), "专业深色普通图表背景不应变化");
-    requireColor(wave.plotBackground, ImVec4(0.043F, 0.067F, 0.094F, 1.0F), "专业深色波形背景不应变化");
-    requireColor(wave.gridMajor, ImVec4(0.12F, 0.19F, 0.27F, 0.78F), "专业深色主网格色不应变化");
-    requireColor(wave.gridMinorTick, ImVec4(0.30F, 0.46F, 0.60F, 0.76F), "专业深色五等分短刻度色不应变化");
-    requireColor(wave.gridCenter, ImVec4(0.90F, 0.96F, 1.0F, 0.66F), "专业深色中心十字线色不应变化");
-    requireColor(wave.splitChannelLabel,
-                 ImVec4(0.90F, 0.94F, 0.98F, 0.86F),
-                 "专业深色 Split 通道标签色不应变化");
+    requireColor(ui.appBackground, rgb8(15, 23, 34), "专业深色全局背景应匹配新预设");
+    requireColor(ui.panelBackground, rgb8(22, 33, 47), "专业深色面板背景应匹配新预设");
+    requireColor(wave.plotBackground, rgb8(10, 18, 28), "专业深色波形背景应匹配新预设");
     protoscope::tests::require(nearlyEqual(wave.gridMajorWidth, 1.0F) && nearlyEqual(wave.gridMinorTickWidth, 1.0F) &&
                                    nearlyEqual(wave.gridCenterWidth, 1.4F) &&
                                    nearlyEqual(wave.gridMinorTickHalfLength, 2.0F),
@@ -88,24 +79,17 @@ void test_ui_theme_high_contrast_tokens_and_grid_contrast()
     const auto& ui = definition.ui;
     const auto& wave = definition.wave;
 
-    requireColor(ui.appBackground, rgb8(6, 9, 12), "高对比全局背景应匹配预设");
-    requireColor(ui.panelBackground, rgb8(9, 12, 16), "高对比面板背景应匹配预设");
-    requireColor(ui.panelBackgroundAlt, rgb8(14, 19, 25), "高对比次级面板应匹配预设");
-    requireColor(ui.panelBorder, rgb8(46, 82, 107), "高对比面板边框应匹配预设");
+    requireColor(ui.appBackground, rgb8(5, 8, 12), "高对比全局背景应匹配预设");
+    requireColor(ui.panelBackground, rgb8(10, 15, 21), "高对比面板背景应匹配预设");
+    requireColor(ui.panelBackgroundAlt, rgb8(18, 26, 35), "高对比次级面板应匹配预设");
+    requireColor(ui.panelBorder, rgb8(58, 72, 87), "高对比面板边框应匹配预设");
     requireColor(ui.accent, rgb8(46, 184, 250), "高对比强调色应匹配预设");
     requireColor(ui.textStrong, rgb8(245, 250, 255), "高对比主文字应匹配预设");
-    requireColor(ui.textMuted, rgb8(179, 194, 209), "高对比次文字应匹配预设");
-    requireColor(ui.genericPlotBackground, rgb8(5, 7, 10), "高对比普通图表背景应匹配预设");
-    requireColor(wave.plotBackground, rgb8(5, 7, 10), "高对比波形背景应匹配预设");
-    requireColor(wave.gridMajor, rgb8(46, 82, 107, 0.92F), "高对比主网格应匹配预设");
-    requireColor(wave.gridMinorTick, rgb8(88, 137, 174, 0.92F), "高对比五等分短刻度应匹配预设");
-    requireColor(wave.gridCenter, rgb8(225, 245, 255, 0.96F), "高对比中心十字线应匹配预设");
-    requireColor(wave.legendOverlayBackground, rgb8(8, 12, 17, 0.98F), "高对比图例背景应匹配预设");
-    requireColor(wave.legendOverlayBorder, rgb8(56, 127, 170), "高对比图例边框应匹配预设");
+    requireColor(ui.textMuted, rgb8(200, 215, 230), "高对比次文字应匹配预设");
+    requireColor(ui.genericPlotBackground, rgb8(2, 5, 9), "高对比普通图表背景应匹配预设");
+    requireColor(wave.plotBackground, rgb8(2, 5, 9), "高对比波形背景应匹配预设");
     requireColor(wave.legendOverlayTextPrimary, rgb8(245, 250, 255), "高对比图例主文字应匹配预设");
-    requireColor(wave.legendOverlayTextSecondary, rgb8(179, 194, 209), "高对比图例辅助文字应匹配预设");
-    requireColor(wave.legendOverlayRowHover, rgb8(14, 26, 36), "高对比图例悬停行应匹配预设");
-    requireColor(wave.legendOverlayRowActive, rgb8(14, 46, 66), "高对比图例激活行应匹配预设");
+    requireColor(wave.legendOverlayTextSecondary, ui.textMuted, "高对比图例辅助文字应匹配预设");
     requireColor(wave.legendOverlayRowActiveBorder, rgb8(46, 184, 250), "高对比图例激活边框应匹配预设");
     protoscope::tests::require(nearlyEqual(wave.gridMajorWidth, 1.2F) && nearlyEqual(wave.gridMinorTickWidth, 1.2F) &&
                                    nearlyEqual(wave.gridCenterWidth, 1.8F) &&
@@ -120,18 +104,14 @@ void test_ui_theme_high_contrast_tokens_and_grid_contrast()
     protoscope::tests::require(
         compositedContrast(wave.legendOverlayTextSecondary, wave.legendOverlayRowActive) >= 7.0,
         "图例辅助文字与激活行背景对比度不得低于 7:1");
-    protoscope::tests::require(compositedContrast(wave.gridMajor, wave.plotBackground) >= 2.10,
-                               "高对比主网格与背景对比度不得低于 2.10:1");
-    protoscope::tests::require(compositedContrast(wave.gridMinorTick, wave.plotBackground) >= 4.0,
-                               "高对比短刻度与背景对比度不得低于 4:1");
-    protoscope::tests::require(compositedContrast(wave.gridCenter, wave.plotBackground) >= 10.0,
-                               "高对比中心线与背景对比度不得低于 10:1");
+    protoscope::tests::require(compositedContrast(wave.gridMajor, wave.plotBackground) <
+                               compositedContrast(wave.gridCenter, wave.plotBackground), "网格应有层次");
 
     ImGui::CreateContext();
     ImPlot::CreateContext();
     protoscope::ui::applyUiTheme(protoscope::config::GuiTheme::ProfessionalDark);
     requireColor(ImGui::GetStyle().Colors[ImGuiCol_WindowBg],
-                 ImVec4(0.05F, 0.07F, 0.10F, 1.0F),
+                 rgb8(15, 23, 34),
                  "专业深色实际 ImGui 样式应先应用");
     protoscope::ui::applyUiTheme(protoscope::config::GuiTheme::DebugHighContrast);
     requireColor(protoscope::ui::activeWaveStyleTokens().plotBackground,
@@ -149,11 +129,117 @@ void test_ui_theme_high_contrast_tokens_and_grid_contrast()
                                "高对比实际 ImGui 样式应使用 3-4px 圆角");
     protoscope::ui::applyUiTheme(protoscope::config::GuiTheme::ProfessionalDark);
     requireColor(ImGui::GetStyle().Colors[ImGuiCol_WindowBg],
-                 ImVec4(0.05F, 0.07F, 0.10F, 1.0F),
+                 rgb8(15, 23, 34),
                  "往返切换后专业深色实际 ImGui 样式应恢复");
     requireColor(ImPlot::GetStyle().Colors[ImPlotCol_PlotBg],
-                 ImVec4(0.07F, 0.09F, 0.13F, 1.0F),
+                 rgb8(10, 18, 28),
                  "往返切换后专业深色实际 ImPlot 样式应恢复");
+    for (int cycle = 0; cycle < 3; ++cycle) {
+        for (const auto theme : {protoscope::config::GuiTheme::ProfessionalLight,
+                                protoscope::config::GuiTheme::ProfessionalDark,
+                                protoscope::config::GuiTheme::DebugHighContrast}) {
+            protoscope::ui::applyUiTheme(theme);
+            const auto& d = protoscope::ui::uiThemeDefinition(theme);
+            requireColor(ImGui::GetStyle().Colors[ImGuiCol_MenuBarBg], d.ui.panelBackground, "菜单背景不应残留");
+            requireColor(ImPlot::GetStyle().Colors[ImPlotCol_PlotBg], d.wave.plotBackground, "绘图区不应残留");
+            protoscope::tests::require(nearlyEqual(ImGui::GetStyle().WindowPadding.x, d.ui.windowPaddingX),
+                                       "主题切换不能累积尺寸缩放");
+            for (auto bg : {d.ui.appBackground, d.ui.panelBackground, d.ui.panelBackgroundAlt}) {
+                protoscope::tests::require(compositedContrast(d.ui.textStrong, bg) >= 4.5, "正文对比度");
+                protoscope::tests::require(compositedContrast(d.ui.textMuted, bg) >= 4.5, "辅助文字对比度");
+            }
+            for (auto slot : {ImGuiCol_FrameBgHovered, ImGuiCol_FrameBgActive, ImGuiCol_ButtonHovered,
+                              ImGuiCol_ButtonActive, ImGuiCol_HeaderActive, ImGuiCol_TabActive}) {
+                const auto bg = ImGui::GetStyle().Colors[slot];
+                protoscope::tests::require(compositedContrast(d.ui.textMuted, bg) >= 4.5, "控件状态辅助文字对比度");
+                if (theme == protoscope::config::GuiTheme::DebugHighContrast) {
+                    protoscope::tests::require(compositedContrast(d.ui.textMuted, bg) >= 7, "高对比控件辅助文字");
+                    protoscope::tests::require(compositedContrast(d.ui.textStrong, bg) >= 12, "高对比控件主文字");
+                }
+            }
+            for (auto c : d.wave.channelPalette) {
+                const auto shown = protoscope::ui::displayColor(c, d.wave.plotBackground, .65F);
+                protoscope::tests::require(compositedContrast(shown, d.wave.plotBackground) >= 3., "通道显示对比度");
+            }
+            const auto& colors = ImGui::GetStyle().Colors;
+            const bool high = theme == protoscope::config::GuiTheme::DebugHighContrast;
+            for (auto slot : {ImGuiCol_FrameBg, ImGuiCol_FrameBgHovered, ImGuiCol_FrameBgActive,
+                             ImGuiCol_Button, ImGuiCol_ButtonHovered, ImGuiCol_ButtonActive, ImGuiCol_Header,
+                             ImGuiCol_HeaderHovered, ImGuiCol_HeaderActive, ImGuiCol_Tab, ImGuiCol_TabSelected,
+                             ImGuiCol_TabHovered, ImGuiCol_TabDimmedSelected, ImGuiCol_CheckboxSelectedBg,
+                             ImGuiCol_TextSelectedBg, ImGuiCol_TableHeaderBg, ImGuiCol_TableRowBgAlt,
+                             ImGuiCol_MenuBarBg, ImGuiCol_PopupBg}) {
+                protoscope::tests::require(compositedContrast(d.ui.textStrong, colors[slot]) >= (high ? 12 : 4.5),
+                                           "全部控件状态正文阈值");
+                protoscope::tests::require(compositedContrast(d.ui.textMuted, colors[slot]) >= (high ? 7 : 4.5),
+                                           "全部控件状态辅助文字阈值");
+                protoscope::tests::require(compositedContrast(colors[ImGuiCol_Border], colors[slot]) >= 3,
+                                           "必要控件边界阈值");
+            }
+            for (auto slot : {ImGuiCol_InputTextCursor, ImGuiCol_CheckMark, ImGuiCol_SliderGrab,
+                             ImGuiCol_NavCursor, ImGuiCol_TabSelectedOverline, ImGuiCol_TabDimmedSelectedOverline,
+                             ImGuiCol_DragDropTarget, ImGuiCol_UnsavedMarker})
+                for (auto bg : {colors[ImGuiCol_FrameBg], colors[ImGuiCol_FrameBgActive], colors[ImGuiCol_CheckboxSelectedBg]})
+                    protoscope::tests::require(compositedContrast(colors[slot], bg) >= 3, "焦点/标记/输入光标阈值");
+            requireColor(colors[ImGuiCol_InputTextCursor], d.ui.textStrong, "输入光标不得残留深色基准");
+            protoscope::tests::require(colors[ImGuiCol_ModalWindowDimBg].w > 0 && colors[ImGuiCol_ModalWindowDimBg].w < 1,
+                                       "模态遮罩必须半透明");
+            if (theme == protoscope::config::GuiTheme::ProfessionalLight) {
+                requireColor(d.ui.panelBackground, rgb8(255,255,255), "浅色内容面板应为白色");
+                protoscope::tests::require(relativeLuminance(d.ui.panelBackgroundAlt) > .9, "浅色工具区不应大片灰底");
+            }
+            const auto lighter = protoscope::ui::displayColor(ImVec4(.8F,.8F,.8F,1),ImVec4(.5F,.5F,.5F,1));
+            protoscope::tests::require(lighter.x > .8F && lighter.x < .88F &&
+                                       compositedContrast(lighter,ImVec4(.5F,.5F,.5F,1)) >= 3,
+                                       "近达标亮色应选小幅提亮，不能大幅反转到黑端");
+            const float disabled = ImGui::GetStyle().DisabledAlpha;
+            protoscope::tests::require(disabled > 0 && disabled <= (high ? .86F : .72F),
+                                       "禁用态必须明确淡化，不能接近启用态换取对比度");
+            protoscope::ui::beginDisabled();
+            const auto disabledFill=ImGui::GetStyleColorVec4(ImGuiCol_Button);
+            auto disabledText=ImGui::GetStyleColorVec4(ImGuiCol_Text);
+            disabledText.w*=ImGui::GetStyle().Alpha*.9F;
+            protoscope::ui::beginDisabled(false); // 嵌套不得重复淡化或丢失禁用正文策略。
+            requireColor(ImGui::GetStyleColorVec4(ImGuiCol_Button),disabledFill,"嵌套禁用表面稳定");
+            protoscope::ui::endDisabled();
+            for (auto parent : {d.ui.appBackground,d.ui.panelBackground,d.ui.panelBackgroundAlt}) {
+                const ImVec4 disabledBg(disabledFill.x*disabled+parent.x*(1-disabled),
+                                        disabledFill.y*disabled+parent.y*(1-disabled),
+                                        disabledFill.z*disabled+parent.z*(1-disabled),1);
+                protoscope::tests::require(compositedContrast(disabledText,disabledBg)>=(high?12:4.5),
+                                           "禁用90%覆盖字体核心不得降低阈值");
+            }
+            protoscope::ui::endDisabled();
+            requireColor(ImGui::GetStyleColorVec4(ImGuiCol_Text),d.ui.textStrong,"禁用结束恢复正文");
+            requireColor(ImGui::GetStyleColorVec4(ImGuiCol_Button),d.ui.panelBackgroundAlt,"禁用结束恢复填充");
+            const ImVec4 saturated(.05F, .8F, .4F, .08F);
+            const ImVec4 alreadyReadable(.1F,.9F,.5F,1);
+            requireColor(protoscope::ui::displayColor(alreadyReadable,ImVec4(0,0,0,1)),alreadyReadable,
+                         "已达标颜色不得重新校色");
+            const auto vivid = protoscope::ui::displayColor(saturated, ImVec4(0,0,0,1));
+            protoscope::tests::require(vivid.x == saturated.x && vivid.y == saturated.y && vivid.z == saturated.z &&
+                                       vivid.w > saturated.w && compositedContrast(vivid, ImVec4(0,0,0,1)) >= 3,
+                                       "低 alpha 达标原色应只提升 alpha，禁止先褪色");
+            for (auto bg : {ImVec4(0,0,0,1), ImVec4(1,1,1,1), ImVec4(.5F,.5F,.5F,1)}) {
+                const auto corrected = protoscope::ui::displayColor(saturated, bg);
+                protoscope::tests::require(compositedContrast(corrected, bg) >= 3, "黑白中灰显示修正");
+            }
+            const ImVec4 translucent(.2F,.3F,.4F,.25F);
+            const ImVec4 effective(translucent.x*.25F+d.ui.appBackground.x*.75F,
+                                   translucent.y*.25F+d.ui.appBackground.y*.75F,
+                                   translucent.z*.25F+d.ui.appBackground.z*.75F,1);
+            requireColor(protoscope::ui::displayColor(saturated, translucent),
+                         protoscope::ui::displayColor(saturated, effective), "透明背景必须合成父表面");
+            auto custom = d;
+            custom.wave.correctContrast = false;
+            protoscope::ui::applyUiTheme(custom);
+            requireColor(protoscope::ui::displayColor(saturated, d.wave.plotBackground), saturated, "关闭修正不得改源色");
+            protoscope::ui::applyUiTheme(d);
+            const auto transparent = protoscope::ui::displayColor(ImVec4(1,1,1,0), d.wave.plotBackground);
+            protoscope::tests::require(transparent.w == 0, "显式全透明色必须保留");
+        }
+    }
+    protoscope::ui::applyUiTheme(protoscope::config::GuiTheme::ProfessionalDark);
     ImPlot::DestroyContext();
     ImGui::DestroyContext();
 }

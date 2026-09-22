@@ -103,13 +103,11 @@ inline ElfStaticAddressFilePollResult pollElfStaticAddressFileWatchState(ElfStat
         state.lastWriteTimeNs = lastWriteTimeNs;
         state.fileSize = fileSize;
         result.changed = true;
-        if (state.pendingReload) {
-            state.pendingReloadSinceMs = currentMs;
-            state.pendingStatusMessage = "检测到 ELF 数据文件重建，等待写入稳定后自动重载";
-            result.statusMessage = state.pendingStatusMessage;
-        } else {
-            result.statusMessage = "检测到 ELF 数据文件变更，请按需手动重载";
-        }
+        // 普通覆盖与删除重建共用稳定等待，每次写入都重新计时。
+        state.pendingReload = true;
+        state.pendingReloadSinceMs = currentMs;
+        state.pendingStatusMessage = "检测到 ELF 数据文件变更，等待写入稳定后自动重载";
+        result.statusMessage = state.pendingStatusMessage;
         return result;
     }
 
@@ -121,7 +119,7 @@ inline ElfStaticAddressFilePollResult pollElfStaticAddressFileWatchState(ElfStat
         result.changed = true;
         result.shouldReload = true;
         result.clearComboCache = true;
-        result.statusMessage = "ELF 数据文件重建稳定，正在自动重载";
+        result.statusMessage = "ELF 数据文件写入稳定，正在自动重载";
     }
     return result;
 }

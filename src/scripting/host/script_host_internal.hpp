@@ -2,6 +2,9 @@
 
 #include "protoscope/scripting/frame_stream_parser.hpp"
 #include "protoscope/scripting/script_host.hpp"
+#include "lua_execution_guard.hpp"
+#include "script_data_session.hpp"
+#include "data_table_session.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -10,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -42,10 +46,38 @@ struct LoadedStreamSchema {
 };
 
 struct ScriptHost::Runtime {
+    LuaExecutionState execution;
+    std::unique_ptr<ScriptDataSession> data;
     sol::state lua;
     std::unique_ptr<LoadedStreamSchema> stream;
     std::unordered_map<std::string, sol::protected_function> streamCallbacks;
     std::unordered_map<std::string, StreamRuntimeProfile> streamRuntimeProfiles;
+    std::unordered_map<std::string, std::uint64_t> controlUpdatedAtMs;
+    BusinessUiSnapshot businessUi;
+    std::unordered_map<std::string, std::vector<std::size_t>> boundControls;
+    std::unordered_map<std::string, ControlBindingStatus> bindingStatus;
+    std::unique_ptr<DataTableSession> tables;
+};
+
+struct ScriptHost::CallbackScope {
+    explicit CallbackScope(ScriptHost& owner)
+        : host(owner), scope(owner.runtime_->lua.lua_state(), owner.runtime_->execution,
+                             *owner.stopSignal_, owner.executionConfig_.callbackTimeoutMs)
+    {
+    }
+    ~CallbackScope()
+    {
+        if (host.runtime_->execution.failure != nullptr) {
+            host.setLastError(host.runtime_->execution.failure);
+            // 超预算后停止业务调度，未交给传输层的发送不可继续执行。
+            host.timers_.clear();
+            host.fileSendJobs_.clear();
+            host.fileHandles_.clear();
+            host.txRequests_.clear();
+        }
+    }
+    ScriptHost& host;
+    LuaExecutionScope scope;
 };
 
 struct ScriptHost::LoadedScript {
@@ -59,6 +91,7 @@ struct ScriptHost::FileHandle {
     std::fstream stream;
     bool readable{false};
     bool writable{false};
+    bool append{false};
     std::uint64_t bytesWritten{0};
 };
 
@@ -77,7 +110,7 @@ struct ScriptHost::FileSendJob {
     std::size_t chunkSize{0};
     std::uint64_t total{0};
     std::uint64_t nextOffset{0};
-    std::size_t inflight{0};
+    std::unordered_set<std::uint64_t> inflight;
     bool eof{false};
 };
 

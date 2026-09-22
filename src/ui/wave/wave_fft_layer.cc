@@ -288,8 +288,8 @@ namespace {
                                      const ImVec2& selectionStart,
                                      const ImVec2& selectionCurrent)
     {
-        const ImU32 fillColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.2F, 0.55F, 1.0F, 0.16F));
-        const ImU32 lineColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.45F, 0.75F, 1.0F, 0.95F));
+        const ImU32 fillColor = ImGui::ColorConvertFloat4ToU32(withAlpha(activeUiStyleTokens().accent, .16F));
+        const ImU32 lineColor = ImGui::ColorConvertFloat4ToU32(activeUiStyleTokens().accent);
         switch (mode) {
             case FftZoomSelectionAxisMode::XOnly: {
                 const float lineY = 0.5F * (selectionStart.y + selectionCurrent.y);
@@ -681,11 +681,12 @@ namespace {
         return best;
     }
 
-    void drawCursorAnnotation(const plot::WaveFftReadout& readout,
+    void drawCursorAnnotation(const plot::WaveViewState& view, const plot::WaveFftReadout& readout,
                               const FftXAxisScale& xAxis,
                               plot::WaveFftMagnitudeMode magnitudeMode,
                               bool phasePlot,
-                              std::span<const double> magnitudeOffsets)
+                              std::span<const double> magnitudeOffsets,
+                              const ImVec4& color = activeUiStyleTokens().warning)
     {
         const auto x = fftDisplayX(xAxis, readout.frequencyHz);
         if (!x.has_value()) {
@@ -694,14 +695,11 @@ namespace {
         const double y =
             phasePlot ? readout.phaseDegrees
                       : readout.displayMagnitude + fftMagnitudeOffsetForChannel(magnitudeOffsets, readout.channelIndex);
-        const ImVec4 color(1.0F, 1.0F, 0.2F, 1.0F);
         const std::string axisText = formatXAxisReadout(xAxis, readout.frequencyHz);
         const char* magnitudeUnit = fftMagnitudeReadoutUnit(magnitudeMode);
-        ImPlot::Annotation(*x,
+        drawCursorReadoutLabel(view, color, *x,
                            y,
-                           color,
                            ImVec2(10.0F, -10.0F),
-                           true,
                            phasePlot ? "%s\n%.3g°" : "%s\n%.6g %s",
                            axisText.c_str(),
                            phasePlot ? readout.phaseDegrees : readout.displayMagnitude,
@@ -723,8 +721,8 @@ namespace {
 
         bool heldAny = false;
         const ImVec4 cursorColors[2] = {
-            ImVec4(1.0F, 0.85F, 0.15F, 1.0F),
-            ImVec4(0.2F, 0.85F, 1.0F, 1.0F),
+            measurementCursorColor(view, 0),
+            measurementCursorColor(view, 1),
         };
         for (std::size_t cursorIndex = 0; cursorIndex < view.cursors.size(); ++cursorIndex) {
             auto& cursor = view.cursors[cursorIndex];
@@ -738,6 +736,8 @@ namespace {
             bool held = false;
             bool hovered = false;
             const int dragId = static_cast<int>((phasePlot ? 3000 : 2000) + cursorIndex);
+            if (!view.cursorColors.resolve(cursorIndex, cursorIndex).graphicsPass)
+                drawCursorGuard(*dragX, cursorColors[cursorIndex], 3.2F);
             ImPlot::DragLineX(dragId, &(*dragX), cursorColors[cursorIndex], 1.2F, 0, nullptr, &hovered, &held);
             heldAny = heldAny || held;
             const auto dragFrequency = fftFrequencyHzFromDisplayX(xAxis, *dragX);
@@ -751,7 +751,8 @@ namespace {
                 cursor.channelIndex = readout->channelIndex;
                 cursorReadouts[cursorIndex] = readout;
                 if (held || hovered || cursor.pinned) {
-                    drawCursorAnnotation(*readout, xAxis, view.fft.magnitudeMode, phasePlot, magnitudeOffsets);
+                    drawCursorAnnotation(view, *readout, xAxis, view.fft.magnitudeMode, phasePlot,
+                                         magnitudeOffsets, cursorColors[cursorIndex]);
                 }
             }
         }
@@ -781,7 +782,7 @@ namespace {
                                                      phasePlot,
                                                      magnitudeOffsets);
         if (hovered.has_value()) {
-            drawCursorAnnotation(*hovered, xAxis, view.fft.magnitudeMode, phasePlot, magnitudeOffsets);
+            drawCursorAnnotation(view, *hovered, xAxis, view.fft.magnitudeMode, phasePlot, magnitudeOffsets);
             if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                 view.measurementChannelIndex = hovered->channelIndex;
             }
@@ -915,7 +916,8 @@ namespace {
                              const plot::WaveSnapshot& snapshot,
                              const FftXAxisScale& xAxis,
                              bool phasePlot,
-                             std::span<const double> magnitudeOffsets)
+                             std::span<const double> magnitudeOffsets,
+                             const plot::WaveViewState& view)
     {
         for (const auto& channel : frame.channels) {
             if (!channel.enabled || !channel.valid || channel.bins.empty() ||
@@ -930,9 +932,28 @@ namespace {
             if (firstDrawableBin >= channel.bins.size()) {
                 continue;
             }
-            const auto color = channelColor(snapshot.channels[channel.channelIndex], channel.channelIndex);
+            const auto color = displayColor(channelColor(snapshot.channels[channel.channelIndex], channel.channelIndex),
+                                            activeUiStyleTokens().genericPlotBackground);
+            std::vector<plot::WaveFftBin> drawBins;
+            const auto& trace = phasePlot ? channel.phaseTrace : channel.magnitudeTrace;
+            if (!trace.empty()) {
+                plot::ChannelView source;
+                source.samples = trace.data();
+                source.totalSamples = trace.size();
+                source.summaryIndex = phasePlot ? &channel.phaseSummary : &channel.magnitudeSummary;
+                const plot::WaveQueryView query(source, plot::WaveTimeAxisSource::ScriptTime, 0,
+                                                plot::WaveDisplayFormula::OffsetThenScale);
+                const auto limits = ImPlot::GetPlotLimits();
+                const auto minHz = fftFrequencyHzFromDisplayX(xAxis, limits.X.Min).value_or(trace.front().time);
+                const auto maxHz = fftFrequencyHzFromDisplayX(xAxis, limits.X.Max).value_or(trace.back().time);
+                const auto budget = makeRenderBudget(view, frame.channels.size(),
+                    static_cast<std::size_t>((std::max)(ImPlot::GetPlotSize().x, 1.0F)), false);
+                for (const auto index : query.traceIndices(minHz, maxHz, budget.pointsPerChannel,
+                                                           nullptr, true, view.downsampleMode))
+                    if (index >= firstDrawableBin) drawBins.push_back(channel.bins[index]);
+            }
             FftGetterPayload payload{
-                .bins = channel.bins.data() + firstDrawableBin,
+                .bins = trace.empty() ? channel.bins.data() + firstDrawableBin : drawBins.data(),
                 .xAxis = &xAxis,
                 .phase = phasePlot,
                 .magnitudeOffset = fftMagnitudeOffsetForChannel(magnitudeOffsets, channel.channelIndex)};
@@ -945,8 +966,13 @@ namespace {
             ImPlot::PlotLineG(itemLabel.c_str(),
                               &fftBinGetter,
                               &payload,
-                              static_cast<int>(channel.bins.size() - firstDrawableBin),
+                              static_cast<int>(trace.empty() ? channel.bins.size() - firstDrawableBin : drawBins.size()),
                               spec);
+            // 绘制期才得知的图例显隐进入下一帧选色，不更改本帧已发布身份色。
+            const auto* item = ImPlot::GetItem(itemLabel.c_str());
+            const auto identity = channel.channelIndex * 2 + (phasePlot ? 1 : 0);
+            std::erase(view.cursorHiddenFftChannels, identity);
+            if (item && !item->Show) view.cursorHiddenFftChannels.push_back(identity);
             if (!phasePlot && channel.fundamental.has_value() && std::isfinite(channel.fundamental->frequencyHz)) {
                 if (const auto fundamentalX = fftDisplayX(xAxis, channel.fundamental->frequencyHz)) {
                     ImPlot::TagX(*fundamentalX, color, "基波 %.4g Hz", channel.fundamental->frequencyHz);
@@ -1011,12 +1037,12 @@ namespace {
         return value;
     }
 
-    void drawCursorSummary(const std::array<std::optional<plot::WaveFftReadout>, 2>& cursorReadouts,
+    void drawCursorSummary(const plot::WaveViewState& view, const std::array<std::optional<plot::WaveFftReadout>, 2>& cursorReadouts,
                            const FftXAxisScale& xAxis,
                            plot::WaveFftMagnitudeMode magnitudeMode)
     {
-        ImGui::TextUnformatted(readoutText("C1", cursorReadouts[0], xAxis, magnitudeMode).c_str());
-        ImGui::TextUnformatted(readoutText("C2", cursorReadouts[1], xAxis, magnitudeMode).c_str());
+        ImGui::TextColored(cursorLabelText(view, 0, 0), "%s", readoutText("A", cursorReadouts[0], xAxis, magnitudeMode).c_str());
+        ImGui::TextColored(cursorLabelText(view, 1, 1), "%s", readoutText("B", cursorReadouts[1], xAxis, magnitudeMode).c_str());
         if (!cursorReadouts[0].has_value() || !cursorReadouts[1].has_value()) {
             return;
         }
@@ -1096,11 +1122,11 @@ namespace {
         const ImVec2 overlayMin(overlayMax.x - textSize.x - padding * 2.0F, plotPos.y + padding);
         auto* drawList = ImPlot::GetPlotDrawList();
         drawList->AddRectFilled(
-            overlayMin, overlayMax, ImGui::ColorConvertFloat4ToU32(ImVec4(0.04F, 0.045F, 0.05F, 0.68F)), 5.0F);
+            overlayMin, overlayMax, ImGui::ColorConvertFloat4ToU32(activeWaveStyleTokens().statusOverlayBackground), 5.0F);
         drawList->AddRect(
-            overlayMin, overlayMax, ImGui::ColorConvertFloat4ToU32(ImVec4(1.0F, 1.0F, 1.0F, 0.18F)), 5.0F);
+            overlayMin, overlayMax, ImGui::ColorConvertFloat4ToU32(activeWaveStyleTokens().statusOverlayBorder), 5.0F);
         ImVec2 textPos(overlayMin.x + padding, overlayMin.y + padding);
-        const ImU32 textColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.92F, 0.94F, 0.98F, 0.95F));
+        const ImU32 textColor = ImGui::ColorConvertFloat4ToU32(activeWaveStyleTokens().statusOverlayText);
         for (const auto& line : lines) {
             drawList->AddText(textPos, textColor, line.c_str());
             textPos.y += lineSpacing;
@@ -1117,13 +1143,15 @@ namespace {
                                             bool enableCursorInteraction)
     {
         PlotRenderResult result{};
+        wave.fftDisplayError.clear();
+        wave.view.cursorFftPhaseVisible = includePhase;
         const auto* fftFrame = frame.fftFrame;
         if (fftFrame == nullptr || !fftFrame->enabled) {
-            drawCenteredHint("FFT 未启用");
+            ImGui::Dummy(ImGui::GetContentRegionAvail());
             return result;
         }
         if (!fftFrame->valid) {
-            drawCenteredHint(fftFrame->message.empty() ? "当前视图无法计算 FFT" : fftFrame->message.c_str());
+            ImGui::Dummy(ImGui::GetContentRegionAvail());
             return result;
         }
 
@@ -1132,11 +1160,13 @@ namespace {
         const auto magnitudeOffsets = fftMagnitudeOffsets(wave);
         const FftXAxisScale xAxis = makeFftXAxisScale(view, *fftFrame);
         if (!xAxis.valid) {
-            drawCenteredHint(invalidFftXAxisMessage(xAxis));
+            wave.fftDisplayError = invalidFftXAxisMessage(xAxis);
+            ImGui::Dummy(ImGui::GetContentRegionAvail());
             return result;
         }
         if (!displayFftFrequencyRange(view, *fftFrame, xAxis).has_value()) {
-            drawCenteredHint("当前 FFT 横轴范围无效");
+            wave.fftDisplayError = "当前 FFT 横轴范围无效";
+            ImGui::Dummy(ImGui::GetContentRegionAvail());
             return result;
         }
         const char* yLabel = fftMagnitudeAxisLabel(view.fft.magnitudeMode);
@@ -1166,7 +1196,7 @@ namespace {
             ImPlot::SetupAxes(fftXAxisLabel(xAxis), yLabel);
             ImPlot::SetupAxisLimits(ImAxis_X1, frequencyRange->min, frequencyRange->max, ImGuiCond_Always);
             ImPlot::SetupAxisLimits(ImAxis_Y1, view.fftMagnitudeMin, view.fftMagnitudeMax, ImGuiCond_Always);
-            drawFftChannelLines(*fftFrame, *frame.fullSnapshot, xAxis, false, magnitudeOffsets);
+            drawFftChannelLines(*fftFrame, *frame.fullSnapshot, xAxis, false, magnitudeOffsets, view);
             const double minFrequencyWidth = (std::max)(fftFrame->frequencyResolutionHz, 1e-9);
             const bool zoomSelectionConsumed = handleFftZoomSelection(
                 view, xAxis, false, minFrequencyWidth, wave.suppressZoomSelectionEscapeThisFrame);
@@ -1178,7 +1208,6 @@ namespace {
                 if (showFrequencyCursors && view.showMeasurementOverlay) {
                     drawCursorOverlay(cursorReadouts, xAxis, view.fft.magnitudeMode);
                 }
-                drawWaveStatusOverlay(view);
                 const bool axisResetConsumed = handleFftAxisDoubleClick(wave, *fftFrame, false);
                 const bool offsetResetConsumed =
                     !axisResetConsumed &&
@@ -1207,7 +1236,7 @@ namespace {
             ImPlot::SetupAxes(fftXAxisLabel(xAxis), "相位 (deg)");
             ImPlot::SetupAxisLimits(ImAxis_X1, frequencyRange->min, frequencyRange->max, ImGuiCond_Always);
             ImPlot::SetupAxisLimits(ImAxis_Y1, view.fftPhaseMin, view.fftPhaseMax, ImGuiCond_Always);
-            drawFftChannelLines(*fftFrame, *frame.fullSnapshot, xAxis, true, magnitudeOffsets);
+            drawFftChannelLines(*fftFrame, *frame.fullSnapshot, xAxis, true, magnitudeOffsets, view);
             const double minFrequencyWidth = (std::max)(fftFrame->frequencyResolutionHz, 1e-9);
             const bool zoomSelectionConsumed =
                 handleFftZoomSelection(view, xAxis, true, minFrequencyWidth, wave.suppressZoomSelectionEscapeThisFrame);
@@ -1232,7 +1261,7 @@ namespace {
         inputMap = savedInputMap;
 
         if (showFrequencyCursors && !view.showMeasurementOverlay) {
-            drawCursorSummary(cursorReadouts, xAxis, view.fft.magnitudeMode);
+            drawCursorSummary(view, cursorReadouts, xAxis, view.fft.magnitudeMode);
         }
         return result;
     }

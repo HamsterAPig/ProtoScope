@@ -19,6 +19,8 @@ app:
     enabled: false
 
 gui:
+  # professional_dark: 深墨蓝灰；professional_light: 冷白面板；debug_high_contrast: 近黑高对比。
+  # 可使用配置旁 themes 目录中的用户主题ID，显式覆盖不被预设改写。
   theme: professional_dark
   show_app_header: false
   renderer_backend: opengl
@@ -46,6 +48,10 @@ gui:
     x_axis_double_click_action: fit_full_history
     y_axis_double_click_action: fit_visible_channels
     y_axis_double_click_adjust_offset: false
+    overview_normalize_channels: false
+    overview_show_bit_channels: false
+    # 自动色独立于主题 correct_contrast；false 恢复主题 cursor_palette 映射。
+    cursor_auto_color: true
     hidden_channel_policy: visible_only
     cursor_extreme_snap_policy: nearest_waveform
     mouse_y_offset_drag_mode: direct
@@ -60,6 +66,8 @@ gui:
     max_render_points_per_channel: 1200
     max_render_vertices: 60000
     peak_detect_downsample: true
+    # stable_edges: 稳定分桶并保留边沿邻点；legacy_uniform: 旧版均匀分桶及绘制路径
+    downsample_mode: stable_edges
     downsample_start_multiplier: 2.0
     overview_max_samples: 20000
     min_visible_time_span: 0.001

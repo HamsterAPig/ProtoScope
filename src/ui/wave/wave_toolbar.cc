@@ -685,6 +685,7 @@ void drawFftInputWindowActions(plot::WaveDockState& wave)
                                   "重新使用当前时域主视图范围作为 FFT 输入；频域缩放不会改变这个输入窗口。",
                                   false,
                                   true)) {
+        wave.fftRefreshRequested = true;
         view.fftSourceMinTime = view.viewMinTime;
         view.fftSourceMaxTime = view.viewMaxTime;
         view.fftSourceWindowValid = true;
@@ -1292,7 +1293,7 @@ void drawWaveRenderSection(plot::WaveViewState& view, double minVisibleTimeSpan)
         }
     }
     if (!view.sampleFrequencyError.empty()) {
-        ImGui::TextColored(ImVec4(1.0F, 0.35F, 0.25F, 1.0F), "%s", view.sampleFrequencyError.c_str());
+        ImGui::TextColored(activeUiStyleTokens().danger, "%s", view.sampleFrequencyError.c_str());
     }
 }
 
@@ -1309,6 +1310,21 @@ void drawWaveOverviewSection(plot::WaveViewState& view)
         view.overviewMaxSamples = static_cast<std::size_t>((std::max)(0, maxSamplesInput));
     }
     addItemHelp("限制概览图每个通道保留的最大样本数，避免概览绘制过重。");
+    auto& selection = view.overviewSelection;
+    const auto effective = overviewSelectionStyle(selection);
+    ImGui::TextUnformatted("缩放框");
+    if (ImGui::RadioButton("自动选色", selection.automatic)) selection.automatic = true;
+    ImGui::SameLine();
+    if (ImGui::RadioButton("固定颜色", !selection.automatic)) selection.automatic = false;
+    if (!selection.automatic) {
+        float color[]{float(effective.fixedColor.r), float(effective.fixedColor.g), float(effective.fixedColor.b)};
+        if (ImGui::ColorEdit3("固定色", color, ImGuiColorEditFlags_NoInputs))
+            selection.fixedColor = std::array{color[0], color[1], color[2]};
+    }
+    float minimum = float(effective.minAlpha), maximum = float(effective.maxAlpha);
+    if (ImGui::SliderFloat("最低不透明度", &minimum, 0.F, maximum, "%.2f")) selection.minAlpha = minimum;
+    if (ImGui::SliderFloat("最高不透明度", &maximum, minimum, 1.F, "%.2f")) selection.maxAlpha = maximum;
+    if (ImGui::Button("恢复主题默认")) selection = {};
 }
 
 void drawWaveToolbar(app::Application& application,
@@ -1344,7 +1360,9 @@ void drawWaveToolbar(app::Application& application,
 
     drawWaveRenderSection(view, minVisibleTimeSpan);
 
+    const auto previousSelection = view.overviewSelection;
     drawWaveOverviewSection(view);
+    if (previousSelection != view.overviewSelection) application.docks().markDirty("概览选区设置已更改");
 }
 
 void drawWaveToolsDrawer(app::Application& application,
@@ -1370,10 +1388,13 @@ void drawWaveToolsDrawer(app::Application& application,
         case plot::WaveToolsDrawer::Measure:
             drawWaveMeasurementSection(view);
             break;
-        case plot::WaveToolsDrawer::View:
+        case plot::WaveToolsDrawer::View: {
             drawWaveViewSection(view, minVisibleTimeSpan);
+            const auto previousSelection = view.overviewSelection;
             drawWaveOverviewSection(view);
+            if (previousSelection != view.overviewSelection) application.docks().markDirty("概览选区设置已更改");
             break;
+        }
         case plot::WaveToolsDrawer::FFT:
             drawFftToolbarSectionContent(wave);
             break;

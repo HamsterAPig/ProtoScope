@@ -75,7 +75,6 @@ namespace protoscope::ui {
 
 namespace {
     constexpr float kAppHeaderHeight = 58.0F;
-    constexpr float kStatusBarHeight = 44.0F;
     int gLastGlfwErrorCode = 0;
     std::string gLastGlfwErrorDescription;
 
@@ -894,7 +893,11 @@ bool GuiRuntime::initializeImGui()
     }
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    applyUiTheme(application_.runtimeConfig().gui.theme);
+    themeManager_.setConfigPath(application_.docks().configState().loadedFromPath);
+    std::string themeError;
+    themeManager_.startup(application_.runtimeConfig().gui.theme, themeError);
+    themeManager_.applyPending();
+    if (!themeError.empty()) application_.setStatusMessage(themeError, false);
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.IniFilename = nullptr;
@@ -909,7 +912,7 @@ bool GuiRuntime::initializePlotContext()
         startupDiagnostics_->setStage("GuiRuntime::initializePlotContext");
     }
     ImPlot::CreateContext();
-    applyUiTheme(application_.runtimeConfig().gui.theme);
+    applyUiTheme(activeThemeDefinition());
     auto& inputMap = ImPlot::GetInputMap();
     inputMap.Pan = ImGuiMouseButton_Left;
     inputMap.Select = ImGuiMouseButton_Right;
@@ -1309,8 +1312,10 @@ void GuiRuntime::drawAppHeader(const float menuBarHeight)
         }
         ImGui::SameLine();
         if (drawGhostIconButton("导入波形", "导入 .psraw 快照并重建当前波形缓存")) {
-            openRawCaptureImportDialog();
+            openUnifiedDataImport();
         }
+        ImGui::SameLine();
+        if (drawGhostIconButton("导出数据", "导出波形数据")) openUnifiedDataExport(0);
     }
     ImGui::End();
     ImGui::PopStyleColor(2);
@@ -1387,9 +1392,40 @@ void GuiRuntime::drawAppShell()
     ImGui::PopStyleVar(2);
 }
 
+bool GuiRuntime::deferBuiltinFileOperation(std::function<void()> operation)
+{
+    if (executingBuiltinFileOperation_) return false;
+    if (!pendingBuiltinFileOperation_) {
+        pendingBuiltinFileOperation_ = std::move(operation);
+        builtinFileOperationPrepared_ = false;
+    }
+    return true;
+}
+
+void GuiRuntime::prepareBuiltinFileOperation()
+{
+    if (!pendingBuiltinFileOperation_ || builtinFileOperationPrepared_) return;
+    // 在 NewFrame 之前恢复 Dock 快照，避免销毁当前帧正在使用的窗口节点。
+    exitWaveFullscreen();
+    builtinFileOperationPrepared_ = true;
+}
+
+void GuiRuntime::dispatchBuiltinFileOperation()
+{
+    if (!pendingBuiltinFileOperation_ || !builtinFileOperationPrepared_) return;
+    auto operation = std::move(pendingBuiltinFileOperation_);
+    pendingBuiltinFileOperation_ = {};
+    builtinFileOperationPrepared_ = false;
+    executingBuiltinFileOperation_ = true;
+    operation();
+    executingBuiltinFileOperation_ = false;
+}
+
 void GuiRuntime::renderFrame()
 {
+    themeManager_.applyPending();
     refreshWindowTitle();
+    prepareBuiltinFileOperation();
 
     rendererBackend_->newFrame();
     ImGui::NewFrame();
@@ -1411,7 +1447,6 @@ void GuiRuntime::renderFrame()
     const bool previousShowWaveDock = showWaveDock_;
 
     application_.clearExpiredTransientStatus(nowMs());
-    drawStatusBar();
     drawRegisteredDocks();
     const bool waveOverlayFullscreen =
         waveFullscreenActive_ && waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Overlay;
@@ -1426,6 +1461,7 @@ void GuiRuntime::renderFrame()
         // Overlay 已完整绘制波形，跳过底层 Dock 可避免同一滚轮输入被处理两次。
         waveDockRenderer_.drawOverlay(waveFullscreenActive_, &waveFullscreenToggleRequested_);
     }
+    drawStatusBar();
     drawRegisteredDialogs();
     if (waveFullscreenActive_ && waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus && !showWaveDock_) {
         waveFullscreenToggleRequested_ = true;
@@ -1438,7 +1474,7 @@ void GuiRuntime::renderFrame()
             pendingProtocolWorkspaceSave_ = true;
         }
     }
-    if (waveFullscreenToggleRequested_) {
+    if (waveFullscreenToggleRequested_ && !pendingBuiltinFileOperation_) {
         if (waveFullscreenActive_) {
             exitWaveFullscreen();
         } else {
@@ -1449,6 +1485,8 @@ void GuiRuntime::renderFrame()
     ImGui::Render();
     rendererBackend_->renderDrawData(window_, ImGui::GetDrawData());
     rendererBackend_->present(window_);
+    // 普通布局已实际呈现一帧，此时才允许阻塞式原生对话框接管焦点。
+    dispatchBuiltinFileOperation();
 }
 
 void GuiRuntime::refreshWindowTitle()
