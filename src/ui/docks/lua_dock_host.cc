@@ -218,6 +218,8 @@ bool GuiRuntime::drawLuaLayoutNode(const scripting::LayoutNodeDescriptor& node,
             return drawLuaGroupLayoutNode(node, controls, stableId, widgetIndex, earlyExit);
         case scripting::LayoutNodeKind::Collapse:
             return drawLuaCollapseLayoutNode(node, controls, stableId, widgetIndex, earlyExit);
+        case scripting::LayoutNodeKind::Tabs:
+            return drawLuaTabsLayoutNode(node, controls, stableId, widgetIndex, earlyExit);
         case scripting::LayoutNodeKind::Control:
             if (node.controlIndex >= controls.size()) {
                 return false;

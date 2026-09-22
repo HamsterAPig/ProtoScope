@@ -70,4 +70,26 @@ Escape 取消尚未提交的编辑，恢复当前宿主值；change 模式已提
 重新校验，拒绝值不会改变宿主。禁用、只读、隐藏、切换协议或停止绘制会取消草稿。
 动态 label 不改变输入控件身份。
 
-业务菜单、tabs、数据绑定和历史表仍在后续实施范围。
+## 固定页签布局
+
+`tabs` 是布局容器，不在 controls 数组声明：
+
+```lua
+layout = {type="tabs", id="pages", default="live", pages={
+    {id="live", title="Live", children={"measured", "connected"}},
+    {id="settings", title="Settings", children={"target", "notes"}}
+}}
+```
+
+固定 1..64 页，页 ID 在容器内唯一；容器 ID 与协议内所有控件及其他 tabs ID 不得重复。
+各页 children 使用既有布局语法，控件仍需在所有页中恰好出现一次；支持嵌套 tabs。
+省略 default 时选择第一页。运行时不能增删页签或更新 options。
+
+页选择通过 `proto.get_control("pages")`、`proto.set_control("pages", "settings")` 读写，
+用户切页触发 `on_control(ctx, "pages", "settings")`，程序切页不触发回调。
+选择值为稳定的页 ID，加入既有 UI YAML；重载可保留重排后的同 ID 页，
+已删除的页回退到新默认页，旧代次事件不会修改新运行时。
+`update_control` 可修改 value、visible、disabled、read_only、tooltip；
+disabled/read_only 限制切页，页内控件仍按自身属性校验，不隐式联动。
+
+业务菜单、数据绑定和历史表仍在后续实施范围。

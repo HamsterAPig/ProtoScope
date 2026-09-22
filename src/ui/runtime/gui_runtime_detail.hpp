@@ -456,6 +456,7 @@ namespace {
             case scripting::ControlType::SliderFloat: return "slider_float";
             case scripting::ControlType::RadioGroup: return "radio_group";
             case scripting::ControlType::TextArea: return "text_area";
+            case scripting::ControlType::TabSelection: return "tabs";
             case scripting::ControlType::Button:
                 return "button";
             case scripting::ControlType::InputText:
@@ -483,6 +484,7 @@ namespace {
         return type == scripting::ControlType::Checkbox || type == scripting::ControlType::InputText ||
                type == scripting::ControlType::SliderInt || type == scripting::ControlType::SliderFloat ||
                type == scripting::ControlType::RadioGroup || type == scripting::ControlType::TextArea ||
+               type == scripting::ControlType::TabSelection ||
                type == scripting::ControlType::Combo || type == scripting::ControlType::InputInt ||
                type == scripting::ControlType::InputFloat || type == scripting::ControlType::TxSequence;
     }

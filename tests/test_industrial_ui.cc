@@ -12,6 +12,7 @@ struct GuiRuntimeTestAccess {
                      std::map<std::string, ImRect>* rectangles = nullptr)
     {
         for (const auto& control : controls) {
+            if (control.descriptor.type==scripting::ControlType::TabSelection) continue;
             const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
             runtime.drawDynamicLayoutControl(control, ImGui::GetContentRegionAvail().x);
             if (rectangles) (*rectangles)[control.descriptor.id] = ImRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
@@ -30,6 +31,23 @@ struct GuiRuntimeTestAccess {
     static void clearFeedback(GuiRuntime& runtime)
     {
         runtime.luaControlFeedbackStates_.clear();
+    }
+    static void drawLayout(GuiRuntime& runtime, const scripting::DockSnapshot& dock)
+    {
+        std::size_t index=0;
+        runtime.drawLuaLayoutNode(dock.descriptor.layout->root,dock.controls,"test",index,false);
+    }
+    static std::string selectedTab(const GuiRuntime& runtime)
+    {
+        return runtime.luaTabsUiStates_.at("telemetry_pages").visibleValue;
+    }
+    static ImVec2 firstTabCenter(std::uint64_t generation)
+    {
+        auto* window=ImGui::FindWindowByName("Tabs");
+        const auto id=window->GetID(("##tabs_test_telemetry_pages_"+std::to_string(generation)).c_str());
+        auto* bar=ImGui::GetCurrentContext()->TabBars.GetByKey(id);
+        if (!bar || bar->Tabs.empty()) throw std::runtime_error("missing tab bar geometry");
+        return ImVec2(bar->BarRect.Min.x+bar->Tabs[0].Offset+bar->Tabs[0].Width/2,bar->BarRect.GetCenter().y);
     }
 };
 }
@@ -168,6 +186,40 @@ int main(int argc,char** argv)
         require(!ui::GuiRuntimeTestAccess::submitted(runtime,"notes"),"Escape must cancel without commit");
         require(std::get<std::string>(ui::GuiRuntimeTestAccess::draft(runtime,"notes").value)=="program update",
                 "Escape must restore current host value");
+        auto dock=host.dockSnapshots().front();
+        auto tabsFrame = [&] {
+            if (withGl) ImGui_ImplOpenGL3_NewFrame();
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos(ImVec2(0,0));ImGui::SetNextWindowSize(io.DisplaySize);
+            ImGui::Begin("Tabs",nullptr,ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoResize);
+            ui::GuiRuntimeTestAccess::drawLayout(runtime,dock);
+            ImGui::End();ImGui::Render();
+        };
+        ui::GuiRuntimeTestAccess::clearFeedback(runtime);
+        for (int i=0;i<4;++i) tabsFrame();
+        require(ui::GuiRuntimeTestAccess::selectedTab(runtime)=="live", "initial tab selection");
+        require(!ui::GuiRuntimeTestAccess::submitted(runtime,"telemetry_pages"),"initial tab must not emit input");
+        for (auto& control:dock.controls)
+            if (control.descriptor.id=="telemetry_pages") control.value=std::string("settings");
+        for (int i=0;i<3;++i) tabsFrame();
+        require(ui::GuiRuntimeTestAccess::selectedTab(runtime)=="settings", "host must select tab");
+        require(!ui::GuiRuntimeTestAccess::submitted(runtime,"telemetry_pages"),"host selection must not echo input");
+        // 页签标题使用默认 ImGui 字体，在固定窗口左上按真实鼠标事件切回 Live。
+        const auto tabCenter=ui::GuiRuntimeTestAccess::firstTabCenter(host.runtimeGeneration());
+        io.AddMousePosEvent(tabCenter.x,tabCenter.y);tabsFrame();
+        io.AddMouseButtonEvent(0,true);tabsFrame();
+        io.AddMouseButtonEvent(0,false);tabsFrame();tabsFrame();
+        require(ui::GuiRuntimeTestAccess::selectedTab(runtime)=="live" &&
+                ui::GuiRuntimeTestAccess::submitted(runtime,"telemetry_pages"), "tab click must submit page ID");
+        for (const int width:{1000,360}) {
+            io.DisplaySize=ImVec2(static_cast<float>(width),900);
+            for (int i=0;i<4;++i) tabsFrame();
+            if (withGl) {
+                glViewport(0,0,width,900);glClear(GL_COLOR_BUFFER_BIT);
+                ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());glFinish();
+                capture(std::filesystem::path(argv[2])/"tabs",width,900);
+            }
+        }
         std::cout<<"industrial UI: 1000/360 px, nonblank frames, bounded widgets, input persistence passed\n";
     } catch (const std::exception& error) {std::cerr<<error.what()<<'\n';result=1;}
     if (withGl) ImGui_ImplOpenGL3_Shutdown();

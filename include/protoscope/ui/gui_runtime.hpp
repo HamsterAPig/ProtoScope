@@ -227,6 +227,11 @@ private:
                                    std::string_view stableId,
                                    std::size_t& widgetIndex,
                                    bool earlyExit);
+    bool drawLuaTabsLayoutNode(const scripting::LayoutNodeDescriptor& node,
+                               const std::vector<scripting::ControlSnapshot>& controls,
+                               std::string_view stableId,
+                               std::size_t& widgetIndex,
+                               bool earlyExit);
     [[nodiscard]] float luaLayoutControlWidth(const scripting::LayoutNodeDescriptor& node,
                                               const scripting::ControlSnapshot& control) const;
     [[nodiscard]] float luaLayoutControlFillWidth(const scripting::LayoutNodeDescriptor& node,
@@ -519,6 +524,14 @@ private:
     std::unordered_map<std::string, LuaControlFeedbackState> luaControlFeedbackStates_;
     std::unordered_map<std::string, ControlEditState> luaControlDrafts_;
     std::uint64_t luaControlDraftGeneration_{0};
+    struct LuaTabsUiState {
+        std::string hostValue;
+        std::string visibleValue;
+        bool syncing{true};
+        int lastFrame{-1};
+    };
+    std::unordered_map<std::string, LuaTabsUiState> luaTabsUiStates_;
+    std::uint64_t luaTabsGeneration_{0};
     WaveDockRenderer waveDockRenderer_;
 };
 

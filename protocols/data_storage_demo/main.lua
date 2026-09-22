@@ -17,7 +17,18 @@ function ui()
             {"slider_float", "gain", "Gain", min=0, max=2, default=1, precision=2},
             {"radio_group", "mode", "Mode", options={"Automatic", "Manual"}},
             {"text_area", "notes", "Notes", rows=4, max_length=1024, wrap=true}
-        }
+        },
+        layout = {type="tabs", id="telemetry_pages", default="live", pages={
+            {id="live", title="Live", children={
+                "heading", {"record_start", "record_stop", "record_query"},
+                {id="measured", fill_width=true}, {id="connected", fill_width=true},
+                {id="batch_progress", fill_width=true}
+            }},
+            {id="settings", title="Settings", children={
+                {id="target", fill_width=true}, {id="gain", fill_width=true},
+                {id="mode", fill_width=true}, {id="notes", fill_width=true}
+            }}
+        }}
     }
 end
 

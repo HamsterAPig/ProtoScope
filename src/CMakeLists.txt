@@ -89,6 +89,7 @@ target_compile_features(protoscope_ui_layout PUBLIC cxx_std_20)
 
 add_library(protoscope_scripting STATIC
     scripting/host/industrial_control.cc
+    scripting/host/tabs_layout.cc
     scripting/host/control_properties.cc
     scripting/host/script_data_session.cc
     scripting/host/script_data_dispatcher.cc
@@ -274,6 +275,7 @@ if(PROTOSCOPE_ENABLE_GUI)
         ui/docks/dock_host.cc
         ui/docks/offline_replay_dock.cc
         ui/docks/lua_dock_host.cc
+        ui/docks/lua_tabs.cc
         ui/dialogs/dialog_host.cc
         ui/wave/wave_channel_legend.cc
         ui/wave/wave_channel_legend_bar.cc

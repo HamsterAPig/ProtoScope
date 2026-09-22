@@ -4,6 +4,7 @@
 #include "script_host_internal.hpp"
 #include "control_properties.hpp"
 #include "industrial_control.hpp"
+#include "tabs_layout.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2431,6 +2432,11 @@ std::optional<LayoutNodeDescriptor> parseTypedLayoutNode(
         node.children = std::move(*children);
         return node;
     }
+    if (type == "tabs") {
+        return parseTabsLayout(table, path, [&](const sol::table& page, const std::string& pagePath, std::string& err) {
+            return parseLayoutChildren(dock, page, controlsById, usedControls, pagePath, err);
+        }, error);
+    }
     if (type == "inline_group") {
         node.kind = LayoutNodeKind::InlineGroup;
         const auto spacing = readOptionalFloatField(table, "spacing", node.spacing, path, error);
@@ -2637,6 +2643,7 @@ std::optional<DockDescriptor> parseSingleDockDescriptor(const sol::object& objec
             return std::nullopt;
         }
         dock.layout = std::move(*layout);
+        if (!registerTabSelections(dock, error)) return std::nullopt;
     }
     return dock;
 }

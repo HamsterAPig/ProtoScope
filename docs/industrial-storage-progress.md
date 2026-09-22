@@ -73,7 +73,7 @@ KV 独立于记录文件，记录故障不阻断 KV 任务。
 - 现有控件的属性原子更新、worker 显隐/禁用/只读及约束校验已接入；
   见 `lua-control-properties.md`。
 - 现有 UI 控件、示波器切换、弹窗/文件对话框已加入运行时代次隔离。
-- 8 种基础工业控件、编辑草稿及新输入 UI 记忆已接入；tabs、data_table 和业务菜单仍待实现。
+- 8 种基础工业控件、编辑草稿、新输入 UI 记忆和 tabs 已接入；data_table 和业务菜单仍待实现。
 - 实时字段绑定和历史表；字段条件查询。
 - 记录分卷、目录索引、占用保护、滚动清理、磁盘容量监测和完整重启恢复。
 - CSV 与 `.psrec` 导入导出、暂存分卷与导入取消。
@@ -128,3 +128,14 @@ ctest --test-dir build --output-on-failure
 - `build/tests/protoscope_industrial_ui_tests.exe protocols/data_storage_demo <临时截图目录>`
   通过 1000px/360px 几何、非空 OpenGL 帧、输入持久化检查，已查看截图。
   合成输入测试验证 GUI 提交行为，不替代真实设备端到端与长期稳定性验收。
+
+基础工业控件提交：`126a9b0`。
+
+固定 tabs 验证：
+
+- 独立 `tabs_layout` 模块解析固定页签，通过稳定页 ID 复用控件 worker 事件与 YAML 记忆。
+- 宿主专项现为 8 组，覆盖默认页、非法/重复 ID、只读/禁用基础链路、旧代次、
+  重载保留、页序重排、删除所选页后回退默认页与非法记忆拒绝。
+- GUI 真实输入帧覆盖程序切页不回传与用户点击回传，使用 ImGui 页签矩形定位点击。
+  已查看 360px tabs OpenGL 截图，1000px/360px 非空检查通过。
+- 全量构建通过，CTest 23/23，35.55 秒；Manifest/LuaLS 同步检查通过。

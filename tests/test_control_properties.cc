@@ -214,6 +214,65 @@ void industrialControls()
             "runtime measurements must not be retained after reload");
 }
 
+void tabsLayout()
+{
+    Fixture f;
+    const std::string script = R"(
+        function ui()
+            return {id="dock",title="Tabs",controls={{"int","number","Number"}},
+                layout={type="tabs",id="pages",default="settings",pages={
+                    {id="live",title="Live",children={{type="text",text="Live"}}},
+                    {id="settings",title="Settings",children={"number"}}
+                }}}
+        end
+        function on_control(ctx,id,value) proto.emit(id,value) end
+        function on_open(ctx)
+            assert(proto.get_control("pages")=="live")
+            assert(not proto.ui.update_control("pages",{value="missing"}))
+            assert(not proto.ui.update_control("pages",{options={"other"}}))
+            assert(proto.ui.update_control("pages",{disabled=true}))
+        end
+    )";
+    require(f.load(script), "tabs declaration must load");
+    require(std::get<std::string>(f.host.controlStatesSnapshot().back().value)=="settings", "tabs default");
+    const auto oldGeneration = f.host.runtimeGeneration();
+    f.host.onControl({},"pages",std::string("missing"));
+    require(f.host.drainEvents().empty(), "unknown page rejected");
+    f.host.onControl({},"pages",std::string("live"));
+    require(f.host.drainEvents().size()==1, "page selection callback");
+    require(f.load(script), "tabs reload");
+    require(std::get<std::string>(f.host.controlStatesSnapshot().back().value)=="live", "compatible selection reused");
+    f.host.onControl({},"pages",std::string("settings"),oldGeneration);
+    require(std::get<std::string>(f.host.controlStatesSnapshot().back().value)=="live", "stale tab event rejected");
+    f.open();
+    require(f.host.lastError().empty(), "tabs API assertions");
+    f.host.onControl({},"pages",std::string("settings"));
+    require(f.host.drainEvents().empty(), "disabled tabs rejected");
+    auto invalid = script;
+    invalid.replace(invalid.find("id=\"settings\""), std::string("id=\"settings\"").size(), "id=\"live\"");
+    require(!f.load(invalid), "duplicate page IDs rejected");
+    invalid = script;
+    invalid.replace(invalid.find("id=\"pages\""), std::string("id=\"pages\"").size(), "id=\"number\"");
+    require(!f.load(invalid), "tabs/control ID collision rejected");
+    invalid = script;
+    invalid.replace(invalid.find("default=\"settings\""), std::string("default=\"settings\"").size(), "default=\"missing\"");
+    require(!f.load(invalid), "unknown default rejected");
+    require(f.load(R"(
+        function ui() return {id="dock",title="Tabs",controls={},
+            layout={type="tabs",id="pages",pages={
+                {id="settings",title="Renamed",children={}},
+                {id="live",title="Moved",children={}}
+            }}} end
+    )"), "reordered tabs");
+    require(std::get<std::string>(f.host.controlStatesSnapshot().back().value)=="live", "page ID survives reorder");
+    require(f.load(R"(
+        function ui() return {id="dock",title="Tabs",controls={},
+            layout={type="tabs",id="pages",pages={{id="only",title="Only",children={}}}}} end
+    )"), "changed page set");
+    require(std::get<std::string>(f.host.controlStatesSnapshot().back().value)=="only", "missing page falls back");
+    require(!f.host.setControlValue("pages",std::string("live")), "invalid saved selection rejected");
+}
+
 void editingDraft()
 {
     using scripting::ControlCommitMode;
@@ -257,7 +316,7 @@ int main()
     for (const auto& [name,run] : std::initializer_list<std::pair<const char*,void(*)()>>{
             {"atomic_updates",atomicUpdates},{"worker_validation",workerValidation},{"reload_constraints",reloadConstraints},
             {"runtime_generation",runtimeGeneration},{"stale_dialog_authorization",staleDialogAuthorization},
-            {"industrial_controls",industrialControls},{"editing_draft",editingDraft}}) {
+            {"industrial_controls",industrialControls},{"editing_draft",editingDraft},{"tabs_layout",tabsLayout}}) {
         try { run(); std::cout << "[PASS] " << name << '\n'; }
         catch (const std::exception& error) { ++failed; std::cerr << "[FAIL] " << name << ": " << error.what() << '\n'; }
     }

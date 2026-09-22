@@ -56,6 +56,7 @@ enum class ControlType {
     SliderFloat,
     RadioGroup,
     TextArea,
+    TabSelection,
 };
 
 // 新控件复用既有标量值表示，绘制类型和持久化类型仍保持独立。
@@ -64,6 +65,7 @@ constexpr ControlType controlValueKind(ControlType type)
     switch (type) {
     case ControlType::Label:
     case ControlType::Readout:
+    case ControlType::TabSelection:
     case ControlType::TextArea: return ControlType::InputText;
     case ControlType::Indicator: return ControlType::Checkbox;
     case ControlType::Progress:
@@ -220,6 +222,7 @@ enum class LayoutNodeKind {
     Table,
     Group,
     Collapse,
+    Tabs,
     Control,
     Text,
     Separator,
@@ -234,6 +237,8 @@ struct LayoutNodeDescriptor {
     std::size_t controlIndex{0};
     std::string text;
     std::string title;
+    std::vector<std::string> tabIds;
+    std::string defaultTab;
     bool defaultOpen{true};
     std::size_t columns{1};
     std::optional<float> minWidth;

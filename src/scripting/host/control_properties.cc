@@ -14,6 +14,11 @@ bool validateControlValue(const ControlDescriptor& descriptor, const ControlValu
     if (const auto* text = std::get_if<std::string>(&value); text && descriptor.maxLength != 0) {
         if (text->size() > descriptor.maxLength || text->find('\0') != text->npos) return false;
     }
+    if (descriptor.type == ControlType::TabSelection) {
+        const auto& selected = std::get<std::string>(value);
+        return std::find(descriptor.comboOptions.begin(), descriptor.comboOptions.end(), selected) !=
+               descriptor.comboOptions.end();
+    }
     std::optional<double> number;
     if (const auto* integer = std::get_if<int>(&value)) number = *integer;
     if (const auto* floating = std::get_if<float>(&value)) number = *floating;

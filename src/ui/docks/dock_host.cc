@@ -1317,6 +1317,7 @@ bool GuiRuntime::drawDynamicLayoutControl(const scripting::ControlSnapshot& cont
 bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, std::optional<float> layoutWidth)
 {
     const auto descriptor = control.descriptor;
+    if (descriptor.type == scripting::ControlType::TabSelection) return false;
     if (luaControlDraftGeneration_ != descriptor.runtimeGeneration) {
         luaControlDrafts_.clear();
         luaControlDraftGeneration_ = descriptor.runtimeGeneration;
