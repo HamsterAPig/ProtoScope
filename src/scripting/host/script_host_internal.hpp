@@ -51,6 +51,7 @@ struct ScriptHost::Runtime {
     std::unique_ptr<LoadedStreamSchema> stream;
     std::unordered_map<std::string, sol::protected_function> streamCallbacks;
     std::unordered_map<std::string, StreamRuntimeProfile> streamRuntimeProfiles;
+    std::unordered_map<std::string, std::uint64_t> controlUpdatedAtMs;
 };
 
 struct ScriptHost::CallbackScope {

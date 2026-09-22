@@ -16,7 +16,7 @@ constexpr std::size_t valueLimit = 256U * 1024U;
 std::uint64_t nextPollTime()
 {
     return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count()) + 20;
+        std::chrono::system_clock::now().time_since_epoch()).count()) + 20;
 }
 
 // 在复制字符串和递归分配前扣除预算，不能只在序列化结束后才检查大小。

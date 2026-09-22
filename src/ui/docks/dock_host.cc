@@ -18,12 +18,13 @@ namespace {
 
     std::string luaControlImGuiLabel(const scripting::ControlDescriptor& descriptor, std::string_view visibleLabel)
     {
-        return std::string(visibleLabel) + "##lua_control_" + descriptor.id;
+        return std::string(visibleLabel) + "###lua_control_" + descriptor.id + "_" +
+               std::to_string(descriptor.runtimeGeneration);
     }
 
     std::string luaControlHiddenImGuiLabel(const scripting::ControlDescriptor& descriptor)
     {
-        return "##lua_control_" + descriptor.id;
+        return "###lua_control_" + descriptor.id + "_" + std::to_string(descriptor.runtimeGeneration);
     }
 
     std::string luaControlInputLabel(const scripting::ControlDescriptor& descriptor, std::string_view visibleLabel)
@@ -50,7 +51,7 @@ namespace {
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(visibleLabel.data(), visibleLabel.data() + visibleLabel.size());
         drawLuaControlCompactTooltip(descriptor, visibleLabel);
-        ImGui::SameLine();
+        ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
     }
 
     class ScopedImGuiItemWidth final {
@@ -75,6 +76,8 @@ namespace {
 
     bool isLuaDynamicInputControl(scripting::ControlType type)
     {
+        if (scripting::isOutputControl(type)) return false;
+        type = scripting::controlValueKind(type);
         return type == scripting::ControlType::InputText || type == scripting::ControlType::InputInt ||
                type == scripting::ControlType::InputFloat || type == scripting::ControlType::Combo ||
                type == scripting::ControlType::ElfSymbolCombo;
@@ -1313,10 +1316,15 @@ bool GuiRuntime::drawDynamicLayoutControl(const scripting::ControlSnapshot& cont
 
 bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, std::optional<float> layoutWidth)
 {
-    const auto& descriptor = control.descriptor;
-    if (!descriptor.visible) return false;
+    const auto descriptor = control.descriptor;
+    if (luaControlDraftGeneration_ != descriptor.runtimeGeneration) {
+        luaControlDrafts_.clear();
+        luaControlDraftGeneration_ = descriptor.runtimeGeneration;
+    }
+    if (!descriptor.visible) { luaControlDrafts_.erase(descriptor.id); return false; }
     ImGui::BeginDisabled(descriptor.disabled ||
-                         (descriptor.readOnly && descriptor.type != scripting::ControlType::InputText));
+                         (descriptor.readOnly && !scripting::isOutputControl(descriptor.type) &&
+                          scripting::controlValueKind(descriptor.type) != scripting::ControlType::InputText));
     const std::string visibleLabel = resolveLuaControlVisibleLabel(descriptor, layoutWidth);
     const std::string imguiLabel = luaControlImGuiLabel(descriptor, visibleLabel);
     const std::string inputLabel = luaControlInputLabel(descriptor, visibleLabel);
@@ -1334,6 +1342,7 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, s
             drawLuaControlCompactTooltip(descriptor, visibleLabel);
             break;
         case scripting::ControlType::InputText:
+        case scripting::ControlType::TextArea:
             updated = drawDynamicTextControl(control, inputLabel, visibleLabel);
             drawLuaControlCompactTooltip(descriptor, visibleLabel);
             break;
@@ -1352,13 +1361,75 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, s
             updated = drawTxSequenceControl(control, visibleLabel);
             break;
         case scripting::ControlType::InputInt:
+        case scripting::ControlType::SliderInt:
             updated = drawDynamicIntControl(control, inputLabel, visibleLabel);
             drawLuaControlCompactTooltip(descriptor, visibleLabel);
             break;
         case scripting::ControlType::InputFloat:
+        case scripting::ControlType::SliderFloat:
             updated = drawDynamicFloatControl(control, inputLabel, visibleLabel);
             drawLuaControlCompactTooltip(descriptor, visibleLabel);
             break;
+        case scripting::ControlType::Label:
+            ImGui::PushTextWrapPos(0);
+            ImGui::TextUnformatted(std::get<std::string>(control.value).c_str());
+            ImGui::PopTextWrapPos();
+            break;
+        case scripting::ControlType::Readout: {
+            const auto elapsed = control.updatedAtMs == 0 ? 0 : nowMs() - std::min(nowMs(), control.updatedAtMs);
+            const bool stale = descriptor.staleAfterMs != 0 &&
+                (control.updatedAtMs == 0 || elapsed >= descriptor.staleAfterMs);
+            drawLuaControlLeftLabel(descriptor, visibleLabel);
+            const std::string text = std::get<std::string>(control.value) +
+                (descriptor.unit.empty() ? "" : " " + descriptor.unit);
+            ImGui::PushTextWrapPos(0);
+            ImGui::TextColored(stale ? ImVec4(0.94F,0.64F,0.22F,1) : ImGui::GetStyleColorVec4(ImGuiCol_Text),
+                               "%s%s", text.c_str(), stale ? " [stale]" : "");
+            ImGui::PopTextWrapPos();
+            if (descriptor.showUpdateTime) {
+                if (control.updatedAtMs == 0) ImGui::TextDisabled("No update");
+                else ImGui::TextDisabled("%llu ms ago", static_cast<unsigned long long>(elapsed));
+            }
+            break;
+        }
+        case scripting::ControlType::Indicator: {
+            drawLuaControlLeftLabel(descriptor, visibleLabel);
+            const bool on = std::get<bool>(control.value);
+            ImGui::PushTextWrapPos(0);
+            ImGui::TextColored(on ? ImVec4(0.24F,0.78F,0.47F,1) : ImVec4(0.91F,0.36F,0.34F,1),
+                               "%s", (on ? descriptor.onText : descriptor.offText).c_str());
+            ImGui::PopTextWrapPos();
+            break;
+        }
+        case scripting::ControlType::Progress: {
+            drawLuaControlLeftLabel(descriptor, visibleLabel);
+            const auto low = descriptor.minimum.value_or(0), high = descriptor.maximum.value_or(1);
+            const float fraction = high > low ? static_cast<float>((std::get<float>(control.value)-low)/(high-low)) : 0;
+            ImGui::ProgressBar(descriptor.indeterminate ? -static_cast<float>(ImGui::GetTime()) : fraction,
+                               ImVec2(ImGui::CalcItemWidth(), 0), descriptor.indeterminate ? "..." : nullptr);
+            break;
+        }
+        case scripting::ControlType::RadioGroup: {
+            drawLuaControlLeftLabel(descriptor, visibleLabel);
+            const int selected = std::get<int>(control.value);
+            int next = selected;
+            ImGui::BeginGroup();
+            for (std::size_t i=0; i<descriptor.comboOptions.size(); ++i) {
+                ImGui::PushID(static_cast<int>(i));
+                if (ImGui::RadioButton(luaControlHiddenImGuiLabel(descriptor).c_str(),
+                                       selected == static_cast<int>(i))) next = static_cast<int>(i);
+                ImGui::SameLine();
+                ImGui::TextWrapped("%s", descriptor.comboOptions[i].c_str());
+                if (ImGui::IsItemClicked()) next = static_cast<int>(i);
+                ImGui::PopID();
+            }
+            ImGui::EndGroup();
+            if (next != selected) {
+                updateDynamicControlValueWithFeedback(descriptor, next);
+                updated = true;
+            }
+            break;
+        }
     }
     if (feedbackStyleColors > 0) {
         ImGui::PopStyleColor(feedbackStyleColors);
@@ -1422,7 +1493,7 @@ int GuiRuntime::pushLuaControlFeedbackStyle(const scripting::ControlDescriptor& 
     return 4;
 }
 
-void GuiRuntime::updateDynamicControlValueWithFeedback(const scripting::ControlDescriptor& descriptor,
+void GuiRuntime::updateDynamicControlValueWithFeedback(scripting::ControlDescriptor descriptor,
                                                        const scripting::ControlValue& value)
 {
     const bool feedbackEnabled = application_.runtimeConfig().gui.interactionFeedback.enabled;
@@ -1473,12 +1544,33 @@ bool GuiRuntime::drawDynamicTextControl(const scripting::ControlSnapshot& contro
                                         std::string_view visibleLabel)
 {
     const auto& descriptor = control.descriptor;
-    char buffer[512]{};
-    std::snprintf(buffer, sizeof(buffer), "%s", std::get<std::string>(control.value).c_str());
+    auto& draft = luaControlDrafts_[descriptor.id];
+    draft.prepare(control, ImGui::GetFrameCount());
+    const auto& text = std::get<std::string>(draft.value);
+    std::vector<char> buffer(std::max(text.size() + 1, descriptor.maxLength ? descriptor.maxLength + 1 : 512), '\0');
+    std::copy(text.begin(), text.end(), buffer.begin());
     drawLuaControlLeftLabel(descriptor, visibleLabel);
-    if (ImGui::InputText(inputLabel.c_str(), buffer, sizeof(buffer),
-                         descriptor.readOnly ? ImGuiInputTextFlags_ReadOnly : ImGuiInputTextFlags_None)) {
-        updateDynamicControlValueWithFeedback(descriptor, std::string(buffer));
+    ImGuiInputTextFlags flags = descriptor.readOnly ? ImGuiInputTextFlags_ReadOnly : ImGuiInputTextFlags_None;
+    const bool multiline = descriptor.type == scripting::ControlType::TextArea;
+    if (multiline && descriptor.wrap) flags |= ImGuiInputTextFlags_WordWrap;
+    const bool changed = multiline ?
+        ImGui::InputTextMultiline(inputLabel.c_str(), buffer.data(), buffer.size(),
+                                 ImVec2(ImGui::CalcItemWidth(), ImGui::GetTextLineHeightWithSpacing()*descriptor.rows), flags) :
+        ImGui::InputText(inputLabel.c_str(), buffer.data(), buffer.size(), flags);
+    // Escape 是取消而非失焦提交，恢复当前宿主值而不是开始编辑时的旧值。
+    if (draft.editing && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        draft.cancel(control);
+        return false;
+    }
+    if (changed) draft.value = std::string(buffer.data());
+    const bool submit = draft.finish(changed, ImGui::IsItemActive(), ImGui::IsItemDeactivatedAfterEdit(),
+                                     descriptor.commitMode);
+    if (ImGui::BeginPopupContextItem()) {
+        if (ImGui::MenuItem("Copy")) ImGui::SetClipboardText(std::get<std::string>(draft.value).c_str());
+        ImGui::EndPopup();
+    }
+    if (submit) {
+        updateDynamicControlValueWithFeedback(descriptor, draft.value);
         return true;
     }
     return false;
@@ -1589,10 +1681,20 @@ bool GuiRuntime::drawDynamicIntControl(const scripting::ControlSnapshot& control
                                        std::string_view visibleLabel)
 {
     const auto& descriptor = control.descriptor;
-    int value = std::get<int>(control.value);
+    auto& draft = luaControlDrafts_[descriptor.id];
+    draft.prepare(control, ImGui::GetFrameCount());
+    int value = std::get<int>(draft.value);
     drawLuaControlLeftLabel(descriptor, visibleLabel);
-    if (ImGui::InputInt(inputLabel.c_str(), &value)) {
-        updateDynamicControlValueWithFeedback(descriptor, value);
+    const bool changed = descriptor.type == scripting::ControlType::SliderInt ?
+        ImGui::SliderInt(inputLabel.c_str(), &value, static_cast<int>(*descriptor.minimum),
+                        static_cast<int>(*descriptor.maximum)) : ImGui::InputInt(inputLabel.c_str(), &value);
+    if (draft.editing && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        draft.cancel(control);
+        return false;
+    }
+    if (changed) draft.value = value;
+    if (draft.finish(changed, ImGui::IsItemActive(), ImGui::IsItemDeactivatedAfterEdit(), descriptor.commitMode)) {
+        updateDynamicControlValueWithFeedback(descriptor, draft.value);
         return true;
     }
     return false;
@@ -1603,10 +1705,22 @@ bool GuiRuntime::drawDynamicFloatControl(const scripting::ControlSnapshot& contr
                                          std::string_view visibleLabel)
 {
     const auto& descriptor = control.descriptor;
-    float value = std::get<float>(control.value);
+    auto& draft = luaControlDrafts_[descriptor.id];
+    draft.prepare(control, ImGui::GetFrameCount());
+    float value = std::get<float>(draft.value);
     drawLuaControlLeftLabel(descriptor, visibleLabel);
-    if (ImGui::InputFloat(inputLabel.c_str(), &value)) {
-        updateDynamicControlValueWithFeedback(descriptor, value);
+    const auto format = "%." + std::to_string(descriptor.precision) + "f";
+    const bool changed = descriptor.type == scripting::ControlType::SliderFloat ?
+        ImGui::SliderFloat(inputLabel.c_str(), &value, static_cast<float>(*descriptor.minimum),
+                          static_cast<float>(*descriptor.maximum), format.c_str()) :
+        ImGui::InputFloat(inputLabel.c_str(), &value);
+    if (draft.editing && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        draft.cancel(control);
+        return false;
+    }
+    if (changed) draft.value = value;
+    if (draft.finish(changed, ImGui::IsItemActive(), ImGui::IsItemDeactivatedAfterEdit(), descriptor.commitMode)) {
+        updateDynamicControlValueWithFeedback(descriptor, draft.value);
         return true;
     }
     return false;

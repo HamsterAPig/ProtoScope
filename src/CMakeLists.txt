@@ -88,6 +88,7 @@ target_link_libraries(protoscope_ui_layout
 target_compile_features(protoscope_ui_layout PUBLIC cxx_std_20)
 
 add_library(protoscope_scripting STATIC
+    scripting/host/industrial_control.cc
     scripting/host/control_properties.cc
     scripting/host/script_data_session.cc
     scripting/host/script_data_dispatcher.cc

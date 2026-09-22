@@ -448,6 +448,14 @@ namespace {
     [[maybe_unused]] const char* controlTypeName(scripting::ControlType type)
     {
         switch (type) {
+            case scripting::ControlType::Label: return "label";
+            case scripting::ControlType::Readout: return "readout";
+            case scripting::ControlType::Indicator: return "indicator";
+            case scripting::ControlType::Progress: return "progress";
+            case scripting::ControlType::SliderInt: return "slider_int";
+            case scripting::ControlType::SliderFloat: return "slider_float";
+            case scripting::ControlType::RadioGroup: return "radio_group";
+            case scripting::ControlType::TextArea: return "text_area";
             case scripting::ControlType::Button:
                 return "button";
             case scripting::ControlType::InputText:
@@ -473,6 +481,8 @@ namespace {
     [[maybe_unused]] bool isPersistedControlType(scripting::ControlType type)
     {
         return type == scripting::ControlType::Checkbox || type == scripting::ControlType::InputText ||
+               type == scripting::ControlType::SliderInt || type == scripting::ControlType::SliderFloat ||
+               type == scripting::ControlType::RadioGroup || type == scripting::ControlType::TextArea ||
                type == scripting::ControlType::Combo || type == scripting::ControlType::InputInt ||
                type == scripting::ControlType::InputFloat || type == scripting::ControlType::TxSequence;
     }
@@ -569,8 +579,9 @@ namespace {
     [[maybe_unused]] std::optional<scripting::ControlValue> readControlValue(const YAML::Node& node,
                                                                              scripting::ControlType type)
     {
+        if (scripting::isOutputControl(type)) return std::nullopt;
         try {
-            switch (type) {
+            switch (scripting::controlValueKind(type)) {
                 case scripting::ControlType::Checkbox:
                     if (node.IsScalar()) {
                         return node.as<bool>();
@@ -600,6 +611,7 @@ namespace {
                     break;
                 case scripting::ControlType::TxSequence:
                     return std::nullopt;
+                default: break;
             }
         } catch (const std::exception&) {
             return std::nullopt;
@@ -609,7 +621,8 @@ namespace {
 
     [[maybe_unused]] void writeControlValue(YAML::Node node, const scripting::ControlSnapshot& control)
     {
-        switch (control.descriptor.type) {
+        if (scripting::isOutputControl(control.descriptor.type)) return;
+        switch (scripting::controlValueKind(control.descriptor.type)) {
             case scripting::ControlType::Checkbox:
                 node = std::get<bool>(control.value);
                 break;
@@ -634,6 +647,7 @@ namespace {
                     node = writeTxSequenceValue(*sequence);
                 }
                 break;
+            default: break;
         }
     }
 

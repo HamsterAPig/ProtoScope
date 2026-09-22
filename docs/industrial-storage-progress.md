@@ -1,7 +1,7 @@
 # 工业控件与持久化实施状态
 
 本文件记录已实现边界，不替代完整扩展方案。当前提供基础 Lua 记录示例，
-尚未提供工业控件、历史表和文件交换的完整界面。
+已接入基础工业控件，尚未提供历史表和文件交换的完整界面。
 
 ## 已验证的基础修复与执行保护
 
@@ -66,14 +66,14 @@ KV 独立于记录文件，记录故障不阻断 KV 任务。
 - 每个 runtime 独占会话，旧任务不跨重载投递；KV 缓存只在提交后更新。
 - 转换检查循环、混合键、稀疏数组、大小和深度，保留 int64、null、字节和嵌入 NUL。
 - 存储轮询使用固定到期时间，连续收包或获取快照不会延迟任务结果。
-- `protocols/data_storage_demo/main.lua` 使用现有按钮和状态栏展示基础发布、记录和查询。
+- `protocols/data_storage_demo/main.lua` 使用工业控件和状态栏展示基础发布、记录和查询。
 
 ## 剩余工作
 
 - 现有控件的属性原子更新、worker 显隐/禁用/只读及约束校验已接入；
   见 `lua-control-properties.md`。
 - 现有 UI 控件、示波器切换、弹窗/文件对话框已加入运行时代次隔离。
-- 新工业控件、编辑草稿、业务菜单和新控件 UI 状态兼容仍待实现。
+- 8 种基础工业控件、编辑草稿及新输入 UI 记忆已接入；tabs、data_table 和业务菜单仍待实现。
 - 实时字段绑定和历史表；字段条件查询。
 - 记录分卷、目录索引、占用保护、滚动清理、磁盘容量监测和完整重启恢复。
 - CSV 与 `.psrec` 导入导出、暂存分卷与导入取消。
@@ -112,3 +112,19 @@ ctest --test-dir build --output-on-failure
 
 运行时代次验证：属性专项现为 5 组，新增旧输入拒绝、失败重载保留代次和
 旧文件对话框不授予新协议路径权限。完整构建通过；CTest 22/22，34.02 秒。
+
+基础工业控件验证：
+
+- `label/readout/indicator/progress/slider_int/slider_float/radio_group/text_area` 已接入。
+  新控件声明和属性见 `lua-control-properties.md`，Manifest/LuaLS 已同步。
+- 实测输出不持久化；新输入加入既有 UI YAML。readout 返回格式化字符串，
+  int64 不经 double；更新时间和存储轮询均使用宿主 system_clock 毫秒时基。
+- 草稿与宿主分离，支持 change/commit、失焦和释放提交、Escape 取消；
+  worker 再验约束，代次变化、禁用、只读或停止绘制会取消草稿。
+- `protoscope_control_properties_tests` 7 组通过；GUI 新增真实 ImGui 输入帧，
+  覆盖滑块释放、宿主更新保护、多行普通 Enter、失焦提交和 Escape 取消。
+  Escape 测试先复现错误提交，修正后通过。
+- `cmake --build build -j 4` 通过；CTest 23/23，33.27 秒。
+- `build/tests/protoscope_industrial_ui_tests.exe protocols/data_storage_demo <临时截图目录>`
+  通过 1000px/360px 几何、非空 OpenGL 帧、输入持久化检查，已查看截图。
+  合成输入测试验证 GUI 提交行为，不替代真实设备端到端与长期稳定性验收。

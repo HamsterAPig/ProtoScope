@@ -3,6 +3,7 @@
 #include "script_host_api_module.hpp"
 #include "script_host_internal.hpp"
 #include "control_properties.hpp"
+#include "industrial_control.hpp"
 
 #include <algorithm>
 #include <array>
@@ -204,7 +205,7 @@ TxSequenceValue defaultTxSequenceFor(const ControlDescriptor& descriptor);
 
 ControlValue defaultValueFor(const ControlDescriptor& descriptor)
 {
-    switch (descriptor.type) {
+    switch (controlValueKind(descriptor.type)) {
         case ControlType::Button:
             return false;
         case ControlType::InputText:
@@ -223,6 +224,7 @@ ControlValue defaultValueFor(const ControlDescriptor& descriptor)
             return defaultValueTableFor(descriptor);
         case ControlType::TxSequence:
             return defaultTxSequenceFor(descriptor);
+        default: break;
     }
     return false;
 }
@@ -293,6 +295,14 @@ std::string serializeLuaObject(const sol::object& object, int depth)
 
 std::optional<ControlType> parseControlType(std::string_view value)
 {
+    if (value == "label") return ControlType::Label;
+    if (value == "readout") return ControlType::Readout;
+    if (value == "indicator") return ControlType::Indicator;
+    if (value == "progress") return ControlType::Progress;
+    if (value == "slider_int") return ControlType::SliderInt;
+    if (value == "slider_float") return ControlType::SliderFloat;
+    if (value == "radio_group") return ControlType::RadioGroup;
+    if (value == "text_area") return ControlType::TextArea;
     if (value == "btn") {
         value = "button";
     } else if (value == "text") {
@@ -371,6 +381,7 @@ std::optional<ControlLabelPosition> parseControlLabelPosition(std::string_view v
 
 bool controlAllowsEmptyLabel(ControlType type)
 {
+    type = controlValueKind(type);
     return type == ControlType::Checkbox || type == ControlType::InputText || type == ControlType::InputInt ||
            type == ControlType::InputFloat;
 }
@@ -1063,7 +1074,11 @@ std::optional<ControlValue> controlValueFromLua(const ControlDescriptor& descrip
         return defaultValueFor(descriptor);
     }
 
-    switch (descriptor.type) {
+    if (descriptor.type == ControlType::Readout) {
+        auto text = formatReadout(object, descriptor.precision, error);
+        return text ? std::optional<ControlValue>{std::move(*text)} : std::nullopt;
+    }
+    switch (controlValueKind(descriptor.type)) {
         case ControlType::Button:
         case ControlType::Checkbox:
             if (object.is<bool>()) {
@@ -1139,6 +1154,7 @@ std::optional<ControlValue> controlValueFromLua(const ControlDescriptor& descrip
             return valueTableValueFromLuaPatch(descriptor, object, error);
         case ControlType::TxSequence:
             return txSequenceValueFromLua(descriptor, object, error);
+        default: break;
     }
 
     error = "控件 " + descriptor.id + " 类型不匹配，实际收到 " + luaTypeName(object.get_type());
@@ -1674,7 +1690,7 @@ bool applyTxSequenceControlConfig(ControlDescriptor& descriptor, const sol::tabl
 
 bool applyControlTypeConfig(ControlDescriptor& descriptor, const sol::table& table, std::string& error)
 {
-    switch (descriptor.type) {
+    switch (controlValueKind(descriptor.type)) {
         case ControlType::Button:
             return true;
         case ControlType::InputText:
@@ -1697,6 +1713,7 @@ bool applyControlTypeConfig(ControlDescriptor& descriptor, const sol::table& tab
             return applyValueTableControlConfig(descriptor, table, error);
         case ControlType::TxSequence:
             return applyTxSequenceControlConfig(descriptor, table, error);
+        default: break;
     }
     return true;
 }
@@ -1865,6 +1882,7 @@ std::optional<ControlDescriptor> parseControlDescriptor(const sol::object& objec
     if (!applyControlLabelPosition(descriptor, table, error) || !validateControlIdentity(descriptor, error) ||
         !applyControlCompactLabelConfig(descriptor, table, error) ||
         !applyControlTypeConfig(descriptor, table, error) ||
+        !applyIndustrialControlConfig(descriptor, table, error) ||
         !applyControlProperties(descriptor, table, false, error)) {
         return std::nullopt;
     }
@@ -3884,7 +3902,8 @@ void ScriptHost::onControl(const transport::ConnectionContext& ctx, const std::s
     if (generation && *generation != runtimeGeneration_) return;
     if (executionFaulted()) return;
     const auto* descriptor = findControlDescriptor(controls_, id);
-    if (descriptor == nullptr || !descriptor->visible || descriptor->disabled || descriptor->readOnly ||
+    if (descriptor == nullptr || isOutputControl(descriptor->type) ||
+        !descriptor->visible || descriptor->disabled || descriptor->readOnly ||
         !validateControlValue(*descriptor, value)) {
         return;
     }
@@ -3987,6 +4006,7 @@ std::vector<ControlSnapshot> ScriptHost::controlStatesSnapshot() const
         snapshot.push_back(ControlSnapshot{
             .descriptor = control,
             .value = iter == controlValues_.end() ? defaultValueFor(control) : iter->second,
+            .updatedAtMs = runtime_->controlUpdatedAtMs.contains(control.id) ? runtime_->controlUpdatedAtMs.at(control.id) : 0,
         });
     }
     return snapshot;
@@ -4010,6 +4030,7 @@ std::vector<DockSnapshot> ScriptHost::dockSnapshots() const
             snapshot.controls.push_back(ControlSnapshot{
                 .descriptor = control,
                 .value = iter == controlValues_.end() ? defaultValueFor(control) : iter->second,
+                .updatedAtMs = runtime_->controlUpdatedAtMs.contains(control.id) ? runtime_->controlUpdatedAtMs.at(control.id) : 0,
             });
         }
         docks.push_back(std::move(snapshot));
@@ -4309,6 +4330,7 @@ void ScriptHost::updateControlValue(const std::string& id, ControlValue value)
         protoLog("warn", "控件值违反当前约束: " + id);
         return;
     }
+    if (scriptLoaded_) runtime_->controlUpdatedAtMs[id] = nowMs();
     if (descriptor != nullptr && descriptor->type == ControlType::ValueTable) {
         auto current = defaultValueTableFor(*descriptor);
         if (const auto iter = controlValues_.find(id); iter != controlValues_.end()) {

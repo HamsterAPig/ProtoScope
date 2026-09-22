@@ -1,5 +1,6 @@
 #include "protoscope/scripting/script_host.hpp"
 #include "protoscope/scripting/script_runtime_worker.hpp"
+#include "protoscope/ui/control_edit_state.hpp"
 #include "test_helpers.hpp"
 
 #include <fstream>
@@ -160,6 +161,94 @@ void staleDialogAuthorization()
     f.host.onControl({}, "action", true, f.host.runtimeGeneration());
     require(f.host.drainEvents().size() == 1, "stale selection must not grant file access");
 }
+
+void industrialControls()
+{
+    Fixture f;
+    const std::string source = R"(
+        function controls()
+            return {
+                {"label","heading","Process"},
+                {"readout","measured","Measured",unit="C",precision=2,default=1.25,stale_after_ms=100,show_update_time=true},
+                {"indicator","ready","Ready",on_text="Connected",off_text="Disconnected"},
+                {"progress","progress","Progress",default=0.25},
+                {"slider_int","target","Target",min=0,max=100,default=20},
+                {"slider_float","ratio","Ratio",min=0,max=1,default=0.5},
+                {"radio_group","mode","Mode",options={"Auto","Manual"}},
+                {"text_area","notes","Notes",max_length=32,rows=4,wrap=true}
+            }
+        end
+        function on_open(ctx)
+            assert(proto.ui.update_controls({
+                measured={value=9223372036854775807},ready={value=true},
+                progress={value=0.5,indeterminate=true},notes={value="line1\nline2"}
+            }))
+            assert(proto.get_control("measured")=="9223372036854775807.00")
+            proto.set_control("measured",22.126)
+            assert(proto.get_control("measured")=="22.13")
+            assert(not proto.ui.update_control("notes",{value=string.rep("x",33)}))
+            assert(not proto.ui.update_control("target",{value=101}))
+            assert(not proto.ui.update_control("target",{min=false}))
+            assert(not proto.ui.update_control("target",{max=2147483647}))
+            assert(not proto.ui.update_control("ratio",{max=1e300}))
+            assert(proto.ui.update_control("mode",{options={"Service"},value=0}))
+            proto.emit("ready","")
+        end
+        function on_control(ctx,id,value) proto.emit(id,"") end
+    )";
+    require(f.load(source), f.host.lastError().c_str());
+    auto states = f.host.controlStatesSnapshot();
+    require(states.size()==8 && std::get<std::string>(states[0].value)=="Process", "industrial declarations");
+    require(states[4].descriptor.commitMode==scripting::ControlCommitMode::Commit &&
+            states[7].descriptor.commitMode==scripting::ControlCommitMode::Commit, "safe default commit modes");
+    f.open();
+    require(f.host.drainEvents().size()==1, "industrial API assertions");
+    states=f.host.controlStatesSnapshot();
+    require(states[1].updatedAtMs>0 && states[1].descriptor.unit=="C", "readout update metadata");
+    f.host.onControl({}, "ready", false);
+    f.host.onControl({}, "measured", std::string("99"));
+    require(f.host.drainEvents().empty(), "measured outputs must reject input events");
+    require(f.load(source), "industrial reload");
+    states=f.host.controlStatesSnapshot();
+    require(!std::get<bool>(states[2].value) && std::get<std::string>(states[1].value)=="1.25",
+            "runtime measurements must not be retained after reload");
+}
+
+void editingDraft()
+{
+    using scripting::ControlCommitMode;
+    scripting::ControlSnapshot snapshot;
+    snapshot.descriptor.type=scripting::ControlType::InputInt;
+    snapshot.descriptor.runtimeGeneration=1;
+    snapshot.value=10;
+    ui::ControlEditState draft;
+    draft.prepare(snapshot,1);
+    draft.value=20;
+    require(!draft.finish(true,true,false,ControlCommitMode::Commit), "commit mode waits for release");
+    snapshot.value=30;
+    draft.prepare(snapshot,2);
+    require(std::get<int>(draft.value)==20, "host update must not overwrite active draft");
+    require(draft.finish(false,false,true,ControlCommitMode::Commit), "release submits pending edit");
+    draft.prepare(snapshot,3);
+    require(std::get<int>(draft.value)==30, "inactive draft follows authoritative host");
+    draft.value=25;
+    require(draft.finish(true,true,false,ControlCommitMode::Change), "legacy change mode remains immediate");
+    snapshot.descriptor.runtimeGeneration=2;
+    draft.prepare(snapshot,4);
+    require(!draft.editing && !draft.dirty && std::get<int>(draft.value)==30, "reload cancels old draft");
+    draft.value=40;
+    draft.finish(true,true,false,ControlCommitMode::Commit);
+    draft.prepare(snapshot,7);
+    require(!draft.dirty && std::get<int>(draft.value)==30, "hidden/collapsed controls cannot submit abandoned edits");
+    snapshot.descriptor.type=scripting::ControlType::TextArea;
+    snapshot.value=std::string("first");
+    draft.prepare(snapshot,8);
+    draft.value=std::string("first\nsecond");
+    require(!draft.finish(true,true,false,ControlCommitMode::Commit), "ordinary newline is not a commit");
+    snapshot.descriptor.readOnly=true;
+    draft.prepare(snapshot,9);
+    require(!draft.dirty && std::get<std::string>(draft.value)=="first", "readonly transition cancels draft");
+}
 }
 
 int main()
@@ -167,7 +256,8 @@ int main()
     int failed=0;
     for (const auto& [name,run] : std::initializer_list<std::pair<const char*,void(*)()>>{
             {"atomic_updates",atomicUpdates},{"worker_validation",workerValidation},{"reload_constraints",reloadConstraints},
-            {"runtime_generation",runtimeGeneration},{"stale_dialog_authorization",staleDialogAuthorization}}) {
+            {"runtime_generation",runtimeGeneration},{"stale_dialog_authorization",staleDialogAuthorization},
+            {"industrial_controls",industrialControls},{"editing_draft",editingDraft}}) {
         try { run(); std::cout << "[PASS] " << name << '\n'; }
         catch (const std::exception& error) { ++failed; std::cerr << "[FAIL] " << name << ": " << error.what() << '\n'; }
     }

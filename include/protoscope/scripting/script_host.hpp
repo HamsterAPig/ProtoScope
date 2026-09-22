@@ -48,7 +48,39 @@ enum class ControlType {
     ElfSymbolCombo,
     ValueTable,
     TxSequence,
+    Label,
+    Readout,
+    Indicator,
+    Progress,
+    SliderInt,
+    SliderFloat,
+    RadioGroup,
+    TextArea,
 };
+
+// 新控件复用既有标量值表示，绘制类型和持久化类型仍保持独立。
+constexpr ControlType controlValueKind(ControlType type)
+{
+    switch (type) {
+    case ControlType::Label:
+    case ControlType::Readout:
+    case ControlType::TextArea: return ControlType::InputText;
+    case ControlType::Indicator: return ControlType::Checkbox;
+    case ControlType::Progress:
+    case ControlType::SliderFloat: return ControlType::InputFloat;
+    case ControlType::SliderInt: return ControlType::InputInt;
+    case ControlType::RadioGroup: return ControlType::Combo;
+    default: return type;
+    }
+}
+
+constexpr bool isOutputControl(ControlType type)
+{
+    return type == ControlType::Label || type == ControlType::Readout ||
+           type == ControlType::Indicator || type == ControlType::Progress;
+}
+
+enum class ControlCommitMode { Change, Commit };
 
 enum class ControlLabelPosition {
     Left,
@@ -159,6 +191,17 @@ struct ControlDescriptor {
     std::vector<TxSequenceFieldDescriptor> txSequenceFields;
     TxSequenceValue txSequenceDefault;
     std::uint64_t runtimeGeneration{0};
+    ControlCommitMode commitMode{ControlCommitMode::Change};
+    std::string unit;
+    int precision{2};
+    std::uint64_t staleAfterMs{0};
+    bool showUpdateTime{false};
+    std::string onText{"On"};
+    std::string offText{"Off"};
+    bool indeterminate{false};
+    std::size_t maxLength{0};
+    bool wrap{true};
+    int rows{5};
 };
 
 using ControlValue =
@@ -167,6 +210,7 @@ using ControlValue =
 struct ControlSnapshot {
     ControlDescriptor descriptor;
     ControlValue value;
+    std::uint64_t updatedAtMs{0};
 };
 
 enum class LayoutNodeKind {

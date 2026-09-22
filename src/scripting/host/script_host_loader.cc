@@ -22,10 +22,15 @@ namespace {
             return false;
         }
         switch (next.type) {
+        case ControlType::Label:
+        case ControlType::Readout:
+        case ControlType::Indicator:
+        case ControlType::Progress:
         case ControlType::Button:
         case ControlType::ValueTable:
             return false;
-        case ControlType::Combo: {
+        case ControlType::Combo:
+        case ControlType::RadioGroup: {
             const auto index = std::get<int>(value);
             return index >= 0 && static_cast<std::size_t>(index) < next.comboOptions.size() &&
                    static_cast<std::size_t>(index) < previous.comboOptions.size() &&

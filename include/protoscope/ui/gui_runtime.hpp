@@ -2,6 +2,7 @@
 
 #include "protoscope/config/config.hpp"
 #include "protoscope/ui/dock_layout.hpp"
+#include "protoscope/ui/control_edit_state.hpp"
 #include "protoscope/ui/elf_static_address_file_watch.hpp"
 #include "protoscope/ui/file_dialog_paths.hpp"
 #include "protoscope/ui/protocol_state_file.hpp"
@@ -264,7 +265,7 @@ private:
     bool drawValueTableControl(const scripting::ControlSnapshot& control, std::string_view visibleLabel);
     bool drawTxSequenceControl(const scripting::ControlSnapshot& control, std::string_view visibleLabel);
     int pushLuaControlFeedbackStyle(const scripting::ControlDescriptor& descriptor);
-    void updateDynamicControlValueWithFeedback(const scripting::ControlDescriptor& descriptor,
+    void updateDynamicControlValueWithFeedback(scripting::ControlDescriptor descriptor,
                                                const scripting::ControlValue& value);
     void updateLuaDockDefaultLayout();
     void requestProtocolWorkspaceSwitch(std::string protocolDir, bool forceReload);
@@ -516,6 +517,8 @@ private:
 
     std::unordered_map<std::string, ElfSymbolComboUiState> elfSymbolComboStates_;
     std::unordered_map<std::string, LuaControlFeedbackState> luaControlFeedbackStates_;
+    std::unordered_map<std::string, ControlEditState> luaControlDrafts_;
+    std::uint64_t luaControlDraftGeneration_{0};
     WaveDockRenderer waveDockRenderer_;
 };
 

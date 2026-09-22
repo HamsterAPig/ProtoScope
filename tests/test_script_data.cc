@@ -84,6 +84,10 @@ void recording()
     )"), f.host.lastError().c_str());
     f.open();
     const auto wakeup = f.host.nextWakeupAtMs();
+    const auto wallTime = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
+    require(wakeup && *wakeup >= wallTime - 1000 && *wakeup <= wallTime + 1000,
+            "存储期限必须使用宿主调度的 epoch 毫秒时基");
     std::this_thread::sleep_for(std::chrono::milliseconds(3));
     require(wakeup && f.host.nextWakeupAtMs() == wakeup, "读取快照不能持续推迟存储任务轮询期限");
     f.done();

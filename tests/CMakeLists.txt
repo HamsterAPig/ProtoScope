@@ -72,6 +72,12 @@ set_tests_properties(protoscope_headless_unit_tests PROPERTIES
 )
 
 if(PROTOSCOPE_ENABLE_GUI)
+    add_executable(protoscope_industrial_ui_tests test_industrial_ui.cc)
+    target_include_directories(protoscope_industrial_ui_tests PRIVATE ${PROJECT_BINARY_DIR}/generated/include)
+    target_link_libraries(protoscope_industrial_ui_tests PRIVATE protoscope_ui)
+    add_test(NAME protoscope_industrial_ui_tests
+        COMMAND protoscope_industrial_ui_tests ${PROJECT_SOURCE_DIR}/protocols/data_storage_demo)
+    set_tests_properties(protoscope_industrial_ui_tests PROPERTIES TIMEOUT 60)
     add_executable(protoscope_theme_render_tests test_theme_render.cc)
     target_link_libraries(protoscope_theme_render_tests PRIVATE protoscope_ui)
     add_executable(protoscope_theme_manager_tests test_theme_manager.cc)
