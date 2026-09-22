@@ -658,6 +658,7 @@ struct ScriptRuntimeWorker::Impl {
     {
         host.setExecutionConfig(command.config.execution);
         host.setStorageRoot(command.config.storageRoot);
+        host.setStorageConfig(command.config.storageConfig);
         std::lock_guard lock(mutex);
         config = command.config;
         return {};

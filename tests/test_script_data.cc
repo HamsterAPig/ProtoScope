@@ -186,6 +186,8 @@ void recording()
             elseif evt.operation == "stop" then
                 local status=proto.record.status()
                 assert(status.committed==2 and status.queued==2 and not status.recording)
+                assert(status.last_committed_id==2 and status.last_committed_time_us)
+                assert(status.interrupted_from_us==nil and status.interrupted_to_us==nil)
                 proto.record.query({dataset="sample",limit=1})
             elseif evt.operation == "query" then
                 assert(#evt.records==1)
@@ -286,7 +288,10 @@ void workerCallbacks()
 {
     Fixture f;
     require(f.load(R"(
-        function on_open(ctx) proto.kv.set("worker",123) end
+        function on_open(ctx)
+            assert(not pcall(proto.kv.set,"too-large",string.rep("x",40)))
+            proto.kv.set("worker",123)
+        end
         function on_kv(ctx,evt)
             assert(evt.ok and proto.kv.get("worker")==123)
             proto.emit("done","")
@@ -295,6 +300,7 @@ void workerCallbacks()
     scripting::ScriptRuntimeWorker worker;
     scripting::ScriptRuntimeWorkerConfig config;
     config.storageRoot = f.directory.path() / "worker-data";
+    config.storageConfig.kvValueBytes=32;
     worker.configure(config);
     require(worker.loadProtocolDirectory(f.directory.path().generic_string()).ok, "worker data load");
     transport::ConnectionContext connection;

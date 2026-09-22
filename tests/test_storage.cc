@@ -1,11 +1,14 @@
 #include "protoscope/storage/store.hpp"
 #include "protoscope/data/table.hpp"
+#include "protoscope/data/psrec.hpp"
+#include "../src/storage/volume_catalog.hpp"
 #include "test_helpers.hpp"
 
 #include <bit>
 #include <iostream>
 #include <fstream>
 #include <limits>
+#include <thread>
 
 namespace {
 using namespace protoscope;
@@ -118,10 +121,12 @@ void recordSnapshots()
         require(std::get<std::int64_t>(result.records[0].values[0].value) == 2, "分页不能重复或跳过相同时间戳");
         const auto state = store.status();
         require(state.queued == 3 && state.committed == 3 && state.failed == 0, "入队与提交计数必须准确");
+        require(state.lastCommittedId==3 && state.lastCommittedTimeUs==123,"报告最后已提交位置");
     }
     {
         storage::Store store(directory.path(), "protocol", {schema()});
         require(store.status().recording && store.status().recovered, "未主动停止的任务必须恢复记录开关");
+        require(store.status().lastCommittedId==3,"重启读取已提交位置");
         const auto result = completion(store, store.query({}));
         require(result.ok && result.records.size() == 3, "重启后已提交数据必须可查询");
         require(completion(store, store.stop()).ok, "主动停止必须提交");
@@ -253,6 +258,7 @@ void queueFault()
     const auto state = store.status();
     require(state.faulted && !state.recording && state.failed == 1 && state.committed == 0,
             "队列满必须进入记录故障并保留正确计数");
+    require(state.interruptedFromUs==123 && state.interruptedToUs==123,"队列故障记录中断区间");
     require(completion(store, store.set("config", {true})).ok, "记录故障不应阻断独立 KV 任务");
 }
 
@@ -294,6 +300,58 @@ void damagedDatabase()
     require(std::filesystem::file_size(directory.path() / "records" / "records.sqlite") == 21,
             "数据库损坏时不得重建并覆盖原文件");
 }
+void capacityMonitoring()
+{
+    const tests::ScopedTempPath directory(tests::makeUniqueTempDir("protoscope-capacity-monitor"));
+    storage::Config config;config.recordMaxBytes=512*1024;config.maintenanceInterval=std::chrono::milliseconds(20);
+    storage::Store store(directory.path(),"protocol",{schema()},config);
+    require(completion(store,store.start()).ok,"capacity monitor starts");
+    std::string error;
+    require(store.publish({record()},error),"initial committed position");
+    store.waitIdle();
+    const auto pressure=directory.path()/"records"/"unknown-pressure";
+    {std::ofstream file(pressure,std::ios::binary);file<<std::string(1024*1024,'x');}
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(3);
+    while (!store.status().faulted && std::chrono::steady_clock::now()<deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    require(store.status().faulted && !store.status().recording,"periodic quota failure stops recording");
+    auto missed=record(2);missed.receivedAtUs=456;
+    require(!store.publish({missed},error),"fault rejects new recording");
+    const auto state=store.status();
+    require(state.committed==1 && state.lastCommittedId==1 && state.lastCommittedTimeUs==123 &&
+            state.failed==1 && state.interruptedFromUs==456 && state.interruptedToUs==456,
+            "quota fault exposes committed position and interrupted receive range");
+    require(std::filesystem::exists(pressure),"unknown capacity pressure cannot be deleted");
+    require(completion(store,store.set("still-alive",{true})).ok,"quota fault does not stop KV");
+    require(completion(store,store.query({})).records.size()==1,"quota fault preserves query access");
+    require(!completion(store,store.start()).ok,"restart cannot report healthy while quota unresolved");
+}
+void automaticRetention()
+{
+    const tests::ScopedTempPath directory(tests::makeUniqueTempDir("protoscope-automatic-retention"));
+    storage::Config config;config.recordMaxAge=std::chrono::microseconds(0);
+    config.maintenanceInterval=std::chrono::hours(1);
+    storage::Store store(directory.path(),"protocol",{schema()},config);
+    require(completion(store,store.start()).ok,"retention recording starts");
+    const auto input=directory.path()/"import.psrec";
+    {
+        std::ofstream file(input,std::ios::binary);
+        data::PsrecWriter writer(file,{{1,schema()}});
+        auto row=record();row.schemaVersion=1;writer.append(row);writer.finish();
+    }
+    storage::VolumeCatalog catalog(directory.path()/"records","protocol");
+    auto staged=storage::stageRecordImport(directory.path()/"records","protocol",input,storage::ImportFormat::Psrec);
+    const auto volume=catalog.adopt(staged,1);
+    auto page=completion(store,store.query({}));
+    require(page.ok && page.records.size()==1 && page.snapshotLease,"history page holds imported volume");
+    require(completion(store,store.start()).ok && std::filesystem::exists(volume.path),
+            "automatic retention cannot delete visible history page");
+    const auto token=page.snapshot;page.snapshotLease.reset();
+    require(completion(store,store.start()).ok && !std::filesystem::exists(volume.path),
+            "automatic retention expires unoccupied cached snapshot then removes old volume");
+    require(!completion(store,store.query({.snapshot=token})).ok,"retention invalidates stale Lua token explicitly");
+    require(completion(store,store.query({})).records.empty(),"fresh query excludes cleaned volume");
+}
 }
 
 int main()
@@ -307,6 +365,7 @@ int main()
         {"damaged_database", damagedDatabase},
         {"field_queries",fieldQueries},
         {"live_table",liveTable},
+        {"capacity_monitoring",capacityMonitoring},{"automatic_retention",automaticRetention},
     };
     for (const auto& [name, run] : tests) {
         try { run(); std::cout << "[PASS] " << name << '\n'; }

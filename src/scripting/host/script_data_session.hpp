@@ -10,7 +10,7 @@ namespace protoscope::scripting {
 // 每个 Lua runtime 独占会话；异步结果不跨重载投递。
 class ScriptDataSession {
 public:
-    ScriptDataSession(std::filesystem::path root, std::string protocol);
+    ScriptDataSession(std::filesystem::path root, std::string protocol,storage::Config config={});
     void registerApi(sol::state_view lua, sol::table& proto);
     void loadSchemas(sol::state_view lua);
     void activate();
@@ -35,6 +35,7 @@ private:
                            const data::Schema& schema) const;
     bool publish(const sol::table& rows);
     std::filesystem::path root_;
+    storage::Config config_;
     std::string protocol_;
     std::vector<data::Schema> schemas_;
     std::map<std::string, data::Record> latest_;

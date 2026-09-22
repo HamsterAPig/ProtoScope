@@ -15,6 +15,7 @@ namespace protoscope::scripting {
 struct ScriptRuntimeWorkerConfig {
     ExecutionConfig execution{};
     std::filesystem::path storageRoot;
+    storage::Config storageConfig;
     bool enabled{true};
     std::size_t postprocessWorkerThreads{1U};
     std::size_t rxQueueLimitBytes{64U * 1024U * 1024U};

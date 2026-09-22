@@ -125,15 +125,35 @@ std::uint64_t directoryBytes(const std::filesystem::path& root,std::stop_token s
     std::uint64_t result=0;
     std::size_t entries=0;
     // 普通迭代不跟随链接，canonical 复验同时拒绝 Windows 目录联接。
-    for (const auto& entry:std::filesystem::recursive_directory_iterator(root)) {
+    std::error_code ec;
+    std::filesystem::recursive_directory_iterator current(root,ec),end;
+    if (ec) throw std::filesystem::filesystem_error("scan record directory",root,ec);
+    while (current!=end) {
+        const auto entry=*current;
         if (stop.stop_requested()) throw std::runtime_error("record retention canceled");
         if (++entries>1000000) throw std::runtime_error("record directory entry budget exceeded");
-        if (entry.is_symlink() || std::filesystem::weakly_canonical(entry.path())!=entry.path())
+        const auto status=entry.symlink_status(ec);
+        if (ec && ec!=std::errc::no_such_file_or_directory)
+            throw std::filesystem::filesystem_error("inspect record capacity entry",entry.path(),ec);
+        ec.clear();
+        if (std::filesystem::is_symlink(status) || std::filesystem::weakly_canonical(entry.path())!=entry.path())
             throw std::runtime_error("record capacity scan encountered a linked path");
-        if (!entry.is_regular_file()) continue;
-        const auto bytes=entry.file_size();
-        if (bytes>UINT64_MAX-result) throw std::overflow_error("record capacity overflow");
-        result+=bytes;
+        if (std::filesystem::is_regular_file(status)) {
+            const auto bytes=entry.file_size(ec);
+            if (ec && ec!=std::errc::no_such_file_or_directory)
+                throw std::filesystem::filesystem_error("measure record capacity entry",entry.path(),ec);
+            if (!ec) {
+                if (bytes>UINT64_MAX-result) throw std::overflow_error("record capacity overflow");
+                result+=bytes;
+            }
+        }
+        ec.clear();
+        current.increment(ec);
+        if (ec) {
+            // 暂存取消或 WAL 关闭可能与扫描并发；消失路径由下一轮重新统计，其他错误必须报告。
+            if (ec==std::errc::no_such_file_or_directory) break;
+            throw std::filesystem::filesystem_error("advance record capacity scan",root,ec);
+        }
     }
     return result;
 }

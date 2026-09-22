@@ -951,6 +951,25 @@ namespace {
     {
         if (const auto storage = childNode(scripting, "storage")) {
             config.scripting.storageRootDir = readScalar<std::string>(storage, "root_dir", "");
+            auto& options=config.scripting.storage;
+            options.queueBytes=std::clamp<std::size_t>(
+                readScalar<std::size_t>(storage,"queue_bytes",options.queueBytes),1024,1024ULL*1024*1024);
+            options.batchRows=std::clamp<std::size_t>(
+                readScalar<std::size_t>(storage,"batch_rows",options.batchRows),1,100000);
+            options.batchInterval=std::chrono::milliseconds(std::clamp<std::int64_t>(
+                readScalar<std::int64_t>(storage,"batch_interval_ms",options.batchInterval.count()),1,60000));
+            options.recordMaxBytes=std::clamp<std::uint64_t>(
+                readScalar<std::uint64_t>(storage,"max_record_bytes",options.recordMaxBytes),1,1ULL<<50);
+            const auto days=std::clamp<std::int64_t>(readScalar<std::int64_t>(storage,"retention_days",30),0,36500);
+            options.recordMaxAge=std::chrono::hours(days*24);
+            options.maintenanceInterval=std::chrono::milliseconds(std::clamp<std::int64_t>(
+                readScalar<std::int64_t>(storage,"maintenance_interval_ms",options.maintenanceInterval.count()),1,60000));
+            options.kvValueBytes=std::clamp<std::size_t>(
+                readScalar<std::size_t>(storage,"kv_value_bytes",options.kvValueBytes),1,256U*1024);
+            options.kvTotalBytes=std::clamp<std::size_t>(
+                readScalar<std::size_t>(storage,"kv_total_bytes",options.kvTotalBytes),1,1024U*1024*1024);
+            options.kvDepth=std::clamp<std::size_t>(
+                readScalar<std::size_t>(storage,"kv_depth",options.kvDepth),1,16);
         }
         if (const auto execution = childNode(scripting, "execution")) {
             config.scripting.execution.loadTimeoutMs = std::clamp<std::uint64_t>(
@@ -1320,6 +1339,16 @@ namespace {
         }
         scripting["execution"]["load_timeout_ms"] = config.scripting.execution.loadTimeoutMs;
         scripting["storage"]["root_dir"] = config.scripting.storageRootDir;
+        const auto& storage=config.scripting.storage;
+        scripting["storage"]["queue_bytes"]=storage.queueBytes;
+        scripting["storage"]["batch_rows"]=storage.batchRows;
+        scripting["storage"]["batch_interval_ms"]=storage.batchInterval.count();
+        scripting["storage"]["max_record_bytes"]=storage.recordMaxBytes;
+        scripting["storage"]["retention_days"]=std::chrono::duration_cast<std::chrono::hours>(storage.recordMaxAge).count()/24;
+        scripting["storage"]["maintenance_interval_ms"]=storage.maintenanceInterval.count();
+        scripting["storage"]["kv_value_bytes"]=storage.kvValueBytes;
+        scripting["storage"]["kv_total_bytes"]=storage.kvTotalBytes;
+        scripting["storage"]["kv_depth"]=storage.kvDepth;
         scripting["execution"]["callback_timeout_ms"] = config.scripting.execution.callbackTimeoutMs;
         scripting["worker"]["enabled"] = config.scripting.workerEnabled;
         writePerformanceScalar(scripting["worker"],

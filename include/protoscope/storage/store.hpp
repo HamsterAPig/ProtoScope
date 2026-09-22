@@ -3,6 +3,7 @@
 #include "protoscope/data/model.hpp"
 #include "protoscope/data/query.hpp"
 #include "protoscope/storage/import.hpp"
+#include "protoscope/storage/config.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -16,15 +17,6 @@
 namespace protoscope::storage {
 struct RecordSnapshot;
 
-struct Config {
-    std::size_t queueBytes{32U * 1024U * 1024U};
-    std::size_t batchRows{1000};
-    std::chrono::milliseconds batchInterval{100};
-    std::size_t kvValueBytes{256U * 1024U};
-    std::size_t kvTotalBytes{8U * 1024U * 1024U};
-    std::size_t kvDepth{16};
-};
-
 struct Status {
     bool recording{false};
     bool recovered{false};
@@ -35,6 +27,10 @@ struct Status {
     std::uint64_t failed{0};
     std::size_t queueBytes{0};
     std::string error;
+    std::uint64_t lastCommittedId{0};
+    std::optional<std::int64_t> lastCommittedTimeUs;
+    std::optional<std::int64_t> interruptedFromUs;
+    std::optional<std::int64_t> interruptedToUs;
 };
 
 struct Query {

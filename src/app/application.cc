@@ -1293,6 +1293,7 @@ bool Application::applyConfig(const config::AppConfig& config)
         .storageRoot = config.scripting.storageRootDir.empty()
             ? config::embedded::executableDirectory() / "data"
             : std::filesystem::absolute(config.scripting.storageRootDir),
+        .storageConfig = config.scripting.storage,
         .enabled = config.scripting.workerEnabled,
         .postprocessWorkerThreads = postprocessWorkerThreads,
         .rxQueueLimitBytes = config.scripting.workerRxQueueLimitBytes,

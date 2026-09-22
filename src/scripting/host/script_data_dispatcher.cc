@@ -5,6 +5,10 @@ void ScriptHost::setStorageRoot(std::filesystem::path root)
 {
     storageRoot_ = std::move(root);
 }
+void ScriptHost::setStorageConfig(storage::Config config)
+{
+    storageConfig_=config;
+}
 
 void ScriptHost::pollStorageCompletions()
 {

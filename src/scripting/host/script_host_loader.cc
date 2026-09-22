@@ -187,7 +187,7 @@ void ScriptHost::resetForScriptLoad(const std::string& path, const std::string& 
 void ScriptHost::configureLuaRuntimeForScriptLoad(Runtime& runtime, const std::string& protocolDirectory)
 {
     runtime.data = std::make_unique<ScriptDataSession>(
-        storageRoot_, canonicalPath(protocolDirectory).generic_string());
+        storageRoot_, canonicalPath(protocolDirectory).generic_string(),storageConfig_);
     runtime.lua.open_libraries(sol::lib::base,
                                sol::lib::math,
                                sol::lib::package,

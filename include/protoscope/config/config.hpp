@@ -3,6 +3,7 @@
 #include "protoscope/dock/docks.hpp"
 #include "protoscope/scripting/file_io_config.hpp"
 #include "protoscope/scripting/execution_config.hpp"
+#include "protoscope/storage/config.hpp"
 
 #include <array>
 #include <cstddef>
@@ -265,6 +266,7 @@ struct ScriptingPipelineConfig {
 struct ScriptingConfig {
     scripting::ExecutionConfig execution{};
     std::string storageRootDir{};
+    storage::Config storage{};
     scripting::FileIoConfig fileIo{};
     ScriptingPipelineConfig pipeline{};
     bool workerEnabled{true};

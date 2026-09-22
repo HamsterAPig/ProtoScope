@@ -153,8 +153,8 @@ std::string protocolKey(const std::string& protocol)
 }
 } // namespace
 
-ScriptDataSession::ScriptDataSession(std::filesystem::path root, std::string protocol)
-    : root_(root.empty() ? root : root / protocolKey(protocol)), protocol_(std::move(protocol)) {}
+ScriptDataSession::ScriptDataSession(std::filesystem::path root, std::string protocol,storage::Config config)
+    : root_(root.empty() ? root : root / protocolKey(protocol)), config_(config),protocol_(std::move(protocol)) {}
 
 void ScriptDataSession::requireActive() const
 {
@@ -166,7 +166,7 @@ storage::Store& ScriptDataSession::store()
     requireActive();
     if (root_.empty()) throw std::runtime_error("scripting.storage.root_dir is not configured");
     if (!store_) {
-        store_ = std::make_unique<storage::Store>(root_, protocol_, schemas_);
+        store_ = std::make_unique<storage::Store>(root_, protocol_, schemas_,config_);
         nextPollAtMs_ = nextPollTime();
     }
     return *store_;
@@ -337,6 +337,10 @@ sol::table ScriptDataSession::completionTable(sol::state_view lua, const storage
         current["received"] = status.received; current["queued"] = status.queued;
         current["committed"] = status.committed; current["failed"] = status.failed;
         current["faulted"] = status.faulted; current["error"] = status.error;
+        current["last_committed_id"]=status.lastCommittedId;
+        if (status.lastCommittedTimeUs) current["last_committed_time_us"]=*status.lastCommittedTimeUs;
+        if (status.interruptedFromUs) current["interrupted_from_us"]=*status.interruptedFromUs;
+        if (status.interruptedToUs) current["interrupted_to_us"]=*status.interruptedToUs;
         result["status"] = current;
     }
     return result;
@@ -396,6 +400,10 @@ void ScriptDataSession::registerApi(sol::state_view lua, sol::table& proto)
         table["queued"] = status.queued; table["committed"] = status.committed;
         table["failed"] = status.failed; table["queue_bytes"] = status.queueBytes;
         table["error"] = status.error;
+        table["last_committed_id"]=status.lastCommittedId;
+        if (status.lastCommittedTimeUs) table["last_committed_time_us"]=*status.lastCommittedTimeUs;
+        if (status.interruptedFromUs) table["interrupted_from_us"]=*status.interruptedFromUs;
+        if (status.interruptedToUs) table["interrupted_to_us"]=*status.interruptedToUs;
         return table;
     });
     const auto queryOptions=[](const sol::table& options) {

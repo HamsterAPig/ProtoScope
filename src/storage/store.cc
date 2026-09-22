@@ -149,12 +149,15 @@ struct Store::Impl {
     std::thread reader;
     std::unique_ptr<VolumeCatalog> catalog;
     std::unique_ptr<RecordQueryService> queries;
+    std::mutex maintenanceMutex;
+    std::chrono::steady_clock::time_point nextMaintenance{};
 
     Impl(std::filesystem::path directory, std::string key, std::vector<data::Schema> declarations, Config options)
         : root(std::move(directory)), protocol(std::move(key)), config(options)
     {
         if (protocol.empty() || config.queueBytes == 0 || config.batchRows == 0 ||
-            config.batchInterval.count() < 1 || config.kvValueBytes == 0 || config.kvTotalBytes == 0) {
+            config.batchInterval.count() < 1 || config.kvValueBytes == 0 || config.kvTotalBytes == 0 ||
+            !config.recordMaxBytes || config.recordMaxAge.count()<0 || config.maintenanceInterval.count()<1) {
             throw std::invalid_argument("存储配置无效");
         }
         completions.reserve(1024);
@@ -205,6 +208,13 @@ struct Store::Impl {
         // 只有已提交的记录开关触发恢复，构造本身不发送设备命令。
         status.recording = metadata(records, "recording") == "1";
         status.recovered = status.recording;
+        {
+            Statement last(records,"SELECT id,received_us FROM records ORDER BY id DESC LIMIT 1");
+            if (last.row()) {
+                status.lastCommittedId=static_cast<std::uint64_t>(last.integer(0));
+                status.lastCommittedTimeUs=last.integer(1);
+            }
+        }
         Statement values(kv, "SELECT key,value FROM values_store");
         while (values.row()) {
             auto name = values.text(0);
@@ -298,6 +308,39 @@ struct Store::Impl {
         }
     }
 
+    void markInterrupted(const std::vector<data::Record>& records)
+    {
+        for (const auto& record:records) {
+            if (!status.interruptedFromUs || record.receivedAtUs<*status.interruptedFromUs)
+                status.interruptedFromUs=record.receivedAtUs;
+            if (!status.interruptedToUs || record.receivedAtUs>*status.interruptedToUs)
+                status.interruptedToUs=record.receivedAtUs;
+        }
+    }
+
+    void maintain(bool force=false,std::stop_token stop={})
+    {
+        std::lock_guard maintenanceLock(maintenanceMutex);
+        const auto now=std::chrono::steady_clock::now();
+        if (!force && now<nextMaintenance) return;
+        nextMaintenance=now+config.maintenanceInterval;
+        const auto wall=std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        auto result=catalog->retain({config.recordMaxBytes,config.recordMaxAge},wall,stop);
+        if (result.capacityExceeded || result.expiredPinned) {
+            // 仅释放缓存自身持有的快照；当前历史页和正在导出的卷仍由引用保护。
+            queries->expireUnpinned();
+            result=catalog->retain({config.recordMaxBytes,config.recordMaxAge},wall,stop);
+        }
+        if (result.capacityExceeded) throw std::runtime_error("record capacity exceeded; no eligible sealed volume");
+    }
+
+    void maintenanceFault(const std::string& error)
+    {
+        std::lock_guard lock(mutex);
+        status.faulted=true;status.recording=false;status.error=error;
+    }
+
     void writeLoop()
     {
         try {
@@ -309,8 +352,16 @@ struct Store::Impl {
                 std::vector<Command> batch;
                 {
                     std::unique_lock lock(mutex);
-                    changed.wait(lock, [&] { return stopping || !writes.empty(); });
+                    changed.wait_for(lock, config.maintenanceInterval, [&] { return stopping || !writes.empty(); });
                     if (writes.empty() && stopping) break;
+                    if (writes.empty()) {
+                        const bool active=status.recording;
+                        lock.unlock();
+                        if (active) {
+                            try {maintain();} catch(const std::exception& error) {maintenanceFault(error.what());}
+                        }
+                        continue;
+                    }
                     if (writes.front().operation == "publish" && !stopping) {
                         changed.wait_for(lock, config.batchInterval, [&] {
                             return stopping || queuedRows >= config.batchRows ||
@@ -339,6 +390,11 @@ struct Store::Impl {
                 bool inTransaction = false;
                 try {
                     if (publishing) {
+                        {
+                            std::lock_guard lock(mutex);
+                            if (status.faulted) throw std::runtime_error(status.error);
+                        }
+                        maintain();
                         records.exec("BEGIN IMMEDIATE");
                         inTransaction = true;
                         for (const auto& command : batch) {
@@ -356,6 +412,7 @@ struct Store::Impl {
                         records.exec("COMMIT");
                         inTransaction = false;
                     } else {
+                        if (batch.front().operation=="start") maintain(true);
                         writeOne(records, kv, batch.front());
                     }
                 } catch (const std::exception& failure) {
@@ -367,18 +424,33 @@ struct Store::Impl {
                 {
                     std::lock_guard lock(mutex);
                     status.queueBytes -= bytes;
-                    if (error.empty()) status.committed += rowCount;
+                    if (error.empty()) {
+                        status.committed += rowCount;
+                        if (publishing && rowCount) {
+                            status.lastCommittedId=static_cast<std::uint64_t>(sqlite3_last_insert_rowid(records.get()));
+                            for (auto item=batch.rbegin();item!=batch.rend();++item) {
+                                if (!item->records.empty()) {
+                                    status.lastCommittedTimeUs=item->records.back().receivedAtUs;
+                                    break;
+                                }
+                            }
+                        }
+                    }
                     else if (publishing || batch.front().operation == "start" || batch.front().operation == "stop") {
                         status.failed += rowCount;
                         status.faulted = true;
                         status.recording = false;
                         status.error = error;
+                        for (const auto& command:batch) markInterrupted(command.records);
                     }
                     if (!publishing) {
                         completions.push_back({batch.front().task, batch.front().operation, error.empty(), error});
                     }
-                    writing = false;
                 }
+                if (publishing && error.empty()) {
+                    try {maintain();} catch(const std::exception& failure) {maintenanceFault(failure.what());}
+                }
+                {std::lock_guard lock(mutex);writing=false;}
                 idle.notify_all();
             }
         } catch (const std::exception& error) {
@@ -388,6 +460,7 @@ struct Store::Impl {
             status.error = error.what();
             for (const auto& command : writes) {
                 status.failed += command.records.size();
+                markInterrupted(command.records);
                 if (command.operation != "publish") completions.push_back({command.task, command.operation, false, error.what()});
             }
             writes.clear();
@@ -421,6 +494,8 @@ struct Store::Impl {
                 if (importing) {
                     auto staged=stageRecordImport(root/"records",protocol,command.importPath,command.importFormat,
                         command.importMapping,command.importLimits,command.canceled->get_token());
+                    // 暂存文件已计入全局容量；登记前不足则失败，不暴露半批导入。
+                    maintain(true,command.canceled->get_token());
                     const auto now=std::chrono::duration_cast<std::chrono::microseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count();
                     // 索引提交是可见性的唯一边界；提交后才报告成功，不触发实时发布。
@@ -484,6 +559,7 @@ bool Store::publish(std::vector<data::Record> records, std::string& error)
                 impl_->status.faulted = true;
                 impl_->status.recording = false;
                 impl_->status.error = "发布批次超过记录队列容量";
+                impl_->markInterrupted(records);
                 throw std::runtime_error("发布批次超过记录队列容量");
             }
             bytes += size;
@@ -492,6 +568,10 @@ bool Store::publish(std::vector<data::Record> records, std::string& error)
             std::lock_guard lock(impl_->mutex);
             impl_->status.received += records.size();
             if (!impl_->status.recording || impl_->status.faulted || impl_->stopping) {
+                if (impl_->status.faulted) {
+                    impl_->status.failed+=records.size();
+                    impl_->markInterrupted(records);
+                }
                 throw std::runtime_error("记录未启动或已故障");
             }
             if (bytes > impl_->config.queueBytes - impl_->status.queueBytes || impl_->writes.size() >= 65536) {
@@ -499,6 +579,7 @@ bool Store::publish(std::vector<data::Record> records, std::string& error)
                 impl_->status.recording = false;
                 impl_->status.failed += records.size();
                 impl_->status.error = "记录队列已满";
+                impl_->markInterrupted(records);
                 throw std::runtime_error(impl_->status.error);
             }
             impl_->status.queueBytes += bytes;
@@ -583,6 +664,7 @@ std::uint64_t Store::importRecords(std::filesystem::path path,ImportFormat forma
     Impl::ReadCommand command{task,{},canceled};
     command.importPath=std::move(path);command.importFormat=format;
     command.importMapping=std::move(mapping);command.importLimits=limits;
+    command.importLimits.stagedBytes=std::min(command.importLimits.stagedBytes,impl_->config.recordMaxBytes);
     impl_->cancellations.emplace(task,std::move(canceled));
     impl_->reads.push_back(std::move(command));
     ++impl_->pendingTasks;++impl_->pendingQueries;

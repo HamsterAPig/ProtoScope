@@ -5,6 +5,7 @@
 #include "protoscope/scripting/file_io_config.hpp"
 #include "protoscope/scripting/business_ui.hpp"
 #include "protoscope/data/model.hpp"
+#include "protoscope/storage/config.hpp"
 #include "protoscope/scripting/data_table.hpp"
 #include "protoscope/scripting/execution_config.hpp"
 #include "protoscope/scripting/frame_stream_parser.hpp"
@@ -515,6 +516,7 @@ public:
     void setFileIoConfig(FileIoConfig config);
     void setExecutionConfig(ExecutionConfig config);
     void setStorageRoot(std::filesystem::path root);
+    void setStorageConfig(storage::Config config);
     void requestStop() noexcept;
     [[nodiscard]] bool executionFaulted() const;
     void resetRuntime();
@@ -746,6 +748,7 @@ private:
     std::shared_ptr<std::atomic_bool> stopSignal_;
     ExecutionConfig executionConfig_{};
     std::filesystem::path storageRoot_;
+    storage::Config storageConfig_;
     FileIoConfig fileIoConfig_{};
     std::uint64_t nextTxRequestId_{1};
     std::uint64_t nextDialogId_{1};
