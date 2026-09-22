@@ -25,6 +25,7 @@ public:
     void cancel(std::uint64_t task) { if (store_) store_->cancel(task); }
     using ExportAuthorizer=std::function<std::pair<std::filesystem::path,std::uint64_t>(const std::string&)>;
     void setExportAuthorizer(ExportAuthorizer authorizer) { exportAuthorizer_=std::move(authorizer); }
+    void setImportAuthorizer(ExportAuthorizer authorizer) { importAuthorizer_=std::move(authorizer); }
 
 private:
     storage::Store& store();
@@ -43,6 +44,7 @@ private:
     std::uint64_t nextPollAtMs_{0};
     std::function<void(const data::Record&)> publishObserver_;
     ExportAuthorizer exportAuthorizer_;
+    ExportAuthorizer importAuthorizer_;
 };
 
 } // namespace protoscope::scripting

@@ -301,6 +301,7 @@ void ScriptHost::commitLoadedScript(std::unique_ptr<Runtime> runtime,
     controlValues_ = std::move(nextControlValues);
     runtime_->tables=std::make_unique<DataTableSession>(controls_,*runtime_->data);
     runtime_->data->setExportAuthorizer([this](const std::string& target){return authorizeRecordExport(target);});
+    runtime_->data->setImportAuthorizer([this](const std::string& target){return authorizeRecordImport(target);});
     configureDataBindings();
     scriptPath_ = path;
     protocolDirectory_ = protocolDirectory;

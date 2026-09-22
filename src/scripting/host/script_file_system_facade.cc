@@ -72,6 +72,19 @@ std::pair<std::filesystem::path,std::uint64_t> ScriptHost::authorizeRecordExport
     return {std::move(path),fileIoConfig_.maxWriteFileSizeBytes};
 }
 
+std::pair<std::filesystem::path,std::uint64_t> ScriptHost::authorizeRecordImport(const std::string& pathText) const
+{
+    if (!fileIoConfig_.enabled) throw std::runtime_error("scripting.file_io is disabled");
+    if (pathText.empty() || pathText.size()>32768 || pathText.find('\0')!=std::string::npos)
+        throw std::invalid_argument("invalid record import path");
+    auto path=std::filesystem::u8path(pathText);
+    if (path.is_relative() && !protocolDirectory_.empty()) path=std::filesystem::path(protocolDirectory_)/path;
+    path=canonicalPath(path);
+    // 保存对话框给出的仅写授权不能被导入借用；源大小由后台读取时再次校验。
+    if (!isFsPathAuthorized(path,false)) throw std::runtime_error("record import path is not authorized");
+    return {std::move(path),fileIoConfig_.maxFileSizeBytes};
+}
+
 bool ScriptHost::validateFsOpenRequest(const FsOpenRequest& request, std::string& error) const
 {
     if (!isFsPathAuthorized(request.path, request.writeMode)) {

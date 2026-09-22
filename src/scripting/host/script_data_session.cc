@@ -453,6 +453,48 @@ void ScriptDataSession::registerApi(sol::state_view lua, sol::table& proto)
         return store().exportRecords(path,format=="psrec" ? storage::ExportFormat::Psrec:storage::ExportFormat::Csv,
             queryOptions(options),{maxBytes,options.get_or("overwrite",false)});
     });
+    record.set_function("import", [this](const sol::table& options) {
+        requireActive();
+        if (!importAuthorizer_) throw std::runtime_error("record import authorization unavailable");
+        const auto format=options.get_or<std::string>("format","psrec");
+        if (format!="psrec" && format!="csv" && format!="mapped_csv")
+            throw std::invalid_argument("import format must be psrec/csv/mapped_csv");
+        std::optional<data::CsvImportMapping> mapping;
+        const sol::object definition=options["mapping"];
+        if (format=="mapped_csv") {
+            if (definition.get_type()!=sol::type::table) throw std::invalid_argument("mapping must be table");
+            Decoder{}.read(definition);
+            const auto table=definition.as<sol::table>();
+            const auto dataset=table.get<std::string>("dataset");
+            const auto schema=std::find_if(schemas_.begin(),schemas_.end(),
+                [&](const auto& entry){return entry.dataset==dataset;});
+            if (schema==schemas_.end()) throw std::invalid_argument("mapping dataset must be declared");
+            mapping.emplace();mapping->schema=*schema;mapping->protocol=protocol_;
+            mapping->device=table.get_or<std::string>("device","");
+            mapping->receivedColumn=table.get_or<std::string>("received_column","received_at_us");
+            const auto optionalText=[&](const char* name) -> std::optional<std::string> {
+                const sol::object value=table[name];
+                if (!value.valid() || value.get_type()==sol::type::lua_nil) return {};
+                if (value.get_type()!=sol::type::string) throw std::invalid_argument(std::string(name)+" must be string");
+                return value.as<std::string>();
+            };
+            mapping->deviceColumn=optionalText("device_column");
+            mapping->deviceTimeColumn=optionalText("device_time_column");
+            mapping->nullToken=optionalText("null_token");
+            const sol::object fields=table["fields"];
+            if (fields.get_type()!=sol::type::table) throw std::invalid_argument("mapping fields must be table");
+            for (const auto& [key,value]:fields.as<sol::table>()) {
+                if (key.get_type()!=sol::type::string || value.get_type()!=sol::type::string)
+                    throw std::invalid_argument("mapping fields require string keys and columns");
+                mapping->fields.emplace(key.as<std::string>(),value.as<std::string>());
+            }
+        } else if (definition.valid() && definition.get_type()!=sol::type::lua_nil)
+            throw std::invalid_argument("mapping is only valid for mapped_csv");
+        const auto [path,maxBytes]=importAuthorizer_(options.get<std::string>("path"));
+        storage::ImportLimits limits;limits.sourceBytes=maxBytes;
+        return store().importRecords(path,format=="psrec" ? storage::ImportFormat::Psrec:
+            format=="csv" ? storage::ImportFormat::Csv:storage::ImportFormat::MappedCsv,std::move(mapping),limits);
+    });
     proto["record"] = record;
 }
 } // namespace protoscope::scripting

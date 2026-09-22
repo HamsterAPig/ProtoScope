@@ -124,3 +124,28 @@ local task = proto.record.export({
 目录应已存在；超限、取消、磁盘写入或最终替换失败保留原文件，错误异步返回。
 数据读取线程串行处理查询与导出，长导出期间后续查询可能等待，取消请求不阻塞 UI。
 授权检查不构成针对恶意目录竞争的完整文件系统沙箱。
+
+## 异步记录导入
+
+```lua
+local task = proto.record.import({path="telemetry.psrec",format="psrec"})
+-- 普通 CSV 必须映射到已声明数据集；工具 CSV 使用 format="csv"，无需映射。
+local plain = proto.record.import({path="device.csv",format="mapped_csv",mapping={
+    dataset="telemetry", received_column="time_us", device="device-a",
+    fields={sequence="seq",temperature="temp"}, null_token="NULL"
+}})
+-- on_record(ctx, evt): operation="import", task, ok, error, path, processed
+```
+
+PSREC 和工具 CSV 保留源协议、设备、接收/设备时间及全部模式版本；普通 CSV 的模式来自
+当前 `data()` 声明，协议使用当前协议键。字段未显式映射时使用同名列，
+支持 `device_column`、`device_time_column` 覆盖常量设备与可选设备时间。
+类型、必需列、CRC/结束计数全部校验通过后，才把独立暂存卷登记到目录索引。
+导入成功后必须创建新查询快照，旧快照不纳入新增卷；重复导入会增加独立记录，不自动去重。
+
+遵循文件读取授权和 `max_file_size_bytes`；仅写授权不能用于导入。
+源文件和暂存 SQLite/WAL/SHM 分别施加容量限制，C++ `ImportLimits` 默认均为 10GiB，
+Lua 源限制采用 file_io 配置。全局记录容量及滚动清理仍待长期记录阶段接线。
+取消、损坏、超限或登记失败不暴露半批历史，`processed=0`；索引已提交后取消不能撤销成功。
+导入不触发设备命令、实时 `latest`、字段绑定、录制订阅或实时记录计数，仅发送任务完成事件。
+查询、导入和导出共享有界后台任务队列；长任务会延后其他读取任务，但取消调用不等待后台完成。

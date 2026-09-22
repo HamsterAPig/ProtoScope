@@ -1,16 +1,11 @@
 #pragma once
 
-#include "protoscope/data/record_csv.hpp"
+#include "protoscope/storage/import.hpp"
 #include <filesystem>
 #include <functional>
 #include <memory>
 
 namespace protoscope::storage {
-enum class ImportFormat { Psrec, Csv, MappedCsv };
-struct ImportLimits {
-    std::uint64_t sourceBytes{10ULL*1024*1024*1024};
-    std::uint64_t stagedBytes{10ULL*1024*1024*1024};
-};
 struct ImportedVolumeInfo {
     std::filesystem::path path;
     std::string identity;

@@ -314,6 +314,84 @@ void workerCallbacks()
     throw std::runtime_error("worker storage callback timeout");
 }
 
+void recordImport()
+{
+    Fixture f;
+    {std::ofstream csv(f.directory.path()/"source.csv");csv<<"time,counter,reading,raw,note\n1,42,1.5,610062,NULL\n";}
+    require(f.load(declaration+R"(
+        local phase="import"
+        function on_open(ctx)
+            assert(not pcall(proto.record.import,{path="../outside.psrec"}))
+            assert(not pcall(proto.record.import,{path="source.csv",format="unknown"}))
+            assert(not pcall(proto.record.import,{path="source.csv",format="mapped_csv",mapping={dataset="missing"}}))
+            proto.record.import({path="source.csv",format="mapped_csv",mapping={
+                dataset="sample",received_column="time",device="import-device",null_token="NULL",
+                fields={counter="counter",reading="reading",raw="raw",note="note"}}})
+        end
+        function on_record(ctx,evt)
+            assert(evt.ok,evt.error)
+            assert(proto.data.latest("sample")==nil)
+            local status=proto.record.status()
+            assert(status.received==0 and status.committed==0 and not status.recording)
+            if evt.operation=="import" then
+                assert(evt.processed==1 and #evt.records==0 and evt.path)
+                proto.record.query({dataset="sample"})
+            elseif evt.operation=="query" then
+                assert(#evt.records==(phase=="reimport" and 2 or 1))
+                assert(evt.records[1].values.counter==42 and evt.records[1].device=="import-device")
+                assert(proto.data.is_null(evt.records[1].values.note))
+                if phase=="reimport" then proto.emit("done","")
+                else proto.record.export({path="copy.psrec",format="psrec"}) end
+            elseif evt.operation=="export" then
+                phase="reimport"
+                proto.record.import({path="copy.psrec"})
+            end
+        end
+    )"),"Lua import fixture");
+    f.open();f.done();
+    scripting::FileIoConfig limits;limits.maxFileSizeBytes=1;f.host.setFileIoConfig(limits);
+    require(f.load(R"(
+        function on_open(ctx) proto.record.import({path="copy.psrec"}) end
+        function on_record(ctx,evt)
+            assert(evt.operation=="import" and not evt.ok and evt.processed==0)
+            proto.emit("done","")
+        end
+    )"),"Lua import source limit fixture");
+    f.open();f.done();
+    limits.enabled=false;f.host.setFileIoConfig(limits);
+    require(f.load(R"(
+        function on_open(ctx)
+            assert(not pcall(proto.record.import,{path="copy.psrec"}))
+            proto.emit("done","")
+        end
+    )"),"Lua import disabled fixture");
+    f.open();
+    require(f.host.drainEvents().size()==1,"disabled import authorization");
+    limits.enabled=true;limits.allowProtocolDir=false;limits.maxFileSizeBytes=1024*1024;
+    f.host.setFileIoConfig(limits);
+    require(f.load(R"(
+        function on_file_dialog(ctx,evt)
+            if evt.id==1 then
+                assert(not pcall(proto.record.import,{path=evt.path}))
+                proto.emit("denied","")
+            else
+                proto.record.import({path=evt.path})
+            end
+        end
+        function on_record(ctx,evt)
+            assert(evt.operation=="import" and evt.ok and evt.processed==1,evt.error)
+            proto.emit("done","")
+        end
+    )"),"Lua import dialog authorization fixture");
+    scripting::FileDialogEvent selected;
+    selected.id=1;selected.kind=scripting::FileDialogKind::SaveFile;
+    selected.state="selected";selected.path=(f.directory.path()/"copy.psrec").generic_string();
+    f.host.onFileDialogEvent({},selected);
+    require(f.host.drainEvents().size()==1,"save-only grant cannot authorize import");
+    selected.id=2;selected.kind=scripting::FileDialogKind::OpenFile;
+    f.host.onFileDialogEvent({},selected);f.done();
+}
+
 void recordExport()
 {
     Fixture f;
@@ -367,7 +445,8 @@ int main()
     for (const auto& [name, run] : std::initializer_list<std::pair<const char*,void(*)()>>{
              {"recording",recording},{"kv_reload",kvAndReload},{"validation",validation},
              {"declarations",declarations},{"worker_callbacks",workerCallbacks},{"field_bindings",fieldBindings},
-             {"binding_failures",bindingFailures},{"query_fields",queryFields},{"record_export",recordExport}}) {
+             {"binding_failures",bindingFailures},{"query_fields",queryFields},{"record_export",recordExport},
+             {"record_import",recordImport}}) {
         try { std::cout << "[RUN] " << name << std::endl; run(); std::cout << "[PASS] " << name << std::endl; }
         catch (const std::exception& error) { ++failed; std::cerr << "[FAIL] " << name << ": " << error.what() << '\n'; }
     }

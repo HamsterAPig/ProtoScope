@@ -141,9 +141,13 @@ VolumeCatalog::VolumeCatalog(std::filesystem::path root,std::string protocol)
     :impl_(std::make_unique<Impl>(std::move(root),std::move(protocol))) {}
 VolumeCatalog::~VolumeCatalog()=default;
 
-CatalogVolume VolumeCatalog::adopt(StagedRecordImport& staged,std::int64_t sealedAtUs)
+CatalogVolume VolumeCatalog::adopt(StagedRecordImport& staged,std::int64_t sealedAtUs,std::stop_token stop)
 {
     std::lock_guard lock(impl_->mutex);
+    const auto checkStop=[&] {
+        if (stop.stop_requested()) throw std::runtime_error("record import canceled");
+    };
+    checkStop();
     const auto info=staged.info();
     checkIdentity(info.identity);
     if (info.path!=impl_->root/".staging"/info.identity/"records.sqlite")
@@ -152,6 +156,9 @@ CatalogVolume VolumeCatalog::adopt(StagedRecordImport& staged,std::int64_t seale
     std::map<std::uint64_t,data::Bytes> definitions;
     {
         sqlite::Database volume(info.path,true);
+        sqlite3_progress_handler(volume.get(),1000,[](void* token) {
+            return static_cast<std::stop_token*>(token)->stop_requested() ? 1:0;
+        },&stop);
         checkVolume(volume,impl_->protocol,info.identity,info.records);
         sqlite::Statement schemas(volume,"SELECT id,definition FROM schemas");
         while (schemas.row()) definitions.emplace(static_cast<std::uint64_t>(schemas.integer(0)),schemas.blob(1));
@@ -180,6 +187,7 @@ CatalogVolume VolumeCatalog::adopt(StagedRecordImport& staged,std::int64_t seale
     CatalogVolume registered{id,destination/"records.sqlite",info.identity,info.records,
                              info.fromUs,info.toUs,sealedAtUs,base,{}};
     for (const auto& [local,definition]:definitions) {
+        checkStop();
         data::schemaFromValue(data::decodeValue(definition,valueLimits));
         sqlite::Statement schema(db,"INSERT OR IGNORE INTO schemas(definition) VALUES(?)");
         schema.blob(1,definition);schema.row();
@@ -192,8 +200,10 @@ CatalogVolume VolumeCatalog::adopt(StagedRecordImport& staged,std::int64_t seale
         registered.schemaIds.emplace(local,static_cast<std::uint64_t>(global.integer(0)));
     }
     // 先在同一根内移动完整卷，再提交索引；索引提交失败时暂存对象仍拥有新路径并负责清理。
+    checkStop();
     std::filesystem::rename(info.path.parent_path(),destination);
     staged.relocate(destination);
+    checkStop();
     db.exec("COMMIT");
     staged.release();
     return registered;

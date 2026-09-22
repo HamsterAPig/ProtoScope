@@ -118,6 +118,10 @@ struct Store::Impl {
         std::filesystem::path exportPath;
         ExportFormat format{ExportFormat::Psrec};
         ExportOptions exportOptions;
+        std::filesystem::path importPath;
+        ImportFormat importFormat{ImportFormat::Psrec};
+        std::optional<data::CsvImportMapping> importMapping;
+        ImportLimits importLimits;
     };
 
     std::filesystem::path root;
@@ -408,11 +412,21 @@ struct Store::Impl {
                 reading = true;
             }
             const bool exporting=!command.exportPath.empty();
-            Completion result{command.task, exporting ? "export":"query", false};
-            result.path=command.exportPath;
+            const bool importing=!command.importPath.empty();
+            Completion result{command.task, importing ? "import":exporting ? "export":"query", false};
+            result.path=importing ? command.importPath:command.exportPath;
             try {
                 if (command.canceled->stop_requested()) throw std::runtime_error("查询已取消");
-                result=exporting ? queries->exportRecords(command.exportPath,command.format,command.query,
+                if (importing) {
+                    auto staged=stageRecordImport(root/"records",protocol,command.importPath,command.importFormat,
+                        command.importMapping,command.importLimits,command.canceled->get_token());
+                    const auto now=std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
+                    // 索引提交是可见性的唯一边界；提交后才报告成功，不触发实时发布。
+                    const auto volume=catalog->adopt(staged,now,command.canceled->get_token());
+                    result.processed=volume.records;
+                    result.ok=true;
+                } else result=exporting ? queries->exportRecords(command.exportPath,command.format,command.query,
                                                           command.exportOptions,command.canceled->get_token()):
                                    queries->query(command.query,command.canceled->get_token());
                 result.task=command.task;
@@ -541,6 +555,40 @@ void Store::cancel(std::uint64_t task)
     if (found != impl_->cancellations.end()) found->second->request_stop();
 }
 
+std::uint64_t Store::importRecords(std::filesystem::path path,ImportFormat format,
+    std::optional<data::CsvImportMapping> mapping,ImportLimits limits)
+{
+    if (format!=ImportFormat::Psrec && format!=ImportFormat::Csv && format!=ImportFormat::MappedCsv)
+        throw std::invalid_argument("unsupported import format");
+    if ((format==ImportFormat::MappedCsv)!=mapping.has_value() || !limits.sourceBytes || !limits.stagedBytes)
+        throw std::invalid_argument("invalid import mapping or limits");
+    if (path.empty() || path.native().size()>32768 ||
+        path.native().find(std::filesystem::path::value_type{})!=std::filesystem::path::string_type::npos)
+        throw std::invalid_argument("invalid import path");
+    if (mapping) {
+        data::validateSchema(mapping->schema);
+        std::size_t bytes=data::encodeValue(data::schemaValue(mapping->schema),{256U*1024U,16}).size();
+        bytes+=mapping->protocol.size()+mapping->device.size()+mapping->receivedColumn.size()+
+            mapping->deviceColumn.value_or("").size()+mapping->deviceTimeColumn.value_or("").size()+
+            mapping->nullToken.value_or("").size();
+        for (const auto& [field,column]:mapping->fields) bytes+=field.size()+column.size()+64;
+        if (bytes>256U*1024U) throw std::invalid_argument("import mapping exceeds 256 KiB");
+    }
+    std::lock_guard lock(impl_->mutex);
+    if (impl_->stopping || impl_->pendingQueries>=16 || impl_->pendingTasks>=1024)
+        throw std::runtime_error("import queue full or closing");
+    const auto task=impl_->nextTask++;
+    auto canceled=std::make_shared<std::stop_source>();
+    Impl::ReadCommand command{task,{},canceled};
+    command.importPath=std::move(path);command.importFormat=format;
+    command.importMapping=std::move(mapping);command.importLimits=limits;
+    impl_->cancellations.emplace(task,std::move(canceled));
+    impl_->reads.push_back(std::move(command));
+    ++impl_->pendingTasks;++impl_->pendingQueries;
+    impl_->changed.notify_all();
+    return task;
+}
+
 std::optional<data::Value> Store::get(const std::string& key) const
 {
     std::lock_guard lock(impl_->mutex);
@@ -573,7 +621,8 @@ std::vector<Completion> Store::poll()
     result.swap(impl_->completions);
     impl_->pendingTasks -= result.size();
     for (const auto& completion : result) {
-        if (completion.operation == "query" || completion.operation == "export") --impl_->pendingQueries;
+        if (completion.operation == "query" || completion.operation == "export" || completion.operation == "import")
+            --impl_->pendingQueries;
     }
     return result;
 }

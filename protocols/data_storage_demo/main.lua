@@ -1,8 +1,10 @@
--- 连续发布、记录、历史表、异步导出与 KV 示例；暂存导入尚未接入。
+-- 连续发布、记录、历史表、异步导入导出与 KV 示例。
 local sequence = 0
 local snapshot
 local export_dialogs = {}
 local export_task
+local import_dialogs = {}
+local import_task
 
 assert(proto.ui.set_menu({
     {id="telemetry_show",label="Telemetry",checkable=true,checked=true},
@@ -14,7 +16,11 @@ assert(proto.ui.set_menu({
         {separator=true},
         {id="export_psrec",label="Export PSREC"},
         {id="export_csv",label="Export CSV"},
-        {id="export_cancel",label="Cancel Export",disabled=true}
+        {id="export_cancel",label="Cancel Export",disabled=true},
+        {separator=true},
+        {id="import_psrec",label="Import PSREC"},
+        {id="import_csv",label="Import CSV"},
+        {id="import_cancel",label="Cancel Import",disabled=true}
     }}
 }))
 
@@ -81,10 +87,27 @@ function on_control(ctx, id, value)
         if dialog then export_dialogs[dialog] = format else proto.log("error", err) end
     elseif id == "export_cancel" and export_task then
         proto.record.cancel(export_task)
+    elseif id == "import_psrec" or id == "import_csv" then
+        local format = id == "import_psrec" and "psrec" or "csv"
+        local dialog, err = proto.fs.open_file_dialog({mode="open", title="Import Records",
+            filters={{name=format, patterns={"*." .. format}}}})
+        if dialog then import_dialogs[dialog] = format else proto.log("error", err) end
+    elseif id == "import_cancel" and import_task then
+        proto.record.cancel(import_task)
     end
 end
 
 function on_file_dialog(ctx, evt)
+    local import_format = import_dialogs[evt.id]
+    import_dialogs[evt.id] = nil
+    if import_format then
+        if evt.state ~= "selected" or not evt.path or import_task then return end
+        local ok, task = pcall(proto.record.import, {path=evt.path, format=import_format})
+        if not ok then proto.log("error", tostring(task)); return end
+        import_task = task
+        proto.ui.update_menu("import_cancel", {disabled=false})
+        return
+    end
     local format = export_dialogs[evt.id]
     export_dialogs[evt.id] = nil
     if not format or evt.state ~= "selected" or not evt.path then return end
@@ -110,6 +133,15 @@ function on_open(ctx)
 end
 
 function on_record(ctx, evt)
+    if evt.operation == "import" and evt.task == import_task then
+        import_task = nil
+        proto.ui.update_menu("import_cancel", {disabled=true})
+        if evt.ok then
+            proto.status.set("Imported " .. evt.processed .. " records")
+            snapshot = nil
+            proto.record.query({dataset="telemetry", limit=200})
+        end
+    end
     if evt.operation == "export" and evt.task == export_task then
         export_task = nil
         proto.ui.update_menu("export_cancel", {disabled=true})

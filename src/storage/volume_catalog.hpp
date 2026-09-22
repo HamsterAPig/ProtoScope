@@ -28,7 +28,7 @@ class VolumeCatalog {
 public:
     VolumeCatalog(std::filesystem::path recordsRoot,std::string protocol);
     ~VolumeCatalog();
-    CatalogVolume adopt(StagedRecordImport& staged,std::int64_t sealedAtUs);
+    CatalogVolume adopt(StagedRecordImport& staged,std::int64_t sealedAtUs,std::stop_token stop={});
     std::shared_ptr<const PinnedVolumes> pinAll();
     bool isPinned(std::uint64_t id) const;
     std::map<std::uint64_t,data::Schema> schemas() const;

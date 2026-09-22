@@ -91,12 +91,63 @@ void failureAndOwnership()
     }
     require(std::filesystem::exists(retained),"identity mismatch prevents destructive cleanup");
 }
+
+storage::Completion complete(storage::Store& store,std::uint64_t task)
+{
+    store.waitIdle();
+    for (auto& event:store.poll()) if (event.task==task) return event;
+    throw std::runtime_error("missing asynchronous import completion");
+}
+void asynchronousImport()
+{
+    tests::ScopedTempPath directory(tests::makeUniqueTempDir("protoscope-async-import"));
+    const auto root=directory.path()/"store",source=directory.path()/"source.psrec";
+    sourceFile(source);
+    {
+        storage::Store store(root,"target-protocol",{schema});
+        const auto empty=complete(store,store.query({}));
+        require(empty.ok && empty.records.empty(),"initial empty snapshot");
+        auto imported=complete(store,store.importRecords(source,storage::ImportFormat::Psrec));
+        require(imported.ok && imported.operation=="import" && imported.processed==1500 &&
+                imported.path==source && imported.records.empty(),"asynchronous import reports committed volume");
+        storage::Query query;query.snapshot=empty.snapshot;
+        require(complete(store,store.query(query)).records.empty(),"import cannot change frozen query");
+        query.snapshot.reset();query.limit=1000;query.sort=data::FieldSort{"n",false};
+        const auto first=complete(store,store.query(query));
+        require(first.ok && first.records.size()==1000 && first.more &&
+                first.records[0].protocol=="source-protocol","registered history preserves provenance");
+        query.snapshot=first.snapshot;query.offset=1000;
+        const auto second=complete(store,store.query(query));
+        require(second.ok && second.records.size()==500 && !second.more &&
+                std::get<std::int64_t>(second.records.back().values[0].value)==1499,"import pagination complete");
+        const auto canceled=store.importRecords(source,storage::ImportFormat::Psrec);store.cancel(canceled);
+        require(!complete(store,canceled).ok,"canceled task never registers partial history");
+        const auto quota=complete(store,store.importRecords(source,storage::ImportFormat::Psrec,{}, {1,1024*1024}));
+        require(!quota.ok && quota.processed==0,"source limit failure");
+        const auto capacity=complete(store,store.importRecords(source,storage::ImportFormat::Psrec,{}, {1024*1024,1}));
+        require(!capacity.ok && capacity.processed==0,"staging limit failure");
+        {std::fstream file(source,std::ios::in|std::ios::out|std::ios::binary);file.seekp(-1,std::ios::end);file.put('X');}
+        require(!complete(store,store.importRecords(source,storage::ImportFormat::Psrec)).ok,"bad final CRC cannot register");
+        // 超过队列上限数量的顺序失败任务必须正常释放配额，不阻塞后续查询。
+        for (int i=0;i<18;++i)
+            require(!complete(store,store.importRecords(directory.path()/"absent",storage::ImportFormat::Csv)).ok,
+                    "failed import returns task slot");
+        require(!store.status().recording && store.status().received==0 && store.status().committed==0 &&
+                !store.status().faulted,"imports leave live recording state and counters unchanged");
+        require(std::filesystem::is_empty(root/"records"/".staging"),"failed import staging cleaned");
+    }
+    storage::Store reopened(root,"target-protocol",{schema});
+    storage::Query query;query.offset=1000;query.limit=1000;
+    const auto history=complete(reopened,reopened.query(query));
+    require(history.ok && history.records.size()==500 && !history.more,"only successful volume survives restart");
+}
 }
 int main()
 {
     int failed=0;
     for (const auto& [name,run]:std::initializer_list<std::pair<const char*,void(*)()>>{
-        {"formats_isolation",formatsAndIsolation},{"failure_ownership",failureAndOwnership}}) {
+        {"formats_isolation",formatsAndIsolation},{"failure_ownership",failureAndOwnership},
+        {"asynchronous_import",asynchronousImport}}) {
         try {run();std::cout<<"[PASS] "<<name<<'\n';}
         catch(const std::exception& e){++failed;std::cerr<<"[FAIL] "<<name<<": "<<e.what()<<'\n';}
     }

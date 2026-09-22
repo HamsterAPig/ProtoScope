@@ -751,6 +751,18 @@ function on_file_dialog(ctx, evt) end
 ---@field path string @遵循 file_io 授权，不能指向记录或 KV 目录。
 ---@field format? 'psrec'|'csv' @默认 psrec。
 ---@field overwrite? boolean @默认 false；提交时原子检查，不覆盖竞争者的新文件。
+---@class ProtoRecordImport
+---@field path string @遵循 file_io 读取授权和 max_file_size_bytes。
+---@field format? 'psrec'|'csv'|'mapped_csv' @默认 psrec；csv 是类型化工具格式。
+---@field mapping? ProtoCsvImportMapping @仅 mapped_csv 使用。
+---@class ProtoCsvImportMapping
+---@field dataset string @必须引用当前 data() 声明。
+---@field fields table<string,string> @字段名到 CSV 列名，未映射字段沿用同名列。
+---@field device? string
+---@field received_column? string @默认 received_at_us。
+---@field device_column? string
+---@field device_time_column? string
+---@field null_token? string @显式空值标记；默认空字符串仍为字符串。
 ---@class ProtoStorageEvent
 ---@field status table
 ---@field task integer
@@ -760,8 +772,8 @@ function on_file_dialog(ctx, evt) end
 ---@field records ProtoDataRow[]
 ---@field snapshot? integer @固定卷集合及已提交范围，不是记录 ID。
 ---@field more boolean
----@field processed integer @导出成功记录数；失败为 0，原目标保持不变。
----@field path? string @导出目标。
+---@field processed integer @导入或导出成功记录数；失败为 0。
+---@field path? string @导入源或导出目标。
 ---@class ProtoRecordStatus
 ---@field recording boolean
 ---@field recovered boolean
@@ -823,6 +835,10 @@ function proto.record.query(options) end
 ---@param options ProtoRecordExport
 ---@return integer task
 function proto.record.export(options) end
+-- 完整校验后登记独立历史卷，不触发实时发布或设备业务回调。
+---@param options ProtoRecordImport
+---@return integer task
+function proto.record.import(options) end
 ---@param task integer
 function proto.record.cancel(task) end
 ---@param ctx ProtoConnectionContext
