@@ -68,12 +68,17 @@ struct RecordVolume::Impl {
 RecordVolume::RecordVolume(std::unique_ptr<Impl> impl):impl_(std::move(impl)) {}
 RecordVolume::~RecordVolume()=default;
 const RecordVolumeInfo& RecordVolume::info() const {return impl_->info;}
+std::string RecordVolume::newIdentity() {return identity();}
 
 std::unique_ptr<RecordVolume> RecordVolume::create(const std::filesystem::path& root,const std::string& protocol,
-    const std::map<std::uint64_t,data::Schema>& schemas,std::int64_t firstId,std::int64_t openedAtUs)
+    const std::map<std::uint64_t,data::Schema>& schemas,std::int64_t firstId,std::int64_t openedAtUs,
+    std::string reservedIdentity)
 {
     if (protocol.empty() || protocol.size()>4096 || firstId<1 || openedAtUs<0)
         throw std::invalid_argument("invalid new record volume parameters");
+    if (!reservedIdentity.empty() && (reservedIdentity.size()!=32 ||
+        reservedIdentity.find_first_not_of("0123456789abcdef")!=std::string::npos))
+        throw std::invalid_argument("invalid reserved record volume identity");
     std::size_t schemaBytes=0;
     for (const auto& [id,schema]:schemas) {
         if (!id || id>INT64_MAX) throw std::invalid_argument("invalid record schema ID");
@@ -85,8 +90,8 @@ std::unique_ptr<RecordVolume> RecordVolume::create(const std::filesystem::path& 
     const auto parent=std::filesystem::weakly_canonical(std::filesystem::absolute(root));
     std::filesystem::create_directories(parent);
     bool created=false;
-    for (int attempt=0;attempt<8 && !created;++attempt) {
-        impl->info.identity=identity();
+    for (int attempt=0;attempt<(reservedIdentity.empty() ? 8:1) && !created;++attempt) {
+        impl->info.identity=reservedIdentity.empty() ? identity():reservedIdentity;
         impl->info.path=parent/("vol-"+impl->info.identity)/"records.sqlite";
         created=std::filesystem::create_directory(impl->info.path.parent_path());
     }

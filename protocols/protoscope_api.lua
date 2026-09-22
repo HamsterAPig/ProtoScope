@@ -784,8 +784,12 @@ function on_file_dialog(ctx, evt) end
 ---@field failed integer
 ---@field queue_bytes integer
 ---@field last_committed_id integer @最近已提交实时记录位置。
+---@field session_id integer @持久化记录会话编号，主动停止后再启动递增。
+---@field run_id integer @存储运行次数，包含协议重载。
+---@field unclean_recovery boolean @本次打开前没有已提交的正常退出标记。
+---@field abnormal_runs integer @保留的异常退出次数。
 ---@field last_committed_time_us? integer
----@field interrupted_from_us? integer @当前运行期被拒绝或失败记录的接收时间范围。
+---@field interrupted_from_us? integer @最近记录故障的接收时间范围，已提交后可跨重启恢复。
 ---@field interrupted_to_us? integer
 ---@field error string
 

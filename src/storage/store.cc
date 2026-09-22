@@ -1,5 +1,6 @@
 #include "protoscope/storage/store.hpp"
 #include "record_query.hpp"
+#include "record_session.hpp"
 #include "sqlite_database.hpp"
 
 #include <sqlite3.h>
@@ -150,6 +151,8 @@ struct Store::Impl {
     std::unique_ptr<VolumeCatalog> catalog;
     std::shared_ptr<void> writerLease;
     std::unique_ptr<RecordQueryService> queries;
+    std::unique_ptr<RecordSession> session;
+    bool faultMetadataDirty{false};
     std::mutex maintenanceMutex;
     std::chrono::steady_clock::time_point nextMaintenance{};
 
@@ -173,6 +176,9 @@ struct Store::Impl {
         // 在打开活动库前取得目录进程锁，防止另一进程写入或清理相同记录根。
         catalog=std::make_unique<VolumeCatalog>(root/"records",protocol);
         writerLease=catalog->claimWriter();
+        session=std::make_unique<RecordSession>(root/"records",protocol);
+        if (!session->state().activeIdentity.empty() || !session->state().pendingIdentity.empty())
+            throw std::runtime_error("record volume transition requires coordinator recovery");
         Database records(root / "records" / "records.sqlite");
         initialize(records,
             "CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);"
@@ -227,6 +233,23 @@ struct Store::Impl {
             cache.emplace(std::move(name), std::move(bytes));
         }
         queries=std::make_unique<RecordQueryService>(root/"records"/"records.sqlite",*catalog,config.queueBytes);
+        if (session->state().lastCommittedId>static_cast<std::int64_t>(status.lastCommittedId))
+            throw std::runtime_error("record session position is ahead of committed database");
+        status.uncleanRecovery=!session->state().cleanExit;
+        if (session->state().run==0) {
+            if (status.recording) session->start();
+        } else {
+            status.recording=session->state().recording;
+            status.recovered=status.recording;
+            status.interruptedFromUs=session->state().interruptedFromUs;
+            status.interruptedToUs=session->state().interruptedToUs;
+        }
+        if (status.lastCommittedTimeUs)
+            session->committed(static_cast<std::int64_t>(status.lastCommittedId),*status.lastCommittedTimeUs);
+        session->beginRun();
+        if (status.recording) session->start();
+        status.sessionId=session->state().session;status.runId=session->state().run;
+        status.abnormalRuns=session->state().abnormalRuns;
         writer = std::thread([this] { writeLoop(); });
         try { reader = std::thread([this] { readLoop(); }); }
         catch (...) {
@@ -247,6 +270,14 @@ struct Store::Impl {
         changed.notify_all();
         if (writer.joinable()) writer.join();
         if (reader.joinable()) reader.join();
+        try {
+            if (writerLease) {
+                persistFault();
+                session->cleanExit();
+            }
+        } catch (...) {
+            // 退出时无法写入干净标记就保留异常状态，下次恢复不得假称上次正常关闭。
+        }
     }
 
     std::uint64_t enqueue(Command command)
@@ -269,9 +300,12 @@ struct Store::Impl {
     {
         if (command.operation == "start" || command.operation == "stop") {
             const bool active = command.operation == "start";
+            persistFault();
+            if (active) session->start(); else session->stop();
             metadata(records, "recording", active ? "1" : "0");
             std::lock_guard lock(mutex);
             status.recording = active;
+            status.sessionId=session->state().session;
             if (active) {
                 status.faulted = false;
                 status.error.clear();
@@ -312,6 +346,7 @@ struct Store::Impl {
 
     void markInterrupted(const std::vector<data::Record>& records)
     {
+        faultMetadataDirty=true;
         for (const auto& record:records) {
             if (!status.interruptedFromUs || record.receivedAtUs<*status.interruptedFromUs)
                 status.interruptedFromUs=record.receivedAtUs;
@@ -341,6 +376,22 @@ struct Store::Impl {
     {
         std::lock_guard lock(mutex);
         status.faulted=true;status.recording=false;status.error=error;
+        faultMetadataDirty=true;
+    }
+    void persistFault()
+    {
+        Status failure;
+        {
+            std::lock_guard lock(mutex);
+            if (!faultMetadataDirty) return;
+            failure=status;faultMetadataDirty=false;
+        }
+        if (!failure.faulted) return;
+        try {session->fault(failure.error.substr(0,4096),failure.interruptedFromUs,failure.interruptedToUs);}
+        catch (const std::exception& error) {
+            std::lock_guard lock(mutex);
+            status.error="record fault metadata commit failed: "+std::string(error.what());
+        }
     }
 
     void writeLoop()
@@ -354,11 +405,14 @@ struct Store::Impl {
                 std::vector<Command> batch;
                 {
                     std::unique_lock lock(mutex);
-                    changed.wait_for(lock, config.maintenanceInterval, [&] { return stopping || !writes.empty(); });
+                    changed.wait_for(lock, config.maintenanceInterval, [&] {
+                        return stopping || !writes.empty() || faultMetadataDirty;
+                    });
                     if (writes.empty() && stopping) break;
                     if (writes.empty()) {
                         const bool active=status.recording;
                         lock.unlock();
+                        persistFault();
                         if (active) {
                             try {maintain();} catch(const std::exception& error) {maintenanceFault(error.what());}
                         }
@@ -450,8 +504,15 @@ struct Store::Impl {
                     }
                 }
                 if (publishing && error.empty()) {
+                    if (rowCount) {
+                        const auto committed=statusSnapshot();
+                        try {session->committed(static_cast<std::int64_t>(committed.lastCommittedId),
+                                                committed.lastCommittedTimeUs.value_or(0));}
+                        catch(const std::exception& failure) {maintenanceFault(failure.what());}
+                    }
                     try {maintain();} catch(const std::exception& failure) {maintenanceFault(failure.what());}
                 }
+                persistFault();
                 {std::lock_guard lock(mutex);writing=false;}
                 idle.notify_all();
             }
@@ -474,6 +535,8 @@ struct Store::Impl {
             idle.notify_all();
         }
     }
+
+    Status statusSnapshot() const {std::lock_guard lock(mutex);return status;}
 
     void readLoop()
     {
@@ -593,6 +656,7 @@ bool Store::publish(std::vector<data::Record> records, std::string& error)
         return true;
     } catch (const std::exception& failure) {
         error = failure.what();
+        impl_->changed.notify_all();
         return false;
     }
 }
@@ -721,6 +785,7 @@ void Store::waitIdle()
 }
 void Store::suspend()
 {
+    if (!impl_->writerLease) return;
     waitIdle();
     {
         std::lock_guard lock(impl_->mutex);
@@ -729,12 +794,22 @@ void Store::suspend()
     impl_->changed.notify_all();
     if (impl_->writer.joinable()) impl_->writer.join();
     if (impl_->reader.joinable()) impl_->reader.join();
+    impl_->persistFault();
+    try {impl_->session->cleanExit();}
+    catch (...) {impl_->writerLease.reset();throw;}
     impl_->writerLease.reset();
 }
 void Store::resume()
 {
     if (impl_->writer.joinable() || impl_->reader.joinable()) return;
     impl_->writerLease=impl_->catalog->claimWriter();
+    try {
+        impl_->session=std::make_unique<RecordSession>(impl_->root/"records",impl_->protocol);
+        impl_->session->beginRun();
+        std::lock_guard lock(impl_->mutex);
+        impl_->status.runId=impl_->session->state().run;
+        impl_->status.abnormalRuns=impl_->session->state().abnormalRuns;
+    } catch (...) {impl_->writerLease.reset();throw;}
     {
         std::lock_guard lock(impl_->mutex);
         impl_->stopping=false;

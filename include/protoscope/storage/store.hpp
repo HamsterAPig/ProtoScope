@@ -31,6 +31,8 @@ struct Status {
     std::optional<std::int64_t> lastCommittedTimeUs;
     std::optional<std::int64_t> interruptedFromUs;
     std::optional<std::int64_t> interruptedToUs;
+    std::uint64_t sessionId{0},runId{0},abnormalRuns{0};
+    bool uncleanRecovery{false};
 };
 
 struct Query {

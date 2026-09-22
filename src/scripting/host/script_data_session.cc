@@ -340,6 +340,8 @@ sol::table ScriptDataSession::completionTable(sol::state_view lua, const storage
         current["committed"] = status.committed; current["failed"] = status.failed;
         current["faulted"] = status.faulted; current["error"] = status.error;
         current["last_committed_id"]=status.lastCommittedId;
+        current["session_id"]=status.sessionId;current["run_id"]=status.runId;
+        current["unclean_recovery"]=status.uncleanRecovery;current["abnormal_runs"]=status.abnormalRuns;
         if (status.lastCommittedTimeUs) current["last_committed_time_us"]=*status.lastCommittedTimeUs;
         if (status.interruptedFromUs) current["interrupted_from_us"]=*status.interruptedFromUs;
         if (status.interruptedToUs) current["interrupted_to_us"]=*status.interruptedToUs;
@@ -403,6 +405,8 @@ void ScriptDataSession::registerApi(sol::state_view lua, sol::table& proto)
         table["failed"] = status.failed; table["queue_bytes"] = status.queueBytes;
         table["error"] = status.error;
         table["last_committed_id"]=status.lastCommittedId;
+        table["session_id"]=status.sessionId;table["run_id"]=status.runId;
+        table["unclean_recovery"]=status.uncleanRecovery;table["abnormal_runs"]=status.abnormalRuns;
         if (status.lastCommittedTimeUs) table["last_committed_time_us"]=*status.lastCommittedTimeUs;
         if (status.interruptedFromUs) table["interrupted_from_us"]=*status.interruptedFromUs;
         if (status.interruptedToUs) table["interrupted_to_us"]=*status.interruptedToUs;

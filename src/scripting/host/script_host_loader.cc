@@ -344,7 +344,7 @@ bool ScriptHost::loadScriptFile(const std::string& path)
         }
 
         // 排空并关闭旧原生连接后才允许新会话取得写者资格；激活失败恢复旧回调和存储队列。
-        if (previousData) {previousData->suspendStorage();storageSuspended=true;}
+        if (previousData) {storageSuspended=true;previousData->suspendStorage();}
         nextRuntime->data->activate();
         commitLoadedScript(
             std::move(nextRuntime), std::move(loadedScript), snapshot.controlValues, path, nextProtocolDirectory);

@@ -19,7 +19,9 @@ struct RecordVolumeInfo {
 class RecordVolume {
 public:
     static std::unique_ptr<RecordVolume> create(const std::filesystem::path& root,const std::string& protocol,
-        const std::map<std::uint64_t,data::Schema>& schemas,std::int64_t firstId,std::int64_t openedAtUs);
+        const std::map<std::uint64_t,data::Schema>& schemas,std::int64_t firstId,std::int64_t openedAtUs,
+        std::string reservedIdentity={});
+    static std::string newIdentity();
     static std::unique_ptr<RecordVolume> reopen(const std::filesystem::path& path,const std::string& protocol);
     ~RecordVolume();
     const RecordVolumeInfo& info() const;

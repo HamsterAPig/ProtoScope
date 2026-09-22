@@ -28,7 +28,9 @@ void addVolume(storage::VolumeCatalog& catalog,const std::filesystem::path& root
         writer.finish();
     }
     auto staged=storage::stageRecordImport(root,"protocol",source,storage::ImportFormat::Psrec);
-    catalog.adopt(staged,100);
+    const auto now=std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    catalog.adopt(staged,now);
 }
 void crossVolumeSnapshot()
 {

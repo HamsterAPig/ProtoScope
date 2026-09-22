@@ -9,6 +9,13 @@
 #include <fstream>
 #include <limits>
 #include <thread>
+#include <cstdlib>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace {
 using namespace protoscope;
@@ -342,6 +349,59 @@ void singleWriter()
     require(completion(next,next.query({})).records.size()==1,
             "writer claim releases on destruction even if old result keeps a query lease");
 }
+void faultPersistence()
+{
+    const tests::ScopedTempPath directory(tests::makeUniqueTempDir("protoscope-fault-persistence"));
+    {
+        storage::Config config;config.queueBytes=512;
+        storage::Store store(directory.path(),"protocol",{schema()},config);
+        require(completion(store,store.start()).ok,"persistent fault fixture starts");
+        auto missed=record();missed.values[2]={data::Bytes(1024,1)};
+        std::string error;require(!store.publish({missed},error),"fixture enters queue fault");
+    }
+    storage::Store recovered(directory.path(),"protocol",{schema()});
+    const auto state=recovered.status();
+    require(state.recording && state.recovered && state.interruptedFromUs==123 && state.interruptedToUs==123,
+            "unstopped intent and committed interruption survive restart");
+    require(state.sessionId==1 && state.runId==2 && !state.uncleanRecovery && state.abnormalRuns==0,
+            "graceful close persists clean marker without manufacturing a crash");
+    require(completion(recovered,recovered.stop()).ok,"explicit stop updates durable intent");
+    require(completion(recovered,recovered.start()).ok && recovered.status().sessionId==2,
+            "new explicit recording starts a new durable session");
+}
+void abruptProcessRecovery()
+{
+#ifdef _WIN32
+    for (const bool stopped:{false,true}) {
+        const tests::ScopedTempPath directory(tests::makeUniqueTempDir("protoscope-abrupt-recording"));
+        wchar_t executable[32768]{};
+        require(GetModuleFileNameW(nullptr,executable,32768)>0,"crash fixture executable");
+        std::wstring command=L"\""+std::wstring(executable)+L"\" "+
+            (stopped ? L"--crash-stop":L"--crash-record")+L" \""+directory.path().wstring()+L"\"";
+        STARTUPINFOW startup{};startup.cb=sizeof(startup);PROCESS_INFORMATION process{};
+        require(CreateProcessW(executable,command.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,nullptr,
+                              &startup,&process)!=0,"start abrupt-exit fixture");
+        CloseHandle(process.hThread);
+        const auto wait=WaitForSingleObject(process.hProcess,10000);
+        if (wait!=WAIT_OBJECT_0) {TerminateProcess(process.hProcess,3);WaitForSingleObject(process.hProcess,10000);}
+        DWORD code=3;GetExitCodeProcess(process.hProcess,&code);CloseHandle(process.hProcess);
+        require(wait==WAIT_OBJECT_0 && code==0,"child commits before abrupt exit");
+        {
+            storage::Store recovered(directory.path(),"protocol",{schema()});
+            const auto state=recovered.status();
+            require(state.uncleanRecovery && state.abnormalRuns==1 && state.runId==2,
+                    "actual process exit without destructors restores abnormal marker");
+            require(state.recording==!stopped && state.recovered==!stopped,
+                    "only unstopped durable intent resumes after abnormal exit");
+            require(state.lastCommittedId==1 && completion(recovered,recovered.query({})).records.size()==1,
+                    "committed WAL survives process exit");
+        }
+        storage::Store reopened(directory.path(),"protocol",{schema()});
+        require(!reopened.status().uncleanRecovery && reopened.status().abnormalRuns==1,
+                "subsequent graceful close preserves crash history without adding another crash");
+    }
+#endif
+}
 void automaticRetention()
 {
     const tests::ScopedTempPath directory(tests::makeUniqueTempDir("protoscope-automatic-retention"));
@@ -370,8 +430,17 @@ void automaticRetention()
 }
 }
 
-int main()
+int main(int argc,char** argv)
 {
+    if (argc==3 && (std::string(argv[1])=="--crash-record" || std::string(argv[1])=="--crash-stop")) {
+        try {
+            storage::Store store(argv[2],"protocol",{schema()});
+            require(completion(store,store.start()).ok,"child start");
+            std::string error;require(store.publish({record()},error),"child publish");store.waitIdle();
+            if (std::string(argv[1])=="--crash-stop") require(completion(store,store.stop()).ok,"child stop");
+            std::_Exit(0);
+        } catch(const std::exception& error) {std::cerr<<error.what()<<'\n';return 2;}
+    }
     int failed = 0;
     const std::pair<const char*, void(*)()> tests[] = {
         {"model", model}, {"kv_persistence", kvPersistence},
@@ -383,6 +452,8 @@ int main()
         {"live_table",liveTable},
         {"capacity_monitoring",capacityMonitoring},{"automatic_retention",automaticRetention},
         {"single_writer",singleWriter},
+        {"fault_persistence",faultPersistence},
+        {"abrupt_process_recovery",abruptProcessRecovery},
     };
     for (const auto& [name, run] : tests) {
         try { run(); std::cout << "[PASS] " << name << '\n'; }
