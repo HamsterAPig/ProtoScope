@@ -1,4 +1,4 @@
--- 工业控件、数据发布、记录、固定快照查询和 KV 示例；尚不包含文件交换和历史表。
+-- 工业控件、数据发布、记录、固定快照历史表和 KV 示例；尚不包含文件交换。
 local sequence = 0
 local snapshot
 
@@ -35,7 +35,13 @@ function ui()
             {"slider_int", "target", "Target", min=0, max=100, default=20},
             {"slider_float", "gain", "Gain", min=0, max=2, default=1, precision=2},
             {"radio_group", "mode", "Mode", options={"Automatic", "Manual"}},
-            {"text_area", "notes", "Notes", rows=4, max_length=1024, wrap=true}
+            {"text_area", "notes", "Notes", rows=4, max_length=1024, wrap=true},
+            {"data_table", "live_rows", "Live Samples", dataset="telemetry",
+                max_rows=200, page_size=50, visible_rows=8,
+                columns={"sequence", {field="temperature", label="Temperature", unit="C", precision=2}}},
+            {"data_table", "history_rows", "Recorded Samples", dataset="telemetry", mode="history",
+                page_size=200, visible_rows=8,
+                columns={"sequence", {field="temperature", label="Temperature", unit="C", precision=2}}}
         },
         layout = {type="tabs", id="telemetry_pages", default="live", pages={
             {id="live", title="Live", children={
@@ -46,6 +52,9 @@ function ui()
             {id="settings", title="Settings", children={
                 {id="target", fill_width=true}, {id="gain", fill_width=true},
                 {id="mode", fill_width=true}, {id="notes", fill_width=true}
+            }},
+            {id="tables", title="Tables", children={
+                {id="live_rows", fill_width=true}, {id="history_rows", fill_width=true}
             }}
         }}
     }

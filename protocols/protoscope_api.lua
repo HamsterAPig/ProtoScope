@@ -9,7 +9,7 @@ ProtoScope 脚本 API 定义文件。
 
 -- 基础枚举：覆盖日志、控件、停靠、传输和弹窗状态。
 ---@alias ProtoLogLevel 'trace'|'debug'|'info'|'warn'|'error'
----@alias ProtoControlType 'button'|'input_text'|'input_int'|'input_float'|'checkbox'|'combo'|'elf_symbol_combo'|'value_table'|'tx_sequence'|'label'|'readout'|'indicator'|'progress'|'slider_int'|'slider_float'|'radio_group'|'text_area'
+---@alias ProtoControlType 'button'|'input_text'|'input_int'|'input_float'|'checkbox'|'combo'|'elf_symbol_combo'|'value_table'|'tx_sequence'|'label'|'readout'|'indicator'|'progress'|'slider_int'|'slider_float'|'radio_group'|'text_area'|'data_table'
 ---@alias ProtoControlShortType 'btn'|'text'|'int'|'float'|'check'|'select'|'symbol'|'values'
 ---@alias ProtoDockAnchor 'left'|'left_bottom'|'right_top'|'right_mid'|'right_bottom'|'main_bottom'
 ---@alias ProtoControlValue boolean|integer|number|string|ProtoElfSymbolValue|ProtoValueTableUpdate|ProtoValueTableSnapshot|ProtoTxSequenceValue|nil
@@ -161,6 +161,14 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field max_length? integer @文本 UTF-8 字节上限，范围 1..262144。
 ---@field wrap? boolean @text_area 自动换行，默认 true。
 ---@field binding? ProtoControlFieldBinding @仅实测输出控件，可选设备筛选。
+---@field dataset? string @data_table 必填，数据集 ID。
+---@field device? string @data_table 固定设备筛选。
+---@field mode? 'live'|'history' @data_table 默认 live。
+---@field columns? (string|ProtoDataTableColumn)[] @data_table 默认数据集字段，最多 32 列。
+---@field max_rows? integer @实时表保留行数，默认 200，范围 1..1000。
+---@field max_bytes? integer @实时表数据预算，默认 4MiB，范围 1KiB..16MiB；不是进程 RSS。
+---@field page_size? integer @data_table 默认 200，范围 1..1000。
+---@field visible_rows? integer @data_table 固定视口行数，默认 10，范围 3..40。
 ---@field fields? ProtoTxSequenceField[] @tx_sequence 字段列定义。
 ---@field interval_ms? integer @tx_sequence 全局帧间隔，单位毫秒。
 ---@field loop? boolean @tx_sequence 是否循环发送。
@@ -176,6 +184,12 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field dataset string
 ---@field field string
 ---@field device? string @省略时接收该数据集任意设备的最新发布。
+
+---@class ProtoDataTableColumn
+---@field field string
+---@field label? string
+---@field unit? string
+---@field precision? integer @double 显示精度，默认 3，范围 0..12。
 
 -- ElfStaticView 静态地址候选：value 使用十六进制字符串，避免 64 位地址精度丢失。
 ---@class ProtoElfSymbolValue
@@ -714,6 +728,7 @@ function on_file_dialog(ctx, evt) end
 ---@field device_time_us? integer
 ---@field received_at_us? integer
 ---@field schema_version? integer
+---@field record_id? integer @历史查询记录 ID；data_table 选择值使用其十进制字符串。
 ---@field values table<string, any>
 ---@class ProtoRecordQuery
 ---@field dataset? string

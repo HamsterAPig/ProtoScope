@@ -304,6 +304,7 @@ std::optional<ControlType> parseControlType(std::string_view value)
     if (value == "slider_float") return ControlType::SliderFloat;
     if (value == "radio_group") return ControlType::RadioGroup;
     if (value == "text_area") return ControlType::TextArea;
+    if (value == "data_table") return ControlType::DataTable;
     if (value == "btn") {
         value = "button";
     } else if (value == "text") {
@@ -3909,7 +3910,7 @@ void ScriptHost::onControl(const transport::ConnectionContext& ctx, const std::s
     if (generation && *generation != runtimeGeneration_) return;
     if (executionFaulted()) return;
     const auto* descriptor = findControlDescriptor(controls_, id);
-    if (descriptor == nullptr || isOutputControl(descriptor->type) ||
+    if (descriptor == nullptr || isOutputControl(descriptor->type) || descriptor->dataTable ||
         !descriptor->visible || descriptor->disabled || descriptor->readOnly ||
         !validateControlValue(*descriptor, value)) {
         return;
@@ -3948,7 +3949,7 @@ bool ScriptHost::requestOscilloscopeToggle(const transport::ConnectionContext& c
 bool ScriptHost::setControlValue(const std::string& id, const ControlValue& value)
 {
     const auto* descriptor = findControlDescriptor(controls_, id);
-    if (descriptor == nullptr || descriptor->binding || !validateControlValue(*descriptor, value)) {
+    if (descriptor == nullptr || descriptor->binding || descriptor->dataTable || !validateControlValue(*descriptor, value)) {
         return false;
     }
     if (descriptor->type == ControlType::ValueTable) {
@@ -4327,7 +4328,7 @@ const ControlValue* ScriptHost::findControlValue(const std::string& id) const
 void ScriptHost::updateControlValue(const std::string& id, ControlValue value)
 {
     const auto* descriptor = findControlDescriptor(controls_, id);
-    if (descriptor == nullptr || descriptor->binding || !validateControlValue(*descriptor, value)) {
+    if (descriptor == nullptr || descriptor->binding || descriptor->dataTable || !validateControlValue(*descriptor, value)) {
         protoLog("warn", "控件值违反当前约束: " + id);
         return;
     }

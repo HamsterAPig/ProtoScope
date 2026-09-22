@@ -10,6 +10,7 @@ void ScriptHost::pollStorageCompletions()
 {
     if (!runtime_ || !runtime_->data) return;
     for (const auto& event : runtime_->data->poll()) {
+        if (runtime_->tables && runtime_->tables->complete(event)) continue;
         const bool kv = event.operation == "set" || event.operation == "delete" || event.operation == "flush";
         const auto callback = resolveGlobalCallback(kv ? "on_kv" : "on_record");
         if (!callback) continue;

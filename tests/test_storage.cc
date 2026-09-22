@@ -1,4 +1,5 @@
 #include "protoscope/storage/store.hpp"
+#include "protoscope/data/table.hpp"
 #include "test_helpers.hpp"
 
 #include <bit>
@@ -129,6 +130,29 @@ void recordSnapshots()
         storage::Store store(directory.path(), "protocol", {schema()});
         require(!store.status().recording, "主动停止后重启不能自动记录");
     }
+}
+
+void liveTable()
+{
+    data::LiveTable table(schema(),3,4096);
+    for (int i=1;i<=5;++i) require(table.append(record(i)),"live row accepted");
+    require(table.size()==3 && table.memoryBytes()<=4096,"live table bounded by rows and bytes");
+    data::TableView view;
+    view.limit=1;view.sort=data::FieldSort{"count",true};
+    auto page=table.page(view);
+    require(page.more && std::get<std::int64_t>(page.rows[0].record->values[0].value)==5,"live sort before paging");
+    const auto preserved=page.rows[0];
+    view.conditions={{"count",data::CompareOp::Less,{std::int64_t{5}}}};
+    page=table.page(view);
+    require(page.more && std::get<std::int64_t>(page.rows[0].record->values[0].value)==4,"typed live filter");
+    for (int i=6;i<=9;++i) table.append(record(i));
+    require(std::get<std::int64_t>(preserved.record->values[0].value)==5,"published page references remain immutable");
+    auto large=record(10);large.values[2]={data::Bytes(8192,1)};
+    require(!table.append(std::move(large)) && table.size()==3,"oversize live row rejected without unbounded growth");
+    require(!table.page({}).error.empty(),"oversize live display is explicit");
+    data::LiveTable bytes(schema(),1000,data::recordMemoryBytes(record())+32);
+    for (int i=0;i<20;++i) bytes.append(record(i));
+    require(bytes.size()==1,"byte limit independently trims rows");
 }
 
 void fieldQueries()
@@ -282,6 +306,7 @@ int main()
         {"cancel_backpressure", cancellationAndBackpressure},
         {"damaged_database", damagedDatabase},
         {"field_queries",fieldQueries},
+        {"live_table",liveTable},
     };
     for (const auto& [name, run] : tests) {
         try { run(); std::cout << "[PASS] " << name << '\n'; }

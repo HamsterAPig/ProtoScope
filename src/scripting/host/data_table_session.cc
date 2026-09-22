@@ -1,0 +1,228 @@
+#include "data_table_session.hpp"
+#include "script_host_internal.hpp"
+
+#include <algorithm>
+#include <set>
+#include <stdexcept>
+
+namespace protoscope::scripting {
+namespace {
+std::string stringField(const sol::table& table,const char* name,std::string fallback={})
+{
+    const sol::object value=table[name];
+    if (!value.valid() || value.get_type()==sol::type::lua_nil) return fallback;
+    if (value.get_type()!=sol::type::string) throw std::invalid_argument(std::string(name)+" must be string");
+    auto text=value.as<std::string>();
+    if (text.size()>4096 || text.find('\0')!=text.npos) throw std::invalid_argument("invalid table text");
+    return text;
+}
+std::size_t integerField(const sol::table& table,const char* name,std::size_t fallback,std::size_t low,std::size_t high)
+{
+    const sol::object value=table[name];
+    if (!value.valid() || value.get_type()==sol::type::lua_nil) return fallback;
+    if (value.get_type()!=sol::type::number || !value.is<std::int64_t>()) throw std::invalid_argument("integer required");
+    const auto number=value.as<std::int64_t>();
+    if (number<static_cast<std::int64_t>(low) || number>static_cast<std::int64_t>(high))
+        throw std::invalid_argument(std::string(name)+" outside range");
+    return static_cast<std::size_t>(number);
+}
+}
+
+bool parseDataTableConfig(ControlDescriptor& control,const sol::table& table,std::string& error)
+{
+    if (control.type!=ControlType::DataTable) return true;
+    try {
+        DataTableConfig config;
+        config.dataset=stringField(table,"dataset");
+        if (config.dataset.empty()) throw std::invalid_argument("data_table requires dataset");
+        const auto mode=stringField(table,"mode","live");
+        if (mode!="live" && mode!="history") throw std::invalid_argument("table mode must be live/history");
+        config.history=mode=="history";
+        const sol::object device=table["device"];
+        if (device.valid() && device.get_type()!=sol::type::lua_nil) config.device=stringField(table,"device");
+        config.maxRows=integerField(table,"max_rows",200,1,1000);
+        config.maxBytes=integerField(table,"max_bytes",4U*1024U*1024U,1024,16U*1024U*1024U);
+        config.pageSize=integerField(table,"page_size",200,1,1000);
+        config.visibleRows=static_cast<int>(integerField(table,"visible_rows",10,3,40));
+        const sol::object columns=table["columns"];
+        if (columns.valid() && columns.get_type()!=sol::type::lua_nil) {
+            if (columns.get_type()!=sol::type::table) throw std::invalid_argument("columns must be array");
+            const auto entries=columns.as<sol::table>();
+            std::size_t count=0;
+            for (const auto& [key,value]:entries) {
+                if (key.get_type()!=sol::type::number || !key.is<int>() || key.as<int>()<1 || key.as<int>()>32)
+                    throw std::invalid_argument("table allows at most 32 columns");
+                ++count;
+            }
+            if (count==0) throw std::invalid_argument("empty table columns");
+            for (std::size_t i=1;i<=count;++i) {
+                const sol::object item=entries[i];
+                DataTableColumn column;
+                if (item.get_type()==sol::type::string) {
+                    column.field=item.as<std::string>();column.label=column.field;
+                    if (column.field.size()>4096 || column.field.find('\0')!=std::string::npos)
+                        throw std::invalid_argument("invalid table column text");
+                } else if (item.get_type()==sol::type::table) {
+                    const auto entry=item.as<sol::table>();
+                    column.field=stringField(entry,"field");column.label=stringField(entry,"label",column.field);
+                    column.unit=stringField(entry,"unit");
+                    column.precision=static_cast<int>(integerField(entry,"precision",3,0,12));
+                } else throw std::invalid_argument("invalid table column");
+                if (column.field.empty() || column.label.empty()) throw std::invalid_argument("empty column field/label");
+                config.columns.push_back(std::move(column));
+            }
+        }
+        control.dataTable=std::move(config);
+        return true;
+    } catch (const std::exception& exception) {error=exception.what();return false;}
+}
+
+void validateDataTables(std::vector<DockDescriptor>& docks,const std::vector<data::Schema>& schemas)
+{
+    std::size_t count=0;
+    for (auto& dock:docks) for (auto& control:dock.controls) {
+        if (!control.dataTable) continue;
+        if (++count>16) throw std::invalid_argument("protocol exceeds 16 data tables");
+        auto& config=*control.dataTable;
+        const auto schema=std::find_if(schemas.begin(),schemas.end(),[&](const auto& s){return s.dataset==config.dataset;});
+        if (schema==schemas.end()) throw std::invalid_argument("unknown table dataset");
+        if (config.columns.empty()) {
+            if (schema->fields.size()>32) throw std::invalid_argument("explicit columns required for large dataset");
+            for (const auto& field:schema->fields)
+                config.columns.push_back({field.name,field.name,{},3,field.type});
+        }
+        std::set<std::string> names;
+        for (auto& column:config.columns) {
+            const auto field=std::find_if(schema->fields.begin(),schema->fields.end(),[&](const auto& f){return f.name==column.field;});
+            if (field==schema->fields.end() || !names.insert(column.field).second)
+                throw std::invalid_argument("unknown or duplicate table column");
+            column.type=field->type;
+        }
+    }
+}
+
+DataTableSession::DataTableSession(const std::vector<ControlDescriptor>& controls,ScriptDataSession& data):data_(data)
+{
+    for (const auto& control:controls) {
+        if (!control.dataTable) continue;
+        Table table;
+        table.config=*control.dataTable;
+        table.view.device=table.config.device;table.view.limit=table.config.pageSize;
+        if (!table.config.history) {
+            const auto schema=std::find_if(data.schemas().begin(),data.schemas().end(),[&](const auto& s){
+                return s.dataset==table.config.dataset;
+            });
+            table.live=std::make_unique<data::LiveTable>(*schema,table.config.maxRows,table.config.maxBytes);
+        }
+        tables_.emplace(control.id,std::move(table));
+    }
+}
+
+void DataTableSession::publish(const data::Record& record)
+{
+    for (auto& [id,table]:tables_) {
+        if (!table.live || record.dataset!=table.config.dataset ||
+            (table.config.device && record.device!=*table.config.device)) continue;
+        table.live->append(record);
+        table.dirty=true;
+    }
+}
+
+const data::TableView& DataTableSession::view(const std::string& id) const {return tables_.at(id).view;}
+
+std::shared_ptr<const data::TablePage> DataTableSession::page(const std::string& id)
+{
+    auto& table=tables_.at(id);
+    if (!table.page || table.dirty) {
+        auto page=table.live ? table.live->page(table.view) : data::TablePage{};
+        page.limit=table.view.limit;page.offset=table.view.offset;page.revision=++table.revision;
+        table.page=std::make_shared<const data::TablePage>(std::move(page));
+        table.dirty=false;
+    }
+    return table.page;
+}
+
+void DataTableSession::handle(const DataTableEvent& event)
+{
+    auto& table=tables_.at(event.id);
+    if (event.action==DataTableAction::Select) return;
+    // 刷新直接回到新快照首页，避免 UI 先翻页再刷新产生冗余查询。
+    if (event.action==DataTableAction::Refresh) table.view.offset=0;
+    if (event.action==DataTableAction::View) {
+        data::validateTableView(event.view);
+        // 只能查询声明的列，数据集与固定设备约束不能被 UI 事件绕过。
+        const auto declared=[&](const std::string& field) {
+            return std::any_of(table.config.columns.begin(),table.config.columns.end(),
+                               [&](const auto& c){return c.field==field;});
+        };
+        for (const auto& condition:event.view.conditions)
+            if (!declared(condition.field)) throw std::invalid_argument("unknown table filter column");
+        if (event.view.sort && !declared(event.view.sort->field)) throw std::invalid_argument("unknown sort column");
+        table.view=event.view;
+        if (table.config.device) table.view.device=table.config.device;
+    }
+    if (table.live) {table.dirty=true;return;}
+    const auto previous=page(event.id);
+    if (table.task) data_.cancel(table.task);
+    data::TablePage next;
+    next.offset=table.view.offset;next.limit=table.view.limit;next.revision=++table.revision;
+    if (event.action==DataTableAction::Cancel) {
+        table.task=0;next.error="query canceled";next.snapshot=previous->snapshot;
+    } else {
+        storage::Query query;
+        query.dataset=table.config.dataset;query.device=table.view.device;
+        query.fromUs=table.view.fromUs;query.toUs=table.view.toUs;
+        query.conditions=table.view.conditions;query.sort=table.view.sort;
+        query.limit=table.view.limit;query.offset=table.view.offset;
+        query.snapshot=event.action==DataTableAction::Refresh ? std::nullopt : previous->snapshot;
+        next.snapshot=query.snapshot;
+        try {
+            table.task=data_.query(std::move(query));
+            tasks_.emplace(table.task,event.id);
+            next.loading=true;
+        } catch (const std::exception& exception) {table.task=0;next.error=exception.what();}
+    }
+    table.page=std::make_shared<const data::TablePage>(std::move(next));table.dirty=false;
+}
+
+bool DataTableSession::complete(const storage::Completion& result)
+{
+    const auto task=tasks_.find(result.task);
+    if (task==tasks_.end()) return false;
+    auto& table=tables_.at(task->second);
+    tasks_.erase(task);
+    if (result.task!=table.task) return true;
+    table.task=0;
+    data::TablePage next;
+    next.offset=table.view.offset;next.limit=table.view.limit;next.revision=++table.revision;
+    next.snapshot=result.snapshot;next.more=result.more;next.error=result.error;
+    if (result.ok) {
+        std::map<std::uint64_t,std::shared_ptr<const data::Schema>> schemas;
+        for (const auto& [version,schema]:result.schemas)
+            schemas.emplace(version,std::make_shared<const data::Schema>(schema));
+        for (std::size_t i=0;i<result.records.size();++i) {
+            const auto& record=result.records[i];
+            next.rows.push_back({result.rowIds.at(i),std::make_shared<const data::Record>(record),schemas.at(record.schemaVersion)});
+        }
+    }
+    table.page=std::make_shared<const data::TablePage>(std::move(next));table.dirty=false;
+    return true;
+}
+
+void ScriptHost::onDataTable(const transport::ConnectionContext& context,const DataTableEvent& event)
+{
+    if (!runtime_ || !scriptLoaded_ || executionFaulted() || event.runtimeGeneration!=runtimeGeneration_) return;
+    const auto found=std::find_if(controls_.begin(),controls_.end(),[&](const auto& c){return c.id==event.id;});
+    if (found==controls_.end() || !found->dataTable || !found->visible || found->disabled || found->readOnly) return;
+    try {
+        if (event.action==DataTableAction::Select) {
+            const auto page=runtime_->tables->page(event.id);
+            if ((found->dataTable->history && page->revision!=event.pageRevision) || page->loading) return;
+            if (std::none_of(page->rows.begin(),page->rows.end(),[&](const auto& row){return row.id==event.selectedRow;})) return;
+            const auto selected=std::to_string(event.selectedRow);
+            controlValues_[event.id]=selected;
+            callbackOnControl(ScriptHostContext{context},event.id,selected);
+        } else runtime_->tables->handle(event);
+    } catch (const std::exception& exception) {protoLog("warn","data_table: "+std::string(exception.what()));}
+}
+} // namespace protoscope::scripting

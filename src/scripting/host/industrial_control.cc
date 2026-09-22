@@ -1,5 +1,6 @@
 #include "industrial_control.hpp"
 #include "control_data_binding.hpp"
+#include "data_table_session.hpp"
 
 #include <cmath>
 #include <iomanip>
@@ -103,7 +104,7 @@ bool applyIndustrialControlConfig(ControlDescriptor& descriptor, const sol::tabl
                 descriptor.textDefault = std::move(*formatted);
             }
         }
-        return parseControlBinding(descriptor,table,error);
+        return parseControlBinding(descriptor,table,error) && parseDataTableConfig(descriptor,table,error);
     } catch (const std::exception& exception) {
         error = exception.what(); return false;
     }

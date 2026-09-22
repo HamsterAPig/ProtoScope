@@ -175,6 +175,7 @@ private:
     void drawBusinessMenuItems(const std::vector<scripting::BusinessMenuItem>& items,
                                std::uint64_t generation, std::uint64_t revision);
     void applyBusinessDockRequests();
+    bool drawDataTableControl(const scripting::ControlSnapshot& control);
     void drawCommDock();
     void drawCommTransportModeSelector(dock::CommDockState& comm);
     void drawCommTransportConfig(dock::CommDockState& comm);
@@ -538,6 +539,16 @@ private:
     std::uint64_t luaTabsGeneration_{0};
     std::uint64_t businessDockGeneration_{0};
     std::uint64_t businessDockRevision_{0};
+    struct DataTableUiState {
+        std::array<char,512> filterValue{};
+        int filterColumn{0};
+        int filterOperation{0};
+        bool filterBoolean{false};
+        bool initialized{false};
+        std::string error;
+    };
+    std::unordered_map<std::string,DataTableUiState> dataTableUiStates_;
+    std::uint64_t dataTableUiGeneration_{0};
     WaveDockRenderer waveDockRenderer_;
 };
 

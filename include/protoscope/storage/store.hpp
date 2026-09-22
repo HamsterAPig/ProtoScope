@@ -56,6 +56,7 @@ struct Completion {
     std::optional<std::int64_t> snapshot;
     bool more{false};
     std::map<std::uint64_t, data::Schema> schemas;
+    std::vector<std::uint64_t> rowIds;
 };
 
 class Store {

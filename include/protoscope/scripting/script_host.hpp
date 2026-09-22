@@ -5,6 +5,7 @@
 #include "protoscope/scripting/file_io_config.hpp"
 #include "protoscope/scripting/business_ui.hpp"
 #include "protoscope/data/model.hpp"
+#include "protoscope/scripting/data_table.hpp"
 #include "protoscope/scripting/execution_config.hpp"
 #include "protoscope/scripting/frame_stream_parser.hpp"
 #include "protoscope/transport/transport.hpp"
@@ -59,6 +60,7 @@ enum class ControlType {
     RadioGroup,
     TextArea,
     TabSelection,
+    DataTable,
 };
 
 // 新控件复用既有标量值表示，绘制类型和持久化类型仍保持独立。
@@ -68,6 +70,7 @@ constexpr ControlType controlValueKind(ControlType type)
     case ControlType::Label:
     case ControlType::Readout:
     case ControlType::TabSelection:
+    case ControlType::DataTable:
     case ControlType::TextArea: return ControlType::InputText;
     case ControlType::Indicator: return ControlType::Checkbox;
     case ControlType::Progress:
@@ -221,6 +224,7 @@ struct ControlDescriptor {
     bool wrap{true};
     int rows{5};
     std::optional<ControlFieldBinding> binding;
+    std::optional<DataTableConfig> dataTable;
 };
 
 using ControlValue =
@@ -232,6 +236,8 @@ struct ControlSnapshot {
     std::uint64_t updatedAtMs{0};
     ControlDataState dataState{ControlDataState::Unbound};
     std::string dataError;
+    std::shared_ptr<const data::TablePage> tablePage;
+    std::optional<data::TableView> tableView;
 };
 
 enum class LayoutNodeKind {
@@ -528,6 +534,7 @@ public:
     void onMenu(const transport::ConnectionContext& context, const std::string& id, bool checked,
                 std::uint64_t generation, std::uint64_t revision);
     BusinessUiSnapshot businessUiSnapshot() const;
+    void onDataTable(const transport::ConnectionContext& context,const DataTableEvent& event);
     bool showBusinessDock(const std::string& id, bool visible, std::string& error);
     [[nodiscard]] bool requestOscilloscopeToggle(const transport::ConnectionContext& ctx,
                                                  bool currentRunning,

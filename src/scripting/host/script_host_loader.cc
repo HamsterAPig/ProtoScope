@@ -29,6 +29,7 @@ namespace {
         case ControlType::Progress:
         case ControlType::Button:
         case ControlType::ValueTable:
+        case ControlType::DataTable:
             return false;
         case ControlType::Combo:
         case ControlType::RadioGroup: {
@@ -255,6 +256,7 @@ std::unique_ptr<ScriptHost::LoadedScript> ScriptHost::loadScriptIntoRuntime(Runt
     }
     runtime.data->loadSchemas(lua);
     validateControlBindings(*parsedDocks,runtime.data->schemas());
+    validateDataTables(*parsedDocks,runtime.data->schemas());
     if (runtime.execution.failure != nullptr || stopSignal_->load(std::memory_order_relaxed)) {
         error = runtime.execution.failure != nullptr ? runtime.execution.failure : "Lua execution stopped";
         return nullptr;
@@ -297,6 +299,7 @@ void ScriptHost::commitLoadedScript(std::unique_ptr<Runtime> runtime,
     docks_ = std::move(loadedScript->docks);
     controls_ = std::move(nextControls);
     controlValues_ = std::move(nextControlValues);
+    runtime_->tables=std::make_unique<DataTableSession>(controls_,*runtime_->data);
     configureDataBindings();
     scriptPath_ = path;
     protocolDirectory_ = protocolDirectory;

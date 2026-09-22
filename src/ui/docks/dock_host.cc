@@ -1323,6 +1323,7 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, s
         luaControlDraftGeneration_ = descriptor.runtimeGeneration;
     }
     if (!descriptor.visible) { luaControlDrafts_.erase(descriptor.id); return false; }
+    if (descriptor.type==scripting::ControlType::DataTable) return drawDataTableControl(control);
     ImGui::BeginDisabled(descriptor.disabled ||
                          (descriptor.readOnly && !scripting::isOutputControl(descriptor.type) &&
                           scripting::controlValueKind(descriptor.type) != scripting::ControlType::InputText));
@@ -1438,6 +1439,7 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, s
             break;
         }
         case scripting::ControlType::TabSelection: break;
+        case scripting::ControlType::DataTable: break;
     }
     if (feedbackStyleColors > 0) {
         ImGui::PopStyleColor(feedbackStyleColors);

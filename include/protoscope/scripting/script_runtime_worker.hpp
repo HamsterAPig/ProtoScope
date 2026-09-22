@@ -95,6 +95,7 @@ public:
     void postTick(std::uint64_t currentMs);
     void postMenu(transport::ConnectionContext context, std::string id, bool checked,
                   std::uint64_t generation, std::uint64_t revision);
+    void postDataTable(transport::ConnectionContext context,DataTableEvent event);
     void postTxEvent(transport::ConnectionContext context, TxEvent event);
     void postDialogEvent(transport::ConnectionContext context, DialogEvent event);
     void postFileDialogEvent(transport::ConnectionContext context, FileDialogEvent event);

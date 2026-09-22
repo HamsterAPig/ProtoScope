@@ -152,3 +152,27 @@ indicator 对应布尔，progress 对应数字。device 省略时跟随该数据
 原始精确值与显式 null 使用 `proto.data.latest` 读取。
 
 绑定声明固定，重载不保留实测值，也不保存到 UI YAML。数据表和历史查询视图仍在实施范围。
+# 数据表
+
+`data_table` 使用固定数据集模式；实时表保留有界记录，历史表仅持有当前查询页，
+记录不进入 `ControlValue` 或 UI YAML。每协议最多 16 个表，每表最多 32 列。
+
+```lua
+{"data_table", "samples", "Samples", dataset="telemetry", mode="history",
+ page_size=200, visible_rows=10,
+ columns={"sequence", {field="temperature", label="Temperature", unit="C", precision=2}}}
+```
+
+- `mode` 为 `live`（默认）或 `history`；可用 `device` 固定设备。
+- `columns` 省略时使用全部模式字段；支持列隐藏、重排、调整宽度和单列排序。
+- 实时表 `max_rows` 默认 200（1..1000），`max_bytes` 默认 4MiB（1KiB..16MiB）。
+  字节预算针对保留数据估算，不是进程 RSS 上限；旧快照共享不可变记录。
+- `page_size` 默认 200（1..1000），`visible_rows` 默认 10（3..40）。
+- 界面提供类型化单条件筛选、分页、刷新和历史查询取消；筛选与排序在分页前执行。
+  历史页使用固定快照，刷新回到首页并纳入新提交记录；实时页随发布滚动。
+- 选择行触发 `on_control(ctx,id,row_id)`，值为十进制字符串；`get_control` 返回该选择。
+  选择不跨协议重载保留；不能通过 `set_control` 或 value patch 修改。
+- 历史行 ID 对应 `on_record` 查询结果中的 `record_id`；内部表查询不触发 `on_record`。
+- 显隐、禁用、只读与运行时代次均在 worker 校验；旧历史页选择事件被拒绝。
+
+本阶段不支持单元格编辑，表格导出及读取选中行内容 API 尚未接入。

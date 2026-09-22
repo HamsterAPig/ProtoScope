@@ -100,6 +100,10 @@ namespace {
         std::uint64_t generation{0};
         std::uint64_t revision{0};
     };
+    struct DataTableCommand {
+        transport::ConnectionContext context;
+        DataTableEvent event;
+    };
 
     struct TxEventCommand {
         transport::ConnectionContext context;
@@ -138,6 +142,7 @@ namespace {
                                        BytesCommand,
                                        ControlCommand,
                                        MenuCommand,
+                                       DataTableCommand,
                                        TickCommand,
                                        TxEventCommand,
                                        DialogEventCommand,
@@ -781,6 +786,11 @@ struct ScriptRuntimeWorker::Impl {
         host.onMenu(command.context,command.id,command.checked,command.generation,command.revision);
         return {};
     }
+    CommandExecutionResult executeCommandItem(ScriptHost& host, std::optional<std::uint64_t>&, DataTableCommand& command)
+    {
+        host.onDataTable(command.context,command.event);
+        return {};
+    }
 
     CommandExecutionResult executeCommandItem(ScriptHost& host, std::optional<std::uint64_t>&, TxEventCommand& command)
     {
@@ -968,6 +978,10 @@ void ScriptRuntimeWorker::postMenu(transport::ConnectionContext context, std::st
                                    std::uint64_t generation, std::uint64_t revision)
 {
     impl_->pushCommand(MenuCommand{std::move(context),std::move(id),checked,generation,revision});
+}
+void ScriptRuntimeWorker::postDataTable(transport::ConnectionContext context,DataTableEvent event)
+{
+    impl_->pushCommand(DataTableCommand{std::move(context),std::move(event)});
 }
 
 void ScriptRuntimeWorker::postTxEvent(transport::ConnectionContext context, TxEvent event)

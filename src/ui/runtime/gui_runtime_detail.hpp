@@ -457,6 +457,7 @@ namespace {
             case scripting::ControlType::RadioGroup: return "radio_group";
             case scripting::ControlType::TextArea: return "text_area";
             case scripting::ControlType::TabSelection: return "tabs";
+            case scripting::ControlType::DataTable: return "data_table";
             case scripting::ControlType::Button:
                 return "button";
             case scripting::ControlType::InputText:

@@ -2332,6 +2332,12 @@ void Application::activateBusinessMenu(const std::string& id, bool checked,
     // 菜单只入 worker 队列，主线程不等待 Lua 回调执行完毕。
     scriptWorker_.postMenu(std::move(context),id,checked,generation,revision);
 }
+void Application::interactDataTable(scripting::DataTableEvent event)
+{
+    auto context=activeConnection_.value_or(transport::ConnectionContext{});
+    if (!activeConnection_) {context.endpoint="detached";context.timestampMs=nowMs();}
+    scriptWorker_.postDataTable(std::move(context),std::move(event));
+}
 
 std::optional<plot::WaveCsvData> Application::captureWaveData(const plot::CsvExportRange& range, std::string& error) const
 {

@@ -4,6 +4,7 @@
 #include "protoscope/scripting/script_host.hpp"
 #include "lua_execution_guard.hpp"
 #include "script_data_session.hpp"
+#include "data_table_session.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -55,6 +56,7 @@ struct ScriptHost::Runtime {
     BusinessUiSnapshot businessUi;
     std::unordered_map<std::string, std::vector<std::size_t>> boundControls;
     std::unordered_map<std::string, ControlBindingStatus> bindingStatus;
+    std::unique_ptr<DataTableSession> tables;
 };
 
 struct ScriptHost::CallbackScope {

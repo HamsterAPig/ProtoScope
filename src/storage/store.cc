@@ -455,7 +455,7 @@ struct Store::Impl {
                 result.snapshot = cutoff;
                 const auto& query = command.query;
                 const bool fieldQuery=!query.conditions.empty() || query.sort.has_value();
-                std::string sql="SELECT r.payload FROM records r ";
+                std::string sql="SELECT r.id,r.payload FROM records r ";
                 if (fieldQuery) sql+="JOIN schemas s ON s.id=r.schema_id ";
                 sql+="WHERE r.id<=? AND (?='' OR r.dataset=?) AND (?=0 OR r.device=?) "
                      "AND (?=0 OR r.received_us>=?) AND (?=0 OR r.received_us<=?) ";
@@ -490,7 +490,7 @@ struct Store::Impl {
                 while (statement.row()) {
                     if (command.canceled->load()) throw std::runtime_error("查询已取消");
                     if (result.records.size() == query.limit) { result.more = true; break; }
-                    const auto payload = statement.blob(0);
+                    const auto payload = statement.blob(1);
                     // 最多 16 个未消费查询共享结果内存预算，页大小不等于无界字节数。
                     if (payload.size() > config.queueBytes / 16 - resultBytes) {
                         throw std::runtime_error("查询页超过结果内存预算，请减小页大小");
@@ -511,13 +511,14 @@ struct Store::Impl {
                         result.schemas.emplace(record.schemaVersion, std::move(definition));
                     }
                     data::validateRecord(result.schemas.at(record.schemaVersion), record);
-                    const auto memory = payload.size() + sizeof(data::Record) +
+                    const auto memory = payload.size() + sizeof(data::Record) + sizeof(std::uint64_t) +
                         record.values.size() * sizeof(data::Value);
                     if (memory > config.queueBytes / 16 - resultBytes) {
                         throw std::runtime_error("查询页超过结果内存预算，请减小页大小");
                     }
                     resultBytes += memory;
                     result.records.push_back(std::move(record));
+                    result.rowIds.push_back(static_cast<std::uint64_t>(statement.integer(0)));
                 }
                 if (command.canceled->load()) throw std::runtime_error("查询已取消");
                 result.ok = true;
@@ -525,6 +526,7 @@ struct Store::Impl {
                 result.error = error.what();
                 result.records.clear();
                 result.schemas.clear();
+                result.rowIds.clear();
             }
             {
                 std::lock_guard lock(mutex);

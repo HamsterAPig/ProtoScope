@@ -1,5 +1,6 @@
 #include "protoscope/ui/gui_runtime.hpp"
 #include "../src/ui/runtime/gui_runtime_detail.hpp"
+#include "test_helpers.hpp"
 
 #include <imgui_impl_opengl3.h>
 #include <implot.h>
@@ -13,7 +14,8 @@ struct GuiRuntimeTestAccess {
                      std::map<std::string, ImRect>* rectangles = nullptr)
     {
         for (const auto& control : controls) {
-            if (control.descriptor.type==scripting::ControlType::TabSelection) continue;
+            if (control.descriptor.type==scripting::ControlType::TabSelection ||
+                control.descriptor.type==scripting::ControlType::DataTable) continue;
             const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
             runtime.drawDynamicLayoutControl(control, ImGui::GetContentRegionAvail().x);
             if (rectangles) (*rectangles)[control.descriptor.id] = ImRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
@@ -72,6 +74,15 @@ struct GuiRuntimeTestAccess {
         runtime.setLuaDockVisible(luaDockStableId(lua.docks.front().descriptor,
             luaDockLayoutKey(lua.protocolDir,lua.scriptPath)),true);
     }
+    static ImRect drawTable(GuiRuntime& runtime,const scripting::ControlSnapshot& control)
+    {
+        const auto scope=control.descriptor.id+"_"+std::to_string(control.descriptor.runtimeGeneration);
+        const auto seed=ImGui::GetCurrentWindow()->GetID(scope.c_str());
+        runtime.drawDataTableControl(control);
+        auto* table=ImGui::GetCurrentContext()->Tables.GetByKey(ImHashStr("##records",0,seed));
+        if (!table) throw std::runtime_error("missing data table geometry");
+        return table->OuterRect;
+    }
 };
 }
 
@@ -117,12 +128,19 @@ int main(int argc,char** argv)
     auto& io=ImGui::GetIO();
     io.IniFilename=nullptr; io.DeltaTime=1.0F/60;
     io.BackendFlags|=ImGuiBackendFlags_RendererHasVtxOffset;
+    io.Fonts->AddFontDefault();
+    ImFontConfig iconConfig;
+    iconConfig.MergeMode=true;
+    static constexpr ImWchar iconRanges[]={0xf000,0xf8ff,0};
+    const auto iconPath=std::filesystem::absolute(argv[1]).parent_path().parent_path()/"assets/fonts/fa-solid-900.ttf";
+    if (!io.Fonts->AddFontFromFileTTF(iconPath.string().c_str(),13.0F,&iconConfig,iconRanges)) return 2;
     unsigned char* pixels;int w,h;
     if (withGl) {
         if (!ImGui_ImplOpenGL3_Init("#version 130")) return 2;
     } else io.Fonts->GetTexDataAsRGBA32(&pixels,&w,&h);
     int result=0;
     try {
+        tests::ScopedTempPath tableDirectory(tests::makeUniqueTempDir("protoscope-table-ui"));
         scripting::ScriptHost host;
         if (!host.loadProtocolDirectory(argv[1])) throw std::runtime_error(host.lastError());
         auto controls=host.controlStatesSnapshot();
@@ -277,6 +295,104 @@ int main(int argc,char** argv)
         require(!ui::GuiRuntimeTestAccess::dockVisible(runtime,application),"show_dock(false) hides dock");
         ui::GuiRuntimeTestAccess::manuallyShowDock(runtime,application);
         require(ui::GuiRuntimeTestAccess::dockVisible(runtime,application),"old request must not override manual state");
+        // 独立协议验证表格真实点击经过 Application 和 worker；数据库只写临时目录。
+        {
+            std::ofstream file(tableDirectory.path()/"main.lua");
+            file<<R"(
+                function data() return {{id="samples",fields={{name="n",type="int64",nullable=false}}}} end
+                function ui() return {id="table_dock",title="Tables",controls={
+                    {"btn","publish","Publish"},
+                    {"data_table","table","Samples",dataset="samples",page_size=2,max_rows=10,visible_rows=4},
+                    {"data_table","history","Recorded",dataset="samples",mode="history",page_size=2,visible_rows=4}
+                }} end
+                function on_control(ctx,id,value)
+                    if id=="publish" then proto.record.start() end
+                end
+                function on_record(ctx,evt)
+                    assert(evt.ok,evt.error)
+                    if evt.operation=="start" then
+                        for i=1,5 do assert(proto.data.publish({dataset="samples",values={n=i}})) end
+                        proto.record.stop()
+                    end
+                end
+            )";
+        }
+        auto configuration=application.captureConfig();
+        configuration.protocol.rootDir=tableDirectory.path().parent_path().generic_string();
+        configuration.protocol.selectedDir=tableDirectory.path().generic_string();
+        configuration.scripting.storageRootDir=(tableDirectory.path()/"data").generic_string();
+        require(application.applyConfig(configuration),"configure table fixture");
+        require(application.reloadProtocolDirectory(tableDirectory.path().generic_string(),true),"load table fixture");
+        application.updateControlValue("publish",true);
+        auto tableControl=[&](std::size_t index=1) {
+            const auto value=application.docks().luaState().docks.at(0).controls.at(index);
+            if (!value.tablePage) throw std::runtime_error("missing table page: "+value.descriptor.id+
+                " in "+application.docks().luaState().protocolDir);
+            return value;
+        };
+        auto waitTable=[&](const std::function<bool()>& done) {
+            const auto until=std::chrono::steady_clock::now()+std::chrono::seconds(4);
+            do {
+                application.pumpOnce();
+                if (done()) return;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            } while (std::chrono::steady_clock::now()<until);
+            throw std::runtime_error("table GUI worker timeout");
+        };
+        waitTable([&]{return tableControl().tablePage->more;});
+        ImRect tableRect;
+        std::size_t tableIndex=1;
+        auto tableFrame=[&] {
+            application.pumpOnce();
+            if (withGl) ImGui_ImplOpenGL3_NewFrame();
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos(ImVec2(0,0));ImGui::SetNextWindowSize(io.DisplaySize);
+            ImGui::Begin("Data Table",nullptr,ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoResize);
+            const auto right=ImGui::GetCursorScreenPos().x+ImGui::GetContentRegionAvail().x;
+            tableRect=ui::GuiRuntimeTestAccess::drawTable(runtime,tableControl(tableIndex));
+            require(ImGui::GetItemRectMax().x<=right+1,"data table must fit viewport");
+            ImGui::End();ImGui::Render();
+        };
+        auto tableClick=[&](ImVec2 point) {
+            io.AddMousePosEvent(point.x,point.y);tableFrame();
+            io.AddMouseButtonEvent(0,true);tableFrame();
+            io.AddMouseButtonEvent(0,false);tableFrame();
+        };
+        for (int i=0;i<4;++i) tableFrame();
+        const float button=ImGui::GetFrameHeight(),spacing=ImGui::GetStyle().ItemSpacing.x;
+        tableClick(ImVec2(tableRect.Min.x+button+spacing+button/2,
+                          tableRect.Max.y+ImGui::GetStyle().ItemSpacing.y+button/2));
+        waitTable([&]{return tableControl().tablePage->offset==2;});
+        const auto rowHeight=ImGui::GetTextLineHeight()+ImGui::GetStyle().CellPadding.y*2;
+        tableClick(ImVec2(tableRect.Min.x+35,tableRect.Min.y+rowHeight*1.5F));
+        waitTable([&]{return std::get<std::string>(tableControl().value)=="3";});
+        // 输入筛选值并点击漏斗按钮，校验是服务端筛选而非只改变绘制文本。
+        tableClick(ImVec2(tableRect.Min.x+30,tableRect.Min.y-ImGui::GetStyle().ItemSpacing.y-button/2));
+        io.AddInputCharactersUTF8("4");tableFrame();
+        tableClick(ImVec2(tableRect.Max.x-button*1.5F-spacing,
+                          tableRect.Min.y-ImGui::GetStyle().ItemSpacing.y-button/2));
+        waitTable([&]{return tableControl().tablePage->rows.size()==1;});
+        require(std::get<std::int64_t>(tableControl().tablePage->rows[0].record->values[0].value)==4,
+                "GUI filter must reach worker");
+        tableIndex=2;
+        for (int i=0;i<4;++i) tableFrame();
+        waitTable([&]{return !tableControl(2).tablePage->loading && tableControl(2).tablePage->rows.size()==2;});
+        tableClick(ImVec2(tableRect.Min.x+button+spacing+button/2,
+                          tableRect.Max.y+ImGui::GetStyle().ItemSpacing.y+button/2));
+        waitTable([&]{return !tableControl(2).tablePage->loading && tableControl(2).tablePage->offset==2;});
+        tableClick(ImVec2(tableRect.Min.x+2*(button+spacing)+button/2,
+                          tableRect.Max.y+ImGui::GetStyle().ItemSpacing.y+button/2));
+        waitTable([&]{return !tableControl(2).tablePage->loading && tableControl(2).tablePage->offset==0;});
+        for (const int width:{1000,360}) {
+            io.DisplaySize=ImVec2(static_cast<float>(width),900);
+            for (int i=0;i<4;++i) tableFrame();
+            require(ImGui::GetDrawData()->TotalVtxCount>0,"blank table frame");
+            if (withGl) {
+                glViewport(0,0,width,900);glClear(GL_COLOR_BUFFER_BIT);
+                ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());glFinish();
+                capture(std::filesystem::path(argv[2])/"tables",width,900);
+            }
+        }
         std::cout<<"industrial UI: 1000/360 px, nonblank frames, bounded widgets, input persistence passed\n";
     } catch (const std::exception& error) {std::cerr<<error.what()<<'\n';result=1;}
     if (withGl) ImGui_ImplOpenGL3_Shutdown();

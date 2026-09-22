@@ -72,6 +72,7 @@ void ScriptHost::configureDataBindings()
 
 void ScriptHost::applyPublishedRecord(const data::Record& record)
 {
+    runtime_->tables->publish(record);
     const auto subscribers=runtime_->boundControls.find(record.dataset);
     if (subscribers==runtime_->boundControls.end()) return;
     for (const auto index:subscribers->second) {
@@ -130,6 +131,10 @@ ControlSnapshot ScriptHost::makeControlSnapshot(const ControlDescriptor& control
         const auto& status=runtime_->bindingStatus.at(control.id);
         snapshot.dataState=status.state;
         snapshot.dataError=status.error;
+    }
+    if (control.dataTable) {
+        snapshot.tablePage=runtime_->tables->page(control.id);
+        snapshot.tableView=runtime_->tables->view(control.id);
     }
     return snapshot;
 }

@@ -9,3 +9,6 @@
 #define PROTOSCOPE_ICON_EXCHANGE "\xef\x8d\xa2"
 #define PROTOSCOPE_ICON_MAGNIFYING_GLASS "\xef\x80\x82"
 #define PROTOSCOPE_ICON_EXPAND "\xef\x81\xa5"
+#define PROTOSCOPE_ICON_REFRESH "\xef\x80\xa1"
+#define PROTOSCOPE_ICON_FILTER "\xef\x82\xb0"
+#define PROTOSCOPE_ICON_CLOSE "\xef\x80\x8d"

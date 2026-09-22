@@ -308,7 +308,9 @@ sol::table ScriptDataSession::completionTable(sol::state_view lua, const storage
     auto rows = lua.create_table();
     for (std::size_t i = 0; i < event.records.size(); ++i) {
         const auto& record = event.records[i];
-        rows[i + 1] = recordTable(lua, record, event.schemas.at(record.schemaVersion));
+        auto row=recordTable(lua, record, event.schemas.at(record.schemaVersion));
+        if (i<event.rowIds.size()) row["record_id"]=event.rowIds[i];
+        rows[i + 1] = row;
     }
     result["records"] = rows;
     if (store_) {

@@ -21,6 +21,8 @@ public:
     sol::table completionTable(sol::state_view lua, const storage::Completion& completion) const;
     const std::vector<data::Schema>& schemas() const { return schemas_; }
     void setPublishObserver(std::function<void(const data::Record&)> observer) { publishObserver_ = std::move(observer); }
+    std::uint64_t query(storage::Query query) { return store().query(std::move(query)); }
+    void cancel(std::uint64_t task) { if (store_) store_->cancel(task); }
 
 private:
     storage::Store& store();
