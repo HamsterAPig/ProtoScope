@@ -1,5 +1,6 @@
 #include "protoscope/plot/csv_data_file.hpp"
 #include "protoscope/plot/data_file_output.hpp"
+#include "protoscope/data/csv.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -127,27 +128,7 @@ namespace {
         return true;
     }
 
-    std::string csvEscape(std::string_view value)
-    {
-        bool quoted = false;
-        for (const char ch : value) {
-            quoted = quoted || ch == ',' || ch == '"' || ch == '\n' || ch == '\r' || ch == '#';
-        }
-        if (!quoted) {
-            return std::string(value);
-        }
-        std::string out;
-        out.reserve(value.size() + 2);
-        out.push_back('"');
-        for (const char ch : value) {
-            if (ch == '"') {
-                out.push_back('"');
-            }
-            out.push_back(ch);
-        }
-        out.push_back('"');
-        return out;
-    }
+    using data::csvEscape;
 
     void writeCsvRow(std::ostream& out, const std::vector<std::string>& fields)
     {

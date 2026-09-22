@@ -1,4 +1,5 @@
-add_library(protoscope_data STATIC data/model.cc data/query.cc data/table.cc data/psrec.cc)
+add_library(protoscope_data STATIC
+    data/model.cc data/query.cc data/table.cc data/psrec.cc data/csv.cc data/record_csv.cc)
 target_include_directories(protoscope_data PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_compile_features(protoscope_data PUBLIC cxx_std_20)
 
