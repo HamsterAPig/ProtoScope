@@ -4,6 +4,7 @@
 #include "protoscope/protocol_utils/codec.hpp"
 #include "protoscope/scripting/file_io_config.hpp"
 #include "protoscope/scripting/business_ui.hpp"
+#include "protoscope/data/model.hpp"
 #include "protoscope/scripting/execution_config.hpp"
 #include "protoscope/scripting/frame_stream_parser.hpp"
 #include "protoscope/transport/transport.hpp"
@@ -163,6 +164,20 @@ struct TxSequenceValue {
     std::vector<TxSequenceFrameValue> frames;
 };
 
+struct ControlFieldBinding {
+    std::string dataset;
+    std::string field;
+    std::optional<std::string> device;
+    std::size_t fieldIndex{0};
+};
+
+enum class ControlDataState { Unbound, Waiting, Valid, Null, Invalid };
+
+struct ControlBindingStatus {
+    ControlDataState state{ControlDataState::Waiting};
+    std::string error;
+};
+
 struct ControlDescriptor {
     ControlType type{ControlType::Button};
     ControlLabelPosition labelPosition{ControlLabelPosition::Left};
@@ -205,6 +220,7 @@ struct ControlDescriptor {
     std::size_t maxLength{0};
     bool wrap{true};
     int rows{5};
+    std::optional<ControlFieldBinding> binding;
 };
 
 using ControlValue =
@@ -214,6 +230,8 @@ struct ControlSnapshot {
     ControlDescriptor descriptor;
     ControlValue value;
     std::uint64_t updatedAtMs{0};
+    ControlDataState dataState{ControlDataState::Unbound};
+    std::string dataError;
 };
 
 enum class LayoutNodeKind {
@@ -553,6 +571,9 @@ public:
 
 private:
     struct Runtime;
+    void configureDataBindings();
+    void applyPublishedRecord(const data::Record& record);
+    ControlSnapshot makeControlSnapshot(const ControlDescriptor& descriptor) const;
     struct CallbackScope;
     struct FileHandle;
     struct AuthorizedPath;

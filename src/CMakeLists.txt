@@ -91,6 +91,7 @@ add_library(protoscope_scripting STATIC
     scripting/host/industrial_control.cc
     scripting/host/tabs_layout.cc
     scripting/host/business_ui_session.cc
+    scripting/host/control_data_binding.cc
     scripting/host/control_properties.cc
     scripting/host/script_data_session.cc
     scripting/host/script_data_dispatcher.cc

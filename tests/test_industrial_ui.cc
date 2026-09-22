@@ -127,8 +127,10 @@ int main(int argc,char** argv)
         if (!host.loadProtocolDirectory(argv[1])) throw std::runtime_error(host.lastError());
         auto controls=host.controlStatesSnapshot();
         for (auto& control:controls) {
-            if (control.descriptor.type==scripting::ControlType::Readout)
+            if (control.descriptor.type==scripting::ControlType::Readout) {
                 control.value=std::string("9223372036854775807.00");
+                control.dataState=scripting::ControlDataState::Valid;
+            }
             if (control.descriptor.type==scripting::ControlType::Progress) control.descriptor.indeterminate=true;
             if (scripting::isOutputControl(control.descriptor.type) && ui::isPersistedControlType(control.descriptor.type))
                 throw std::runtime_error("measurement must not be persisted");

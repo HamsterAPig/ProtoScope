@@ -28,7 +28,8 @@ function ui()
             {"btn", "record_start", "Start"},
             {"btn", "record_stop", "Stop"},
             {"btn", "record_query", "Query"},
-            {"readout", "measured", "Measured", unit="C", precision=2, stale_after_ms=500, show_update_time=true},
+            {"readout", "measured", "Measured", unit="C", precision=2, stale_after_ms=500, show_update_time=true,
+                binding={dataset="telemetry",field="temperature",device="device-a"}},
             {"indicator", "connected", "Link", on_text="Connected", off_text="Disconnected"},
             {"progress", "batch_progress", "Batch", default=0},
             {"slider_int", "target", "Target", min=0, max=100, default=20},
@@ -96,7 +97,6 @@ function on_timer(ctx, name)
     proto.data.publish({dataset = "telemetry", device = "device-a",
         values = {sequence = sequence, temperature = 20.0 + math.sin(sequence / 10)}})
     local latest = proto.data.latest("telemetry")
-    proto.set_control("measured", latest.values.temperature)
     proto.set_control("batch_progress", (sequence % 100 + 1) / 100)
     proto.status.set(string.format("Sample %d  %.2f C", sequence, latest.values.temperature))
     if sequence % 100 == 0 then

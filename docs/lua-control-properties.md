@@ -126,4 +126,29 @@ end
 仅运行期可用；不控制内置窗口。请求经快照交给 GUI，并复用既有 Dock 显隐记忆。
 每条请求只应用一次，不会在后续刷新中反复覆盖用户手动显隐操作。
 
-数据绑定和历史表仍在后续实施范围。
+## 数据字段绑定
+
+实测输出可直接绑定固定数据集字段：
+
+```lua
+{"readout", "measured", "Temperature", unit="C", precision=2,
+ binding={dataset="telemetry", field="temperature", device="device-a"}}
+```
+
+仅 `label/readout/indicator/progress` 支持绑定，用户设定值输入不能绑定为设备实测值。
+加载时校验数据集、字段存在及类型：label 对应字符串，readout 对应数字或字符串，
+indicator 对应布尔，progress 对应数字。device 省略时跟随该数据集任意设备的发布；
+指定时只接收该设备，其他设备不会覆盖其值。
+
+`publish_batch` 整批校验完成后，逐记录通知绑定和记录订阅，不按 UI 帧率抽样。
+绑定只保留当前显示值，不复制历史记录。更新时间采用该条记录的接收时间。
+显示转换错误不会阻断类型化记录入队；存储故障也不会阻断已校验记录的实时显示。
+发布失败的错误仍须由脚本处理，不能以实时界面有更新来推断记录成功。
+
+未收到记录显示 Waiting for data，显式空值显示 No data，超出显示范围、字符串过长
+或含 NUL 等显示转换错误显示 Invalid data，并提供错误提示；不会悄悄沿用旧读数。
+这些状态下 `get_control` 返回 nil；有效 readout 返回格式化字符串。
+绑定值由数据集拥有，不接受 `set_control` 或属性补丁 value 覆盖，不触发 `on_control`。
+原始精确值与显式 null 使用 `proto.data.latest` 读取。
+
+绑定声明固定，重载不保留实测值，也不保存到 UI YAML。数据表和历史查询视图仍在实施范围。

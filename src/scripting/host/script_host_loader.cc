@@ -1,5 +1,6 @@
 #include "script_host_internal.hpp"
 #include "control_properties.hpp"
+#include "control_data_binding.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -253,6 +254,7 @@ std::unique_ptr<ScriptHost::LoadedScript> ScriptHost::loadScriptIntoRuntime(Runt
         return nullptr;
     }
     runtime.data->loadSchemas(lua);
+    validateControlBindings(*parsedDocks,runtime.data->schemas());
     if (runtime.execution.failure != nullptr || stopSignal_->load(std::memory_order_relaxed)) {
         error = runtime.execution.failure != nullptr ? runtime.execution.failure : "Lua execution stopped";
         return nullptr;
@@ -295,6 +297,7 @@ void ScriptHost::commitLoadedScript(std::unique_ptr<Runtime> runtime,
     docks_ = std::move(loadedScript->docks);
     controls_ = std::move(nextControls);
     controlValues_ = std::move(nextControlValues);
+    configureDataBindings();
     scriptPath_ = path;
     protocolDirectory_ = protocolDirectory;
     lastError_.clear();

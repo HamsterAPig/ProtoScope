@@ -53,6 +53,8 @@ struct ScriptHost::Runtime {
     std::unordered_map<std::string, StreamRuntimeProfile> streamRuntimeProfiles;
     std::unordered_map<std::string, std::uint64_t> controlUpdatedAtMs;
     BusinessUiSnapshot businessUi;
+    std::unordered_map<std::string, std::vector<std::size_t>> boundControls;
+    std::unordered_map<std::string, ControlBindingStatus> bindingStatus;
 };
 
 struct ScriptHost::CallbackScope {

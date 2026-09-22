@@ -3948,7 +3948,7 @@ bool ScriptHost::requestOscilloscopeToggle(const transport::ConnectionContext& c
 bool ScriptHost::setControlValue(const std::string& id, const ControlValue& value)
 {
     const auto* descriptor = findControlDescriptor(controls_, id);
-    if (descriptor == nullptr || !validateControlValue(*descriptor, value)) {
+    if (descriptor == nullptr || descriptor->binding || !validateControlValue(*descriptor, value)) {
         return false;
     }
     if (descriptor->type == ControlType::ValueTable) {
@@ -4009,12 +4009,7 @@ std::vector<ControlSnapshot> ScriptHost::controlStatesSnapshot() const
     std::vector<ControlSnapshot> snapshot;
     snapshot.reserve(controls_.size());
     for (const auto& control : controls_) {
-        const auto iter = controlValues_.find(control.id);
-        snapshot.push_back(ControlSnapshot{
-            .descriptor = control,
-            .value = iter == controlValues_.end() ? defaultValueFor(control) : iter->second,
-            .updatedAtMs = runtime_->controlUpdatedAtMs.contains(control.id) ? runtime_->controlUpdatedAtMs.at(control.id) : 0,
-        });
+        snapshot.push_back(makeControlSnapshot(control));
     }
     return snapshot;
 }
@@ -4033,12 +4028,7 @@ std::vector<DockSnapshot> ScriptHost::dockSnapshots() const
         snapshot.descriptor = dock;
         snapshot.controls.reserve(dock.controls.size());
         for (const auto& control : dock.controls) {
-            const auto iter = controlValues_.find(control.id);
-            snapshot.controls.push_back(ControlSnapshot{
-                .descriptor = control,
-                .value = iter == controlValues_.end() ? defaultValueFor(control) : iter->second,
-                .updatedAtMs = runtime_->controlUpdatedAtMs.contains(control.id) ? runtime_->controlUpdatedAtMs.at(control.id) : 0,
-            });
+            snapshot.controls.push_back(makeControlSnapshot(control));
         }
         docks.push_back(std::move(snapshot));
     }
@@ -4326,6 +4316,10 @@ const std::vector<ControlDescriptor>& ScriptHost::controlDescriptors() const
 
 const ControlValue* ScriptHost::findControlValue(const std::string& id) const
 {
+    if (runtime_) {
+        const auto bound=runtime_->bindingStatus.find(id);
+        if (bound!=runtime_->bindingStatus.end() && bound->second.state!=ControlDataState::Valid) return nullptr;
+    }
     const auto iter = controlValues_.find(id);
     return iter == controlValues_.end() ? nullptr : &iter->second;
 }
@@ -4333,7 +4327,7 @@ const ControlValue* ScriptHost::findControlValue(const std::string& id) const
 void ScriptHost::updateControlValue(const std::string& id, ControlValue value)
 {
     const auto* descriptor = findControlDescriptor(controls_, id);
-    if (descriptor == nullptr || !validateControlValue(*descriptor, value)) {
+    if (descriptor == nullptr || descriptor->binding || !validateControlValue(*descriptor, value)) {
         protoLog("warn", "控件值违反当前约束: " + id);
         return;
     }

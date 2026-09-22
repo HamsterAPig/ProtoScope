@@ -1333,7 +1333,13 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, s
     const ScopedImGuiItemWidth itemWidth(luaDynamicControlItemWidth(descriptor, visibleLabel, layoutWidth));
     bool updated = false;
     const int feedbackStyleColors = pushLuaControlFeedbackStyle(descriptor);
-    switch (descriptor.type) {
+    if (descriptor.binding && control.dataState != scripting::ControlDataState::Valid) {
+        drawLuaControlLeftLabel(descriptor, visibleLabel);
+        const char* text = control.dataState == scripting::ControlDataState::Waiting ? "Waiting for data" :
+                           control.dataState == scripting::ControlDataState::Null ? "No data" : "Invalid data";
+        ImGui::TextDisabled("%s",text);
+        if (!control.dataError.empty()) ImGui::SetItemTooltip("%s",control.dataError.c_str());
+    } else switch (descriptor.type) {
         case scripting::ControlType::Button:
             updated = drawDynamicButtonControl(control, imguiLabel, layoutWidth);
             drawLuaControlCompactTooltip(descriptor, visibleLabel);
@@ -1431,6 +1437,7 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, s
             }
             break;
         }
+        case scripting::ControlType::TabSelection: break;
     }
     if (feedbackStyleColors > 0) {
         ImGui::PopStyleColor(feedbackStyleColors);

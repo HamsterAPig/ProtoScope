@@ -3,6 +3,7 @@
 #include "protoscope/storage/store.hpp"
 
 #include <sol/sol.hpp>
+#include <functional>
 
 namespace protoscope::scripting {
 
@@ -18,6 +19,8 @@ public:
     std::uint64_t nextPollAtMs() const;
     std::vector<storage::Completion> poll();
     sol::table completionTable(sol::state_view lua, const storage::Completion& completion) const;
+    const std::vector<data::Schema>& schemas() const { return schemas_; }
+    void setPublishObserver(std::function<void(const data::Record&)> observer) { publishObserver_ = std::move(observer); }
 
 private:
     storage::Store& store();
@@ -34,6 +37,7 @@ private:
     bool active_{false};
     bool faultReported_{false};
     std::uint64_t nextPollAtMs_{0};
+    std::function<void(const data::Record&)> publishObserver_;
 };
 
 } // namespace protoscope::scripting

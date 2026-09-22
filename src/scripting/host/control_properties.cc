@@ -153,6 +153,7 @@ bool ScriptHost::updateControlProperties(const sol::table& patches, std::string&
             if (!applyControlProperties(*iter, patch, true, error)) return false;
             const sol::object input = patch["value"];
             if (input.valid() && input.get_type() != sol::type::lua_nil) {
+                if (iter->binding) throw std::invalid_argument("bound output values are owned by the dataset");
                 // 新原子 API 不沿用旧 set_control 的截断和下标钳制。
                 const auto kind = controlValueKind(iter->type);
                 if (kind == ControlType::Combo || kind == ControlType::InputInt) {

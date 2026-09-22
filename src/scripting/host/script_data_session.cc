@@ -284,7 +284,10 @@ bool ScriptDataSession::publish(const sol::table& rows)
         records.push_back(std::move(record));
     }
     // 最新值按数据集有界保存；记录故障不能阻断实时监控。
-    for (const auto& record : records) latest_[record.dataset] = record;
+    for (const auto& record : records) {
+        latest_[record.dataset] = record;
+        if (publishObserver_) publishObserver_(record);
+    }
     auto& target = store();
     if (target.status().recording) {
         std::string error;

@@ -51,6 +51,98 @@ function row(n)
 end
 )";
 
+void fieldBindings()
+{
+    Fixture f;
+    const std::string source=declaration+R"(
+        function controls() return {
+            {"readout","count","Count",precision=0,binding={dataset="sample",field="counter",device="device-a"}},
+            {"readout","reading","Reading",binding={dataset="sample",field="reading"}},
+            {"label","note","Note",binding={dataset="sample",field="note"}}
+        } end
+        function on_open(ctx)
+            assert(proto.get_control("count")==nil)
+            assert(proto.data.publish(row(9223372036854775807)))
+            assert(proto.get_control("count")=="9223372036854775807")
+            assert(proto.get_control("reading")=="1.50")
+            assert(proto.get_control("note")==nil)
+            assert(not proto.ui.update_control("count",{value=8}))
+            proto.set_control("count",5)
+            assert(proto.get_control("count")=="9223372036854775807")
+            local other=row(10);other.device="device-b";other.values.note="Other device"
+            assert(proto.data.publish(other))
+            assert(proto.get_control("count")=="9223372036854775807")
+            assert(proto.get_control("note")=="Other device")
+            local missing=row(2);missing.values.reading=nil
+            assert(not pcall(proto.data.publish_batch,{row(1),missing}))
+            assert(proto.get_control("count")=="9223372036854775807")
+            local null=row(12);null.values.reading=proto.data.null;null.values.note=proto.data.null
+            assert(proto.data.publish(null))
+            assert(proto.get_control("reading")==nil and proto.get_control("note")==nil)
+            proto.emit("done","")
+        end
+    )";
+    require(f.load(source),"field binding declaration");
+    f.open();
+    require(f.host.drainEvents().size()==1,"field binding assertions");
+    require(f.host.controlStatesSnapshot()[0].updatedAtMs>0,"bound value has receive timestamp");
+    require(f.host.controlStatesSnapshot()[1].dataState==scripting::ControlDataState::Null,"explicit null clears display");
+    require(f.load(source),"binding reload");
+    require(f.host.controlStatesSnapshot()[0].updatedAtMs==0,"measurements not reused");
+    auto invalid=source;
+    invalid.replace(invalid.find("field=\"counter\""),std::string("field=\"counter\"").size(),"field=\"missing\"");
+    require(!f.load(invalid),"unknown binding field rejected during load");
+    invalid=source;
+    invalid.replace(invalid.find("\"readout\",\"count\""),std::string("\"readout\",\"count\"").size(),"\"slider_int\",\"count\"");
+    require(!f.load(invalid),"user setpoint cannot masquerade as measurement binding");
+}
+
+void bindingFailures()
+{
+    Fixture f;
+    require(f.load(R"(
+        function data() return {{id="state",fields={
+            {name="active",type="bool"},{name="progress",type="double"},{name="note",type="string"}
+        }}} end
+        function controls() return {
+            {"indicator","active","Active",binding={dataset="state",field="active"}},
+            {"progress","progress","Progress",binding={dataset="state",field="progress"}},
+            {"label","note","Note",max_length=4,binding={dataset="state",field="note"}}
+        } end
+        function on_open(ctx) proto.record.start() end
+        function on_record(ctx,evt)
+            assert(evt.ok,evt.error)
+            if evt.operation=="start" then
+                assert(proto.data.publish({dataset="state",values={active=true,progress=5,note="too long"}}))
+                assert(proto.get_control("active")==true)
+                assert(proto.get_control("progress")==nil and proto.get_control("note")==nil)
+                proto.record.stop()
+            elseif evt.operation=="stop" then
+                assert(proto.record.status().committed==1)
+                proto.emit("done","")
+            end
+        end
+    )"),"invalid display fixture");
+    f.open();f.done();
+    const auto controls=f.host.controlStatesSnapshot();
+    require(controls[1].dataState==scripting::ControlDataState::Invalid &&
+            controls[2].dataState==scripting::ControlDataState::Invalid,"invalid display has explicit state");
+    require(!controls[1].dataError.empty(),"display error details");
+    f.host.setStorageRoot({});
+    require(f.load(declaration+R"(
+        function controls() return {
+            {"readout","live","Live",precision=0,binding={dataset="sample",field="counter"}}
+        } end
+        function on_open(ctx)
+            assert(not pcall(proto.data.publish,row(42)))
+            assert(proto.get_control("live")=="42")
+            proto.emit("done","")
+        end
+    )"),"storage error binding fixture");
+    f.open();
+    require(f.host.drainEvents().size()==1,"storage failure must not suppress live binding");
+}
+
 void recording()
 {
     Fixture f;
@@ -198,7 +290,8 @@ int main()
     int failed=0;
     for (const auto& [name, run] : std::initializer_list<std::pair<const char*,void(*)()>>{
              {"recording",recording},{"kv_reload",kvAndReload},{"validation",validation},
-             {"declarations",declarations},{"worker_callbacks",workerCallbacks}}) {
+             {"declarations",declarations},{"worker_callbacks",workerCallbacks},{"field_bindings",fieldBindings},
+             {"binding_failures",bindingFailures}}) {
         try { std::cout << "[RUN] " << name << std::endl; run(); std::cout << "[PASS] " << name << std::endl; }
         catch (const std::exception& error) { ++failed; std::cerr << "[FAIL] " << name << ": " << error.what() << '\n'; }
     }
