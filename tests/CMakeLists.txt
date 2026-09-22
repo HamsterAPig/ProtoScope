@@ -1,3 +1,8 @@
+add_executable(protoscope_storage_tests test_storage.cc)
+target_link_libraries(protoscope_storage_tests PRIVATE protoscope_storage)
+add_test(NAME protoscope_storage_tests COMMAND protoscope_storage_tests)
+set_tests_properties(protoscope_storage_tests PROPERTIES TIMEOUT 60)
+
 add_executable(protoscope_script_safety_tests test_script_safety.cc)
 target_link_libraries(protoscope_script_safety_tests PRIVATE protoscope_scripting protoscope_config)
 add_test(NAME protoscope_script_safety_tests COMMAND protoscope_script_safety_tests)

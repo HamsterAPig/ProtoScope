@@ -1,3 +1,16 @@
+add_library(protoscope_data STATIC data/model.cc)
+target_include_directories(protoscope_data PUBLIC ${PROJECT_SOURCE_DIR}/include)
+target_compile_features(protoscope_data PUBLIC cxx_std_20)
+
+add_library(protoscope_storage STATIC storage/store.cc)
+target_include_directories(protoscope_storage PUBLIC ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(protoscope_storage PUBLIC protoscope_data PRIVATE protoscope_sqlite Threads::Threads)
+target_compile_features(protoscope_storage PUBLIC cxx_std_20)
+if(MSVC)
+    target_compile_options(protoscope_data PRIVATE /utf-8)
+    target_compile_options(protoscope_storage PRIVATE /utf-8)
+endif()
+
 add_library(protoscope_plot STATIC
     plot/csv_data_file.cc
     plot/oscilloscope.cc
