@@ -22,6 +22,22 @@ std::size_t schemaBytes(const data::Schema& schema)
     for (const auto& field:schema.fields) bytes+=field.name.capacity();
     return bytes;
 }
+std::map<std::uint64_t,data::Schema> sourceSchemas(const std::filesystem::path& path)
+{
+    sqlite::Database db(path,true);
+    sqlite::Statement rows(db,"SELECT id,definition FROM schemas");
+    std::map<std::uint64_t,data::Schema> schemas;
+    std::size_t bytes=0;
+    while (rows.row()) {
+        auto schema=data::schemaFromValue(data::decodeValue(rows.blob(1),valueLimits));
+        const auto size=schemaBytes(schema);
+        if (rows.integer(0)<1 || size>valueLimits.maxBytes-bytes)
+            throw std::runtime_error("invalid active schema metadata or query budget exceeded");
+        bytes+=size;
+        schemas.emplace(static_cast<std::uint64_t>(rows.integer(0)),std::move(schema));
+    }
+    return schemas;
+}
 struct Cursor {
     const RecordSource& source;
     sqlite::Database db;
@@ -169,18 +185,22 @@ private:
 RecordQueryService::RecordQueryService(std::filesystem::path active,VolumeCatalog& catalog,std::size_t budget)
     :active_(std::move(active)),catalog_(catalog),memoryBudget_(budget)
 {
-    sqlite::Database db(active_,true);
-    sqlite::Statement rows(db,"SELECT id,definition FROM schemas");
-    std::map<std::uint64_t,data::Schema> schemas;
-    std::size_t bytes=0;
-    while (rows.row()) {
-        auto schema=data::schemaFromValue(data::decodeValue(rows.blob(1),valueLimits));
-        const auto size=schemaBytes(schema);
-        if (size>valueLimits.maxBytes-bytes) throw std::runtime_error("active schema metadata exceeds query budget");
-        bytes+=size;
-        schemas.emplace(static_cast<std::uint64_t>(rows.integer(0)),std::move(schema));
-    }
-    activeSchemas_=catalog_.registerSchemas(schemas);
+    activeSchemas_=catalog_.registerSchemas(sourceSchemas(active_));
+}
+void RecordQueryService::switchActive(std::filesystem::path path,
+    const std::function<void(std::shared_ptr<int>)>& sealPrevious)
+{
+    if (!sealPrevious) throw std::invalid_argument("missing active volume seal operation");
+    auto schemas=catalog_.registerSchemas(sourceSchemas(path));
+    auto pin=std::make_shared<int>(0);
+    std::lock_guard lock(mutex_);
+    if (path==active_ || std::filesystem::equivalent(path,active_))
+        throw std::invalid_argument("active volume source did not change");
+    // 冻结新快照创建，先登记旧源，再替换活动源；旧快照自身保留旧路径及占用引用。
+    sealPrevious(activePin_);
+    active_=std::move(path);
+    activeSchemas_=std::move(schemas);
+    activePin_=std::move(pin);
 }
 std::shared_ptr<const RecordSnapshot> RecordQueryService::snapshot(std::optional<std::int64_t> token)
 {
@@ -196,6 +216,7 @@ std::shared_ptr<const RecordSnapshot> RecordQueryService::snapshot(std::optional
         snapshots_.erase(unused);
     }
     auto result=std::make_shared<RecordSnapshot>();
+    result->activePin=activePin_;
     result->volumes=catalog_.pinAll();
     result->schemas=catalog_.schemas();
     std::size_t bytes=0;

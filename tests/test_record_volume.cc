@@ -108,13 +108,43 @@ void catalogHandoff()
     overlap->append({row(3)});overlap->seal(3);
     rejects([&]{catalog.adoptRecording(overlap->info(),3);});
 }
+void querySourceSwitch()
+{
+    tests::ScopedTempPath directory(tests::makeUniqueTempDir("protoscope-volume-source-switch"));
+    storage::VolumeCatalog catalog(directory.path(),"protocol");
+    auto old=storage::RecordVolume::create(directory.path(),"protocol",{{7,schema}},1000,1);
+    old->append({row(1),row(2)});
+    storage::RecordQueryService queries(old->info().path,catalog,32U*1024U*1024U);
+    auto first=queries.query({.limit=1},{});
+    require(first.records.size()==1 && first.more && first.rowIds[0]==1000,"freeze first active page");
+    auto next=storage::RecordVolume::create(directory.path(),"protocol",{{7,schema}},1002,2);
+    next->append({row(3)});
+    queries.switchActive(next->info().path,[&](std::shared_ptr<int> pin) {
+        old->seal(2);
+        catalog.adoptRecording(old->info(),2,std::move(pin));
+    });
+    auto second=queries.query({.offset=1,.limit=1,.snapshot=first.snapshot},{});
+    require(second.records.size()==1 && !second.more && second.rowIds[0]==1001,
+            "old snapshot pages stay on original file after active switch");
+    auto fresh=queries.query({},{});
+    require(fresh.records.size()==3 && fresh.rowIds==std::vector<std::uint64_t>{1000,1001,1002},
+            "new snapshot contains sealed plus new active source without duplicates");
+    require(catalog.retain({UINT64_MAX,std::chrono::microseconds(0)},3).removedVolumes==0,
+            "old query pages retain volume across source switch");
+    first.snapshotLease.reset();second.snapshotLease.reset();fresh.snapshotLease.reset();
+    queries.expireUnpinned();
+    require(catalog.retain({UINT64_MAX,std::chrono::microseconds(0)},3).removedVolumes==1 &&
+            std::filesystem::exists(next->info().path),"released historical source can be cleaned without touching new active");
+    require(queries.query({},{}).records.size()==1,"new active source remains queryable after old cleanup");
+}
 }
 int main()
 {
     int failed=0;
     for (const auto& [name,run]:std::initializer_list<std::pair<const char*,void(*)()>>{
         {"stable_path_rotation",stablePathAndRotation},{"atomic_recovery",atomicAppendAndRecovery},
-        {"ownership_corruption",ownershipAndCorruption},{"catalog_handoff",catalogHandoff}}) {
+        {"ownership_corruption",ownershipAndCorruption},{"catalog_handoff",catalogHandoff},
+        {"query_source_switch",querySourceSwitch}}) {
         try {run();std::cout<<"[PASS] "<<name<<'\n';}
         catch(const std::exception& error){++failed;std::cerr<<"[FAIL] "<<name<<": "<<error.what()<<'\n';}
     }

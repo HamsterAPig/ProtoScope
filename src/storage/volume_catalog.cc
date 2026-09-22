@@ -23,6 +23,7 @@ constexpr data::ValueLimits valueLimits{32U*1024U*1024U,16,131072};
 struct CatalogRuntime {
     std::mutex mutex;
     std::map<std::uint64_t,std::shared_ptr<int>> pins;
+    bool writerOwned{false};
 #ifdef _WIN32
     HANDLE handle{INVALID_HANDLE_VALUE};
 #else
@@ -58,6 +59,15 @@ struct CatalogRuntime {
 #else
         if (handle>=0) ::close(handle);
 #endif
+    }
+};
+struct WriterClaim {
+    std::shared_ptr<CatalogRuntime> runtime;
+    explicit WriterClaim(std::shared_ptr<CatalogRuntime> owner):runtime(std::move(owner)) {}
+    ~WriterClaim()
+    {
+        std::lock_guard lock(runtime->mutex);
+        runtime->writerOwned=false;
     }
 };
 std::shared_ptr<CatalogRuntime> runtimeFor(const std::filesystem::path& root)
@@ -302,6 +312,15 @@ struct VolumeCatalog::Impl {
 VolumeCatalog::VolumeCatalog(std::filesystem::path root,std::string protocol)
     :impl_(std::make_unique<Impl>(std::move(root),std::move(protocol))) {}
 VolumeCatalog::~VolumeCatalog()=default;
+
+std::shared_ptr<void> VolumeCatalog::claimWriter()
+{
+    std::lock_guard lock(impl_->runtime->mutex);
+    if (impl_->runtime->writerOwned) throw std::runtime_error("record directory already has a Store writer");
+    auto lease=std::make_shared<WriterClaim>(impl_->runtime);
+    impl_->runtime->writerOwned=true;
+    return lease;
+}
 
 CatalogVolume VolumeCatalog::adopt(StagedRecordImport& staged,std::int64_t sealedAtUs,std::stop_token stop)
 {

@@ -15,6 +15,8 @@ public:
     void loadSchemas(sol::state_view lua);
     void activate();
     void waitIdle();
+    void suspendStorage();
+    void resumeStorage();
     bool needsPoll() const;
     std::uint64_t nextPollAtMs() const;
     std::vector<storage::Completion> poll();

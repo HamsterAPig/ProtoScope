@@ -212,6 +212,8 @@ void ScriptDataSession::activate()
         store();
 }
 void ScriptDataSession::waitIdle() { if (store_) store_->waitIdle(); }
+void ScriptDataSession::suspendStorage() {if (store_) store_->suspend();}
+void ScriptDataSession::resumeStorage() {if (store_) store_->resume();}
 bool ScriptDataSession::needsPoll() const { return store_ != nullptr; }
 std::uint64_t ScriptDataSession::nextPollAtMs() const { return nextPollAtMs_; }
 std::vector<storage::Completion> ScriptDataSession::poll()

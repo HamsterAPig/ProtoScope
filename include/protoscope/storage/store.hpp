@@ -91,6 +91,9 @@ public:
     Status status() const;
     std::vector<Completion> poll();
     void waitIdle();
+    // 宿主重载交接专用：关闭原生连接并释放单写者资格，失败时可恢复原会话。
+    void suspend();
+    void resume();
 
 private:
     struct Impl;

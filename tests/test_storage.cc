@@ -326,6 +326,22 @@ void capacityMonitoring()
     require(completion(store,store.query({})).records.size()==1,"quota fault preserves query access");
     require(!completion(store,store.start()).ok,"restart cannot report healthy while quota unresolved");
 }
+void singleWriter()
+{
+    const tests::ScopedTempPath directory(tests::makeUniqueTempDir("protoscope-single-writer"));
+    std::shared_ptr<const storage::RecordSnapshot> oldPage;
+    {
+        storage::Store writer(directory.path(),"protocol",{schema()});
+        rejects([&]{storage::Store other(directory.path(),"protocol",{schema()});});
+        require(completion(writer,writer.start()).ok,"rejected second writer leaves first healthy");
+        std::string error;require(writer.publish({record()},error),"single writer can publish");
+        writer.waitIdle();
+        oldPage=completion(writer,writer.query({})).snapshotLease;
+    }
+    storage::Store next(directory.path(),"protocol",{schema()});
+    require(completion(next,next.query({})).records.size()==1,
+            "writer claim releases on destruction even if old result keeps a query lease");
+}
 void automaticRetention()
 {
     const tests::ScopedTempPath directory(tests::makeUniqueTempDir("protoscope-automatic-retention"));
@@ -366,6 +382,7 @@ int main()
         {"field_queries",fieldQueries},
         {"live_table",liveTable},
         {"capacity_monitoring",capacityMonitoring},{"automatic_retention",automaticRetention},
+        {"single_writer",singleWriter},
     };
     for (const auto& [name, run] : tests) {
         try { run(); std::cout << "[PASS] " << name << '\n'; }

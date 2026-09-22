@@ -320,7 +320,13 @@ bool ScriptHost::loadScriptFile(const std::string& path)
     }
 
     auto snapshot = captureLoadSnapshot();
+    auto* previousData=runtime_ ? runtime_->data.get():nullptr;
+    bool storageSuspended=false;
     auto restoreFailure = [&](std::string message) {
+        if (storageSuspended && runtime_ && runtime_->data.get()==previousData) {
+            try {previousData->resumeStorage();}
+            catch (const std::exception& error) {message+="; 恢复旧存储失败: "+std::string(error.what());}
+        }
         restoreLoadSnapshot(std::move(snapshot), std::move(message));
         return false;
     };
@@ -337,15 +343,17 @@ bool ScriptHost::loadScriptFile(const std::string& path)
             return restoreFailure(std::move(error));
         }
 
-        // 新会话读取已提交缓存前排空旧写入；加载失败仍保留旧 runtime 和回调。
-        if (runtime_ && runtime_->data) runtime_->data->waitIdle();
+        // 排空并关闭旧原生连接后才允许新会话取得写者资格；激活失败恢复旧回调和存储队列。
+        if (previousData) {previousData->suspendStorage();storageSuspended=true;}
         nextRuntime->data->activate();
         commitLoadedScript(
             std::move(nextRuntime), std::move(loadedScript), snapshot.controlValues, path, nextProtocolDirectory);
         return true;
     } catch (const std::exception& ex) {
+        nextRuntime.reset();
         return restoreFailure(std::string("加载脚本异常: ") + ex.what());
     } catch (...) {
+        nextRuntime.reset();
         return restoreFailure("加载脚本异常: 未知异常");
     }
 }

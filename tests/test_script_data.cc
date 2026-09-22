@@ -226,7 +226,7 @@ void kvAndReload()
             if previous then
                 assert(previous.n==9223372036854775807 and previous.list[2]==false)
                 assert(proto.data.is_null(previous.list[3]))
-                proto.emit("recovered","")
+                proto.kv.flush()
             else
                 proto.kv.set("settings",{n=9223372036854775807,list={"hello",false,proto.data.null}})
             end
@@ -243,6 +243,10 @@ void kvAndReload()
     f.open(); f.done();
     require(!f.load("proto.kv.set('settings', 42)"), "声明阶段写入必须拒绝");
     f.open(); f.done();
+    storage::Config invalid;invalid.kvTotalBytes=1;f.host.setStorageConfig(invalid);
+    require(!f.load(source),"new storage activation fails when committed KV exceeds new limit");
+    f.open();f.done();
+    f.host.setStorageConfig({});
     require(f.load(source), f.host.lastError().c_str());
     f.open(); f.done();
 }

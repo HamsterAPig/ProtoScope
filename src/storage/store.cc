@@ -148,6 +148,7 @@ struct Store::Impl {
     std::thread writer;
     std::thread reader;
     std::unique_ptr<VolumeCatalog> catalog;
+    std::shared_ptr<void> writerLease;
     std::unique_ptr<RecordQueryService> queries;
     std::mutex maintenanceMutex;
     std::chrono::steady_clock::time_point nextMaintenance{};
@@ -171,6 +172,7 @@ struct Store::Impl {
         std::filesystem::create_directories(root / "records");
         // 在打开活动库前取得目录进程锁，防止另一进程写入或清理相同记录根。
         catalog=std::make_unique<VolumeCatalog>(root/"records",protocol);
+        writerLease=catalog->claimWriter();
         Database records(root / "records" / "records.sqlite");
         initialize(records,
             "CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);"
@@ -243,8 +245,8 @@ struct Store::Impl {
             for (const auto& [id, canceled] : cancellations) canceled->request_stop();
         }
         changed.notify_all();
-        writer.join();
-        reader.join();
+        if (writer.joinable()) writer.join();
+        if (reader.joinable()) reader.join();
     }
 
     std::uint64_t enqueue(Command command)
@@ -716,6 +718,37 @@ void Store::waitIdle()
     impl_->idle.wait(lock, [&] {
         return impl_->writes.empty() && impl_->reads.empty() && !impl_->writing && !impl_->reading;
     });
+}
+void Store::suspend()
+{
+    waitIdle();
+    {
+        std::lock_guard lock(impl_->mutex);
+        impl_->stopping=true;
+    }
+    impl_->changed.notify_all();
+    if (impl_->writer.joinable()) impl_->writer.join();
+    if (impl_->reader.joinable()) impl_->reader.join();
+    impl_->writerLease.reset();
+}
+void Store::resume()
+{
+    if (impl_->writer.joinable() || impl_->reader.joinable()) return;
+    impl_->writerLease=impl_->catalog->claimWriter();
+    {
+        std::lock_guard lock(impl_->mutex);
+        impl_->stopping=false;
+    }
+    try {
+        impl_->writer=std::thread([state=impl_.get()]{state->writeLoop();});
+        impl_->reader=std::thread([state=impl_.get()]{state->readLoop();});
+    } catch (...) {
+        {std::lock_guard lock(impl_->mutex);impl_->stopping=true;}
+        impl_->changed.notify_all();
+        if (impl_->writer.joinable()) impl_->writer.join();
+        impl_->writerLease.reset();
+        throw;
+    }
 }
 
 } // namespace protoscope::storage
