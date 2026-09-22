@@ -131,6 +131,50 @@ void recordSnapshots()
     }
 }
 
+void fieldQueries()
+{
+    const tests::ScopedTempPath directory(tests::makeUniqueTempDir("protoscope-field-query"));
+    storage::Store store(directory.path(),"protocol",{schema()});
+    require(completion(store,store.start()).ok,"field query recording");
+    std::string error;
+    require(store.publish({record(4),record(2),record(3),record(2),
+                           record(std::numeric_limits<std::int64_t>::max())},error),"field query rows");
+    store.waitIdle();
+    storage::Query query;
+    query.dataset="samples";query.limit=2;
+    query.conditions={{"count",data::CompareOp::GreaterEqual,{std::int64_t{2}}}};
+    query.sort=data::FieldSort{"count",true};
+    auto first=completion(store,store.query(query));
+    require(first.ok && first.more && first.records.size()==2,"filtered sorted page");
+    require(std::get<std::int64_t>(first.records[0].values[0].value)==std::numeric_limits<std::int64_t>::max() &&
+            std::get<std::int64_t>(first.records[1].values[0].value)==4,"global sort preserves int64");
+    query.snapshot=first.snapshot;query.offset=2;
+    require(store.publish({record(10)},error),"append after fixed query");
+    store.waitIdle();
+    auto next=completion(store,store.query(query));
+    require(next.ok && next.more && std::get<std::int64_t>(next.records[0].values[0].value)==3,
+            "filtered pages use fixed high water");
+    query.offset=4;
+    auto last=completion(store,store.query(query));
+    require(last.ok && !last.more && last.records.size()==1 &&
+            std::get<std::int64_t>(last.records[0].values[0].value)==2,"duplicate sort keys remain stable");
+    query={};query.conditions={{"value",data::CompareOp::IsNull,{}}};
+    require(completion(store,store.query(query)).records.size()==6,"explicit null query");
+    query.conditions={{"absent",data::CompareOp::IsNull,{}}};
+    require(completion(store,store.query(query)).records.empty(),"missing field is not explicit null");
+    query.conditions={{"count",data::CompareOp::Equal,{2.0}}};
+    require(completion(store,store.query(query)).records.empty(),"no implicit comparison conversion");
+    query.conditions={{"payload",data::CompareOp::Equal,{data::Bytes{0,255}}}};
+    require(completion(store,store.query(query)).records.size()==6,"typed byte filter");
+    query.conditions={{"count",data::CompareOp::Equal,{}}};
+    rejects([&]{store.query(query);});
+    query.conditions.assign(17,{"count",data::CompareOp::Equal,{std::int64_t{2}}});
+    rejects([&]{store.query(query);});
+    query.conditions={{"count'); DROP TABLE records;--",data::CompareOp::Equal,{std::int64_t{2}}}};
+    require(completion(store,store.query(query)).records.empty(),"field names are not SQL");
+    require(completion(store,store.query({})).records.size()==6,"query must not alter record data");
+}
+
 void limits()
 {
     const tests::ScopedTempPath directory(tests::makeUniqueTempDir("protoscope-storage-limits"));
@@ -237,6 +281,7 @@ int main()
         {"schema_versions", schemaVersions}, {"queue_fault", queueFault},
         {"cancel_backpressure", cancellationAndBackpressure},
         {"damaged_database", damagedDatabase},
+        {"field_queries",fieldQueries},
     };
     for (const auto& [name, run] : tests) {
         try { run(); std::cout << "[PASS] " << name << '\n'; }

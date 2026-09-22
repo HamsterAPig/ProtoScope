@@ -393,6 +393,29 @@ void ScriptDataSession::registerApi(sol::state_view lua, sol::table& proto)
         const auto offset = integer("offset").value_or(0), limit = integer("limit").value_or(200);
         if (offset < 0 || limit < 1 || limit > 1000) throw std::invalid_argument("invalid query page");
         query.offset = static_cast<std::size_t>(offset); query.limit = static_cast<std::size_t>(limit);
+        const sol::object filters=options["conditions"];
+        if (filters.valid() && filters.get_type()!=sol::type::lua_nil) {
+            if (filters.get_type()!=sol::type::table) throw std::invalid_argument("conditions must be array");
+            static const std::map<std::string,data::CompareOp> operations{
+                {"eq",data::CompareOp::Equal},{"ne",data::CompareOp::NotEqual},{"lt",data::CompareOp::Less},
+                {"le",data::CompareOp::LessEqual},{"gt",data::CompareOp::Greater},{"ge",data::CompareOp::GreaterEqual},
+                {"contains",data::CompareOp::Contains},{"is_null",data::CompareOp::IsNull},{"not_null",data::CompareOp::NotNull}};
+            for (const auto& condition:tableArray(filters.as<sol::table>(),16)) {
+                const auto operation=operations.find(condition.get<std::string>("op"));
+                if (operation==operations.end()) throw std::invalid_argument("unknown field comparison");
+                query.conditions.push_back({condition.get<std::string>("field"),operation->second,
+                                            Decoder{}.read(condition["value"])});
+            }
+        }
+        const sol::object sort=options["sort"];
+        if (sort.valid() && sort.get_type()!=sol::type::lua_nil) {
+            if (sort.get_type()!=sol::type::table) throw std::invalid_argument("sort must be table");
+            const auto entry=sort.as<sol::table>();
+            const sol::object descending=entry["descending"];
+            if (descending.valid() && descending.get_type()!=sol::type::lua_nil && descending.get_type()!=sol::type::boolean)
+                throw std::invalid_argument("descending must be boolean");
+            query.sort=data::FieldSort{entry.get<std::string>("field"),entry.get_or("descending",false)};
+        }
         return store().query(std::move(query));
     });
     proto["record"] = record;

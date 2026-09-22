@@ -54,7 +54,28 @@ API 返回成功不等于落盘成功，必须读取记录状态和任务结果�
 异步记录故障额外触发 `operation="fault"`、`task=0` 的事件；`status` 附带计数和错误。
 记录行含 `protocol/dataset/device/received_at_us/device_time_us/schema_version/values`。
 历史行按对应历史模式解码，字段变化不会使旧行被按当前模式误读。
-尚未提供字段条件查询、分卷和导入导出；当前不是完整长期记录版本。
+尚未提供分卷和导入导出；当前不是完整长期记录版本。
+
+### 字段条件与排序
+
+```lua
+proto.record.query({
+    dataset="telemetry", limit=200,
+    conditions={{field="sequence",op="ge",value=100}},
+    sort={field="temperature",descending=true}
+})
+```
+
+条件最多 16 个、合计 64KiB，全部满足才匹配，支持 `eq/ne/lt/le/gt/ge/contains/is_null/not_null`。
+contains 是区分大小写的字符串子串匹配，不是 SQL 通配符；空值测试不提供 value。
+条件严格保留类型，不在 int64/double、布尔、字符串或字节之间隐式转换。
+旧模式缺字段不等于显式 null，不会匹配 is_null。
+
+排序在完整固定快照上完成后才分页，相同值按接收时间、记录 ID 稳定排序。
+字段类型变化时按 null、int64、double、bool、string、bytes 的类型顺序再比较值，
+descending 反转字段类型和值顺序；缺字段排在显式 null 之前（降序时之后）。
+查询在独立读线程执行，可取消；排序可能使用 SQLite 临时文件。
+字段名和值均用参数绑定，仅固定比较与排序操作可用，不开放任意 SQL。
 
 ## KV
 

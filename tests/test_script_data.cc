@@ -143,6 +143,30 @@ void bindingFailures()
     require(f.host.drainEvents().size()==1,"storage failure must not suppress live binding");
 }
 
+void queryFields()
+{
+    Fixture f;
+    require(f.load(declaration+R"(
+        function on_open(ctx) proto.record.start() end
+        function on_record(ctx,evt)
+            assert(evt.ok,evt.error)
+            if evt.operation=="start" then
+                proto.data.publish_batch({row(2),row(4),row(1),row(3)})
+                proto.record.stop()
+            elseif evt.operation=="stop" then
+                assert(not pcall(proto.record.query,{conditions={{field="counter",op="SQL",value=1}}}))
+                proto.record.query({dataset="sample",limit=1,
+                    conditions={{field="counter",op="ge",value=2},{field="note",op="is_null"}},
+                    sort={field="counter",descending=true}})
+            elseif evt.operation=="query" then
+                assert(#evt.records==1 and evt.more and evt.records[1].values.counter==4)
+                proto.emit("done","")
+            end
+        end
+    )"),"Lua field query fixture");
+    f.open();f.done();
+}
+
 void recording()
 {
     Fixture f;
@@ -291,7 +315,7 @@ int main()
     for (const auto& [name, run] : std::initializer_list<std::pair<const char*,void(*)()>>{
              {"recording",recording},{"kv_reload",kvAndReload},{"validation",validation},
              {"declarations",declarations},{"worker_callbacks",workerCallbacks},{"field_bindings",fieldBindings},
-             {"binding_failures",bindingFailures}}) {
+             {"binding_failures",bindingFailures},{"query_fields",queryFields}}) {
         try { std::cout << "[RUN] " << name << std::endl; run(); std::cout << "[PASS] " << name << std::endl; }
         catch (const std::exception& error) { ++failed; std::cerr << "[FAIL] " << name << ": " << error.what() << '\n'; }
     }

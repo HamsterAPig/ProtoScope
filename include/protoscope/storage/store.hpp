@@ -1,6 +1,7 @@
 #pragma once
 
 #include "protoscope/data/model.hpp"
+#include "protoscope/data/query.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -42,6 +43,8 @@ struct Query {
     std::size_t limit{200};
     // 未指定时创建快照；返回的高水位用于后续页，后续发布不会改变同一快照。
     std::optional<std::int64_t> snapshot;
+    std::vector<data::FieldCondition> conditions;
+    std::optional<data::FieldSort> sort;
 };
 
 struct Completion {

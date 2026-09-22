@@ -1,4 +1,5 @@
 #include "protoscope/storage/store.hpp"
+#include "query_functions.hpp"
 
 #include <sqlite3.h>
 
@@ -438,6 +439,7 @@ struct Store::Impl {
             try {
                 if (command.canceled->load()) throw std::runtime_error("查询已取消");
                 Database db(root / "records" / "records.sqlite", true);
+                registerQueryFunctions(db.get());
                 sqlite3_progress_handler(db.get(), 1000, [](void* flag) {
                     return static_cast<std::atomic_bool*>(flag)->load() ? 1 : 0;
                 }, command.canceled.get());
@@ -451,11 +453,21 @@ struct Store::Impl {
                     else if (*cutoff > maximum) throw std::runtime_error("查询快照超出已提交高水位");
                 }
                 result.snapshot = cutoff;
-                Statement statement(db,
-                    "SELECT payload FROM records WHERE id<=? AND (?='' OR dataset=?) "
-                    "AND (?=0 OR device=?) AND (?=0 OR received_us>=?) AND (?=0 OR received_us<=?) "
-                    "ORDER BY received_us,id LIMIT ? OFFSET ?");
                 const auto& query = command.query;
+                const bool fieldQuery=!query.conditions.empty() || query.sort.has_value();
+                std::string sql="SELECT r.payload FROM records r ";
+                if (fieldQuery) sql+="JOIN schemas s ON s.id=r.schema_id ";
+                sql+="WHERE r.id<=? AND (?='' OR r.dataset=?) AND (?=0 OR r.device=?) "
+                     "AND (?=0 OR r.received_us>=?) AND (?=0 OR r.received_us<=?) ";
+                if (!query.conditions.empty()) sql+="AND ps_matches(r.payload,s.definition,?) ";
+                sql+="ORDER BY ";
+                if (query.sort) {
+                    const std::string direction=query.sort->descending ? " DESC,":" ASC,";
+                    sql+="ps_field_type(r.payload,s.definition,?)"+direction+"ps_field(r.payload,s.definition,?)"+direction;
+                }
+                // 排序筛选在 LIMIT 之前完成；相同字段值始终以时间和记录 ID 打破平局。
+                sql+="r.received_us,r.id LIMIT ? OFFSET ?";
+                Statement statement(db,sql.c_str());
                 statement.integer(1, *cutoff);
                 statement.text(2, query.dataset);
                 statement.text(3, query.dataset);
@@ -465,8 +477,15 @@ struct Store::Impl {
                 statement.integer(7, query.fromUs.value_or(0));
                 statement.integer(8, query.toUs.has_value());
                 statement.integer(9, query.toUs.value_or(0));
-                statement.integer(10, static_cast<std::int64_t>(query.limit + 1));
-                statement.integer(11, static_cast<std::int64_t>(query.offset));
+                int parameter=10;
+                if (!query.conditions.empty())
+                    statement.blob(parameter++,data::encodeValue(data::conditionsValue(query.conditions),{128U*1024U,4}));
+                if (query.sort) {
+                    statement.text(parameter++,query.sort->field);
+                    statement.text(parameter++,query.sort->field);
+                }
+                statement.integer(parameter++, static_cast<std::int64_t>(query.limit + 1));
+                statement.integer(parameter, static_cast<std::int64_t>(query.offset));
                 std::size_t resultBytes = 0;
                 while (statement.row()) {
                     if (command.canceled->load()) throw std::runtime_error("查询已取消");
@@ -586,6 +605,10 @@ bool Store::publish(std::vector<data::Record> records, std::string& error)
 
 std::uint64_t Store::query(Query query)
 {
+    data::validateConditions(query.conditions);
+    if (query.sort && (query.sort->field.empty() || query.sort->field.size()>4096 ||
+                      query.sort->field.find('\0')!=query.sort->field.npos))
+        throw std::invalid_argument("无效排序字段");
     if (query.limit == 0 || query.limit > 1000 || query.offset > static_cast<std::size_t>(INT64_MAX) ||
         (query.snapshot && *query.snapshot < 0) || (query.fromUs && query.toUs && *query.fromUs > *query.toUs)) {
         throw std::invalid_argument("历史查询参数无效");
