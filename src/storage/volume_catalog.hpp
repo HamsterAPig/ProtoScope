@@ -1,6 +1,7 @@
 #pragma once
 
 #include "record_import.hpp"
+#include "record_volume.hpp"
 #include <chrono>
 #include <mutex>
 
@@ -14,6 +15,7 @@ struct CatalogVolume {
     std::int64_t sealedAtUs{0};
     std::int64_t idBase{0};
     std::map<std::uint64_t,std::uint64_t> schemaIds;
+    std::int64_t highWater{0};
 };
 struct RetentionPolicy {
     std::uint64_t maxBytes{10ULL*1024*1024*1024};
@@ -41,6 +43,8 @@ public:
     VolumeCatalog(std::filesystem::path recordsRoot,std::string protocol);
     ~VolumeCatalog();
     CatalogVolume adopt(StagedRecordImport& staged,std::int64_t sealedAtUs,std::stop_token stop={});
+    CatalogVolume adoptRecording(const RecordVolumeInfo& info,std::int64_t sealedAtUs,
+        std::shared_ptr<int> activePin={});
     std::shared_ptr<const PinnedVolumes> pinAll();
     bool isPinned(std::uint64_t id) const;
     std::map<std::uint64_t,data::Schema> schemas() const;

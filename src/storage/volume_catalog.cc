@@ -93,14 +93,15 @@ void checkOwner(const std::filesystem::path& directory,const std::string& identi
     for (const auto& entry:std::filesystem::directory_iterator(directory)) {
         const auto name=entry.path().filename().string();
         if (std::filesystem::is_symlink(entry.symlink_status()) || !entry.is_regular_file() ||
-            (name!="owner" && name!="records.sqlite"))
+            (name!="owner" && name!="records.sqlite" && name!="records.sqlite-wal" && name!="records.sqlite-shm"))
             throw std::runtime_error("unrecognized or linked file in sealed volume");
     }
     std::ifstream owner(directory/"owner",std::ios::binary);
     std::string marker(128,'\0');
     owner.read(marker.data(),static_cast<std::streamsize>(marker.size()));
     marker.resize(static_cast<std::size_t>(owner.gcount()));
-    if (marker!="ProtoScope import stage v1\n"+identity+"\n")
+    if (marker!="ProtoScope import stage v1\n"+identity+"\n" &&
+        marker!="ProtoScope record volume v1\n"+identity+"\n")
         throw std::runtime_error("volume ownership marker mismatch");
 }
 void checkVolume(sqlite::Database& db,const std::string& protocol,const std::string& identity,
@@ -250,7 +251,7 @@ struct VolumeCatalog::Impl {
                 const auto name=entry.path().filename().string();
                 if (entry.is_symlink() || !entry.is_regular_file() ||
                     std::filesystem::weakly_canonical(entry.path())!=entry.path() ||
-                    (name!="owner" && name!="records.sqlite"))
+                    (name!="owner" && name!="records.sqlite" && name!="records.sqlite-wal" && name!="records.sqlite-shm"))
                     throw std::runtime_error("unrecognized file in retiring volume");
             }
             const auto database=directory/"records.sqlite",owner=directory/"owner";
@@ -259,6 +260,11 @@ struct VolumeCatalog::Impl {
             if (std::filesystem::exists(database)) {
                 {sqlite::Database file(database,true);checkVolume(file,protocol,identity,count);}
                 if (!std::filesystem::remove(database)) throw std::runtime_error("cannot remove retired volume database");
+            }
+            for (const auto* suffix:{"-wal","-shm"}) {
+                auto sidecar=database;sidecar+=suffix;
+                if (std::filesystem::exists(sidecar) && !std::filesystem::remove(sidecar))
+                    throw std::runtime_error("cannot remove retired volume sidecar");
             }
             if (std::filesystem::exists(owner) && !std::filesystem::remove(owner))
                 throw std::runtime_error("cannot remove retired volume marker");
@@ -325,10 +331,15 @@ CatalogVolume VolumeCatalog::adopt(StagedRecordImport& staged,std::int64_t seale
     if (next<0 || info.records>static_cast<std::uint64_t>(next))
         throw std::runtime_error("import record ID space exhausted");
     const auto base=next-static_cast<std::int64_t>(info.records);
+    {
+        sqlite::Statement high(db,"SELECT value FROM metadata WHERE key='record_high'");
+        if (high.row() && base<std::stoll(high.text(0)))
+            throw std::runtime_error("import record IDs collide with sealed recordings");
+    }
     if (std::filesystem::exists(impl_->root/"records.sqlite")) {
         sqlite::Database active(impl_->root/"records.sqlite",true);
         sqlite::Statement high(active,"SELECT coalesce(max(id),0) FROM records");high.row();
-        if (base<=high.integer(0)) throw std::runtime_error("import record IDs collide with active records");
+        if (base<high.integer(0)) throw std::runtime_error("import record IDs collide with active records");
     }
     // 导入使用不重用的高位区间，实时记录继续沿用原有递增 ID；两者不因模式版本相同而冲突。
     sqlite::Statement cursor(db,"UPDATE metadata SET value=? WHERE key='import_next'");
@@ -342,6 +353,7 @@ CatalogVolume VolumeCatalog::adopt(StagedRecordImport& staged,std::int64_t seale
     const auto destination=impl_->root/("vol-"+info.identity);
     CatalogVolume registered{id,destination/"records.sqlite",info.identity,info.records,
                              info.fromUs,info.toUs,sealedAtUs,base,{}};
+    registered.highWater=static_cast<std::int64_t>(info.records);
     for (const auto& [local,definition]:definitions) {
         checkStop();
         data::schemaFromValue(data::decodeValue(definition,valueLimits));
@@ -371,15 +383,87 @@ std::shared_ptr<const PinnedVolumes> VolumeCatalog::pinAll()
     auto result=std::make_shared<PinnedVolumes>();
     result->runtimeLease_=impl_->runtime;
     result->volumes_=impl_->volumes(db);
-    for (const auto& volume:result->volumes_) {
+    for (auto& volume:result->volumes_) {
         checkOwner(volume.path.parent_path(),volume.identity);
         sqlite::Database file(volume.path,true);
         checkVolume(file,impl_->protocol,volume.identity,volume.records,false);
+        sqlite::Statement high(file,"SELECT coalesce(max(id),0) FROM records");high.row();
+        volume.highWater=high.integer(0);
         auto& pin=impl_->runtime->pins[volume.id];
         if (!pin) pin=std::make_shared<int>(0);
         result->pins_.push_back(pin);
     }
     return result;
+}
+CatalogVolume VolumeCatalog::adoptRecording(const RecordVolumeInfo& info,std::int64_t sealedAtUs,
+    std::shared_ptr<int> activePin)
+{
+    std::lock_guard lock(impl_->runtime->mutex);
+    checkIdentity(info.identity);
+    if (!info.sealed || sealedAtUs<0 || info.path!=impl_->root/("vol-"+info.identity)/"records.sqlite")
+        throw std::runtime_error("recording volume must be sealed at its permanent owned path");
+    checkOwner(info.path.parent_path(),info.identity);
+    std::map<std::uint64_t,data::Bytes> definitions;
+    std::int64_t first=0;
+    {
+        sqlite::Database file(info.path,true);
+        checkVolume(file,impl_->protocol,info.identity,info.records);
+        if (metadata(file,"origin")!="recording") throw std::runtime_error("not a recording volume");
+        sqlite::Statement bounds(file,"SELECT min(id),coalesce(max(id),0) FROM records");bounds.row();
+        first=bounds.integer(0);
+        if (info.records && (first<1 || bounds.integer(1)!=info.lastId ||
+            static_cast<std::uint64_t>(info.lastId-first)+1!=info.records))
+            throw std::runtime_error("recording volume ID range mismatch");
+        sqlite::Statement schemas(file,"SELECT id,definition FROM schemas");
+        std::size_t bytes=0;
+        while (schemas.row()) {
+            auto definition=schemas.blob(1);
+            if (schemas.integer(0)<1 || definition.size()>valueLimits.maxBytes-bytes)
+                throw std::runtime_error("recording volume schema budget exceeded");
+            bytes+=definition.size();
+            definitions.emplace(static_cast<std::uint64_t>(schemas.integer(0)),std::move(definition));
+        }
+    }
+    sqlite::Database db(impl_->root/"index.sqlite");
+    db.exec("PRAGMA synchronous=FULL; BEGIN IMMEDIATE");
+    std::int64_t previous=0;
+    {sqlite::Statement high(db,"SELECT value FROM metadata WHERE key='record_high'");
+     if (high.row()) previous=std::stoll(high.text(0));}
+    if (std::filesystem::exists(impl_->root/"records.sqlite")) {
+        sqlite::Database legacy(impl_->root/"records.sqlite",true);
+        sqlite::Statement high(legacy,"SELECT coalesce(max(id),0) FROM records");high.row();
+        previous=std::max(previous,high.integer(0));
+    }
+    const auto importNext=std::stoll(metadata(db,"import_next"));
+    if (info.records && (first<=previous || info.lastId>importNext))
+        throw std::runtime_error("recording volume collides with existing record ID range");
+    sqlite::Statement insert(db,"INSERT INTO volumes(identity,records,from_us,to_us,sealed_us,id_base) VALUES(?,?,?,?,?,0)");
+    insert.text(1,info.identity);insert.integer(2,static_cast<std::int64_t>(info.records));
+    if (info.fromUs) insert.integer(3,*info.fromUs);
+    if (info.toUs) insert.integer(4,*info.toUs);
+    insert.integer(5,sealedAtUs);insert.row();
+    const auto id=static_cast<std::uint64_t>(sqlite3_last_insert_rowid(db.get()));
+    CatalogVolume registered{id,info.path,info.identity,info.records,info.fromUs,info.toUs,sealedAtUs,0,{},info.lastId};
+    for (const auto& [local,definition]:definitions) {
+        data::schemaFromValue(data::decodeValue(definition,valueLimits));
+        sqlite::Statement schema(db,"INSERT OR IGNORE INTO schemas(definition) VALUES(?)");
+        schema.blob(1,definition);schema.row();
+        sqlite::Statement global(db,"SELECT id FROM schemas WHERE definition=?");global.blob(1,definition);
+        if (!global.row()) throw std::runtime_error("cannot register recording schema");
+        sqlite::Statement mapping(db,"INSERT INTO volume_schemas VALUES(?,?,?)");
+        mapping.integer(1,static_cast<std::int64_t>(id));mapping.integer(2,static_cast<std::int64_t>(local));
+        mapping.integer(3,global.integer(0));mapping.row();
+        registered.schemaIds.emplace(local,static_cast<std::uint64_t>(global.integer(0)));
+    }
+    sqlite::Statement high(db,"INSERT INTO metadata(key,value) VALUES('record_high',?) "
+                             "ON CONFLICT(key) DO UPDATE SET value=excluded.value");
+    high.text(1,std::to_string(std::max(previous,info.lastId)));high.row();
+    // 封存不移动源文件；把活动快照的占用引用转交给目录，清理不能趁切换丢失引用保护。
+    if (!activePin) activePin=std::make_shared<int>(0);
+    impl_->runtime->pins.emplace(id,std::move(activePin));
+    try {db.exec("COMMIT");}
+    catch (...) {impl_->runtime->pins.erase(id);throw;}
+    return registered;
 }
 bool VolumeCatalog::isPinned(std::uint64_t id) const
 {

@@ -216,7 +216,7 @@ std::shared_ptr<const RecordSnapshot> RecordQueryService::snapshot(std::optional
                                volume.schemaIds.size()*64;
         if (sourceBytes>valueLimits.maxBytes-bytes) throw std::runtime_error("snapshot volume metadata exceeds budget");
         bytes+=sourceBytes;
-        result->sources.push_back({volume.path,static_cast<std::int64_t>(volume.records),volume.idBase,volume.schemaIds});
+        result->sources.push_back({volume.path,volume.highWater,volume.idBase,volume.schemaIds});
     }
     result->memoryBytes=bytes+sizeof(RecordSnapshot)+activeSchemas_.size()*64;
     if (result->memoryBytes>valueLimits.maxBytes) throw std::runtime_error("snapshot metadata exceeds budget");
