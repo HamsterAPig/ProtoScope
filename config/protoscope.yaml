@@ -19,8 +19,8 @@ app:
     enabled: false
 
 gui:
-  # professional_dark: 深墨蓝灰；professional_light: 冷白面板；debug_high_contrast: 近黑高对比。
-  # 可使用配置旁 themes 目录中的用户主题ID，显式覆盖不被预设改写。
+  # 内置：professional_dark、professional_light、debug_high_contrast。
+  # 随附：graphite_cyan、warm_industrial、paper_lab；也可使用配置旁 themes 目录中的用户主题 ID。
   theme: professional_dark
   show_app_header: false
   renderer_backend: opengl

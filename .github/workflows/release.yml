@@ -215,9 +215,7 @@ jobs:
             throw "Expected executable was not found: $env:EXE_PATH"
           }
 
-          $exeAssetName = "$env:ASSET_BASE.exe"
           $zipAssetName = "$env:ASSET_BASE.zip"
-          $exeAsset = Join-Path $assetDir $exeAssetName
           $zipAsset = Join-Path $assetDir $zipAssetName
           $packageDir = Join-Path $stagingDir $env:ASSET_BASE
           $packageConfigDir = Join-Path $packageDir "config"
@@ -228,11 +226,11 @@ jobs:
           New-Item -ItemType Directory -Force -Path $packageDocsDir | Out-Null
           New-Item -ItemType Directory -Force -Path $packageProtocolsDir | Out-Null
 
-          Copy-Item -Path $env:EXE_PATH -Destination $exeAsset -Force
           Copy-Item -Path $env:EXE_PATH -Destination (Join-Path $packageDir "ProtoScope.exe") -Force
           Copy-Item -Path README.md -Destination (Join-Path $packageDir "README.md") -Force
           Copy-Item -Path LICENSE -Destination (Join-Path $packageDir "LICENSE") -Force
           Copy-Item -Path config/protoscope.yaml -Destination (Join-Path $packageConfigDir "protoscope.yaml") -Force
+          Copy-Item -Path config/themes -Destination $packageConfigDir -Recurse -Force
           Copy-Item -Path docs/* -Destination $packageDocsDir -Recurse -Force
           Copy-Item -Path protocols/* -Destination $packageProtocolsDir -Recurse -Force
 
@@ -241,6 +239,9 @@ jobs:
             "README.md",
             "LICENSE",
             "config/protoscope.yaml",
+            "config/themes/graphite_cyan.yaml",
+            "config/themes/warm_industrial.yaml",
+            "config/themes/paper_lab.yaml",
             "docs/user-manual.md",
             "docs/config-reference.md",
             "docs/lua-host-integration.md",
@@ -271,10 +272,6 @@ jobs:
               throw "Release zip is missing required file: $relativePath"
             }
           }
-
-          Get-FileHash -Algorithm SHA256 $exeAsset |
-            ForEach-Object { "$($_.Hash.ToLowerInvariant())  $(Split-Path $_.Path -Leaf)" } |
-            Set-Content -Path (Join-Path $assetDir "$exeAssetName.sha256") -Encoding ASCII
 
           Get-FileHash -Algorithm SHA256 $zipAsset |
             ForEach-Object { "$($_.Hash.ToLowerInvariant())  $(Split-Path $_.Path -Leaf)" } |
@@ -360,9 +357,8 @@ jobs:
           ) + $changes + $luaNotes + @(
             "",
             "Assets:",
-            "- $env:ASSET_BASE.exe: standalone executable",
-            "- $env:ASSET_BASE.zip: executable, README, LICENSE, default config, docs and Lua protocol examples",
-            "- SHA256 checksums"
+            "- $env:ASSET_BASE.zip: complete package with executable, default config, bundled themes, docs and Lua protocol examples",
+            "- SHA256 checksum"
           )
           Set-Content -Path $notesPath -Value $notesLines -Encoding UTF8
 

@@ -679,7 +679,7 @@ namespace {
     {
         // todo)) Flow Layout
         auto& view = wave.view;
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.059F, 0.086F, 0.125F, 1.0F));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, defaultUiStyleTokens().panelBackground);
 
         const ImGuiStyle& style = ImGui::GetStyle();
         const bool reserveHorizontalScrollbar = wave.mainToolbarNeedsHorizontalScroll;
@@ -1042,8 +1042,11 @@ void drawZoomSelectionPreview(ImDrawList& drawList,
                               const ImVec2& selectionStart,
                               const ImVec2& selectionCurrent)
 {
-    const ImU32 fillColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.2F, 0.55F, 1.0F, 0.16F));
-    const ImU32 lineColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.45F, 0.75F, 1.0F, 0.95F));
+    const auto selection = activeWaveStyleTokens().selectionColor;
+    const ImU32 fillColor = ImGui::ColorConvertFloat4ToU32(
+        ImVec4(selection.x, selection.y, selection.z, 0.16F));
+    const ImU32 lineColor = ImGui::ColorConvertFloat4ToU32(
+        ImVec4(selection.x, selection.y, selection.z, 0.95F));
     switch (mode) {
         case ZoomSelectionAxisMode::XOnly: {
             const float lineY = 0.5F * (selectionStart.y + selectionCurrent.y);

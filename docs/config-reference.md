@@ -70,7 +70,9 @@ gui:
 
 - `theme`：主题字符串 ID，内置 `professional_dark`（默认，深墨蓝灰分层与蓝青强调）、
   `debug_high_contrast`（近黑底、明亮信号与清晰焦点）和 `professional_light`（冷白底、白面板与蓝强调）。
-  可选择配置文件旁 `themes` 目录中的 YAML 用户主题。启动加载失败时显示专业深色，
+  发布包另在配置文件旁 `themes` 目录随附 `graphite_cyan`（Graphite + Cyan）、
+  `warm_industrial`（Warm Industrial）和 `paper_lab`（Paper Lab），也可放入其他 YAML 用户主题。
+  启动加载失败时显示专业深色，
   但保留原 ID；缺失字段默认 `professional_dark`。详见 [主题管理与模板](theme-management.md)。
 - 运行中可通过 `设置 -> 主题` 即时切换，无需重启，也不会重载当前协议。
   切换会把配置标记为待保存；启用自动保存时自动写回，否则使用

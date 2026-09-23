@@ -1,0 +1,51 @@
+version: 1
+id: paper_lab
+name: Paper Lab
+base: professional_light
+ui:
+  app_background: '#F3F0E8'
+  panel_background: '#FFFCF5'
+  panel_background_alt: '#EDF1F4'
+  panel_border: '#9AABBD'
+  accent: '#2458B3'
+  accent_muted: '#2458B31F'
+  success: '#17825B'
+  warning: '#A66300'
+  danger: '#B53A46'
+  text_strong: '#172A46'
+  text_muted: '#52647A'
+  generic_plot_background: '#FFFEFA'
+wave:
+  plot_background: '#FFFEFA'
+  grid_major: '#8496AA42'
+  grid_minor_tick: '#70839961'
+  grid_center: '#52647A73'
+  status_overlay_background: '#FFFCF5'
+  status_overlay_border: '#9AABBD'
+  status_overlay_text: '#172A46'
+  channel_separator: '#9AABBD'
+  channel_label: '#52647A'
+  split_channel_label: '#52647A'
+  bit_label: '#52647A'
+  legend_overlay_background: '#FFFCF5'
+  legend_overlay_border: '#9AABBD'
+  legend_overlay_text_primary: '#172A46'
+  legend_overlay_text_secondary: '#52647A'
+  legend_overlay_row_hover: '#E7EDF1'
+  legend_overlay_row_active: '#DCE6EE'
+  legend_overlay_row_active_border: '#2458B3'
+  measurement_overlay_background: '#FFFCF5'
+  measurement_overlay_border: '#9AABBD'
+  measurement_overlay_accent: '#2458B3'
+  measurement_overlay_title: '#172A46'
+  measurement_chip_background: '#EDF1F4'
+  measurement_chip_border: '#9AABBD'
+  measurement_chip_label: '#52647A'
+  measurement_chip_value: '#172A46'
+  selection_color: '#356AE6'
+  channel_palette: ['#2458B3', '#E07A2D', '#7A4FB3', '#17825B', '#356AE6', '#C45A3C', '#8B5E3C', '#008C95']
+  cursor_palette: ['#A66300', '#2458B3', '#356AE6', '#B53A46', '#17825B', '#7A4FB3', '#52647A']
+  correct_contrast: true
+  light_persistence: true
+  selection_min_alpha: 0.10
+  selection_max_alpha: 0.28

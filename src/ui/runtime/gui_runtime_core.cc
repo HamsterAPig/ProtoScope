@@ -1227,7 +1227,9 @@ void GuiRuntime::drawAppHeader(const float menuBarHeight)
     constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                                        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0F, 10.0F));
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07F, 0.09F, 0.13F, 0.98F));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,
+                          ImVec4(tokens.panelBackground.x, tokens.panelBackground.y,
+                                 tokens.panelBackground.z, 0.98F));
     ImGui::PushStyleColor(ImGuiCol_Border, tokens.panelBorder);
     if (ImGui::Begin("现代应用栏", nullptr, flags)) {
         ImGui::TextUnformatted("ProtoScope");

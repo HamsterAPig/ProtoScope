@@ -1,0 +1,51 @@
+version: 1
+id: graphite_cyan
+name: Graphite + Cyan
+base: professional_dark
+ui:
+  app_background: '#0B0F14'
+  panel_background: '#111923'
+  panel_background_alt: '#182431'
+  panel_border: '#355064'
+  accent: '#22D3EE'
+  accent_muted: '#22D3EE33'
+  success: '#39D98A'
+  warning: '#F2C94C'
+  danger: '#FF647C'
+  text_strong: '#E7F2F8'
+  text_muted: '#A9BFCC'
+  generic_plot_background: '#070C12'
+wave:
+  plot_background: '#070C12'
+  grid_major: '#52708642'
+  grid_minor_tick: '#7893A65C'
+  grid_center: '#9AB7C466'
+  status_overlay_background: '#111923'
+  status_overlay_border: '#355064'
+  status_overlay_text: '#E7F2F8'
+  channel_separator: '#355064'
+  channel_label: '#A9BFCC'
+  split_channel_label: '#A9BFCC'
+  bit_label: '#A9BFCC'
+  legend_overlay_background: '#111923'
+  legend_overlay_border: '#355064'
+  legend_overlay_text_primary: '#E7F2F8'
+  legend_overlay_text_secondary: '#A9BFCC'
+  legend_overlay_row_hover: '#132A36'
+  legend_overlay_row_active: '#153743'
+  legend_overlay_row_active_border: '#22D3EE'
+  measurement_overlay_background: '#111923'
+  measurement_overlay_border: '#355064'
+  measurement_overlay_accent: '#22D3EE'
+  measurement_overlay_title: '#E7F2F8'
+  measurement_chip_background: '#182431'
+  measurement_chip_border: '#355064'
+  measurement_chip_label: '#A9BFCC'
+  measurement_chip_value: '#E7F2F8'
+  selection_color: '#3B82F6'
+  channel_palette: ['#22D3EE', '#F6C945', '#E879F9', '#4ADE80', '#3B82F6', '#FF7A90', '#FF9F43', '#A78BFA']
+  cursor_palette: ['#F6C945', '#22D3EE', '#3B82F6', '#FF7A90', '#4ADE80', '#E879F9', '#A9BFCC']
+  correct_contrast: true
+  light_persistence: false
+  selection_min_alpha: 0.10
+  selection_max_alpha: 0.28

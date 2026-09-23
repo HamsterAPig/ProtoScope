@@ -379,7 +379,9 @@ void GuiRuntime::drawStatusBar()
                                        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking |
                                        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0F, 8.0F));
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07F, 0.09F, 0.13F, 0.98F));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,
+                          ImVec4(tokens.panelBackground.x, tokens.panelBackground.y,
+                                 tokens.panelBackground.z, 0.98F));
     ImGui::PushStyleColor(ImGuiCol_Border, tokens.panelBorder);
     if (ImGui::Begin("状态栏", nullptr, flags)) {
         const auto snapshot = makeWaveStatusSnapshot(application_.docks().waveState(),
@@ -655,7 +657,9 @@ void GuiRuntime::drawCommActions(dock::ConfigDockState& configState)
 void GuiRuntime::drawCommParserStatus(const dock::CommDockState& comm)
 {
     if (!comm.lastErrorSummary.empty()) {
-        ImGui::TextColored(ImVec4(1.0F, 0.5F, 0.0F, 1.0F), "解析错误: %s", comm.lastErrorSummary.c_str());
+        const auto& tokens = defaultUiStyleTokens();
+        const auto color = displayColor(tokens.danger, ImGui::GetStyleColorVec4(ImGuiCol_WindowBg), 1.0F, 4.5F);
+        ImGui::TextColored(color, "解析错误: %s", comm.lastErrorSummary.c_str());
     }
 }
 
@@ -1390,8 +1394,13 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, s
             drawLuaControlLeftLabel(descriptor, visibleLabel);
             const std::string text = std::get<std::string>(control.value) +
                 (descriptor.unit.empty() ? "" : " " + descriptor.unit);
+            const auto& tokens = defaultUiStyleTokens();
+            const auto staleColor = displayColor(tokens.warning,
+                                                   ImGui::GetStyleColorVec4(ImGuiCol_WindowBg),
+                                                   1.0F,
+                                                   4.5F);
             ImGui::PushTextWrapPos(0);
-            ImGui::TextColored(stale ? ImVec4(0.94F,0.64F,0.22F,1) : ImGui::GetStyleColorVec4(ImGuiCol_Text),
+            ImGui::TextColored(stale ? staleColor : ImGui::GetStyleColorVec4(ImGuiCol_Text),
                                "%s%s", text.c_str(), stale ? " [stale]" : "");
             ImGui::PopTextWrapPos();
             if (descriptor.showUpdateTime) {
@@ -1403,9 +1412,13 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, s
         case scripting::ControlType::Indicator: {
             drawLuaControlLeftLabel(descriptor, visibleLabel);
             const bool on = std::get<bool>(control.value);
+            const auto& tokens = defaultUiStyleTokens();
+            const auto indicatorColor = displayColor(on ? tokens.success : tokens.danger,
+                                                     ImGui::GetStyleColorVec4(ImGuiCol_WindowBg),
+                                                     1.0F,
+                                                     4.5F);
             ImGui::PushTextWrapPos(0);
-            ImGui::TextColored(on ? ImVec4(0.24F,0.78F,0.47F,1) : ImVec4(0.91F,0.36F,0.34F,1),
-                               "%s", (on ? descriptor.onText : descriptor.offText).c_str());
+            ImGui::TextColored(indicatorColor, "%s", (on ? descriptor.onText : descriptor.offText).c_str());
             ImGui::PopTextWrapPos();
             break;
         }
@@ -1476,7 +1489,7 @@ int GuiRuntime::pushLuaControlFeedbackStyle(const scripting::ControlDescriptor& 
 
     const float alpha =
         1.0F - static_cast<float>(elapsedMs) / static_cast<float>(kVisualFeedbackDurationMs);
-    const ImVec4 accent(0.28F, 0.62F, 1.00F, 1.0F);
+    const auto accent = defaultUiStyleTokens().accent;
     const auto blend = [alpha](ImVec4 base, ImVec4 highlight, float strength) {
         const float amount = (std::clamp)(alpha * strength, 0.0F, 1.0F);
         return ImVec4(base.x + (highlight.x - base.x) * amount,
