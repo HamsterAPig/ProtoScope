@@ -426,26 +426,60 @@ std::vector<std::size_t> WaveQueryView::stableEdgeIndices(
 {
     std::vector<std::size_t> result;
     result.reserve((std::min)(budget, end - begin));
-    const auto add = [&](std::size_t global) {
-        const auto index = global - channel_.sampleIndexOffset;
-        if (std::ranges::find(result, index) == result.end()) result.push_back(index);
+    const auto [viewportBegin, viewportEnd] = range(minTime, maxTime, false);
+    if (viewportBegin == viewportEnd) return result;
+    const bool hasLeftGuard = begin < viewportBegin;
+    const bool hasRightGuard = end > viewportEnd;
+    const auto latest = size() - 1;
+    const bool latestInViewport = latest >= viewportBegin && latest < viewportEnd;
+    const auto addLocal = [&](std::size_t index) {
+        if (index < size() && std::ranges::find(result, index) == result.end()) result.push_back(index);
     };
-    const auto addSummary = [&](const WaveSummary& s) {
-        if (!s.count) return;
-        std::array<std::size_t, 8> indices{s.first, s.last, s.minimum, s.maximum,
-            s.rise > 0 ? s.riseBefore : s.first, s.rise > 0 ? s.riseBefore + 1 : s.first,
-            s.fall > 0 ? s.fallBefore : s.first, s.fall > 0 ? s.fallBefore + 1 : s.first};
+    const auto add = [&](std::size_t global) {
+        addLocal(global - channel_.sampleIndexOffset);
+    };
+    const auto appendSorted = [&](auto& indices) {
         std::ranges::sort(indices);
-        for (const auto global : indices) {
-            const auto index = global - channel_.sampleIndexOffset;
+        for (const auto index : indices) {
+            if (index >= size()) continue;
             if (result.empty() || result.back() < index) result.push_back(index);
         }
     };
-    // 低预算优先端点，再按强度保留完整跳变点对，最后才填入极值。
+    const auto addSummary = [&](const WaveSummary& s) {
+        if (!s.count) return;
+        std::array<std::size_t, 8> indices{
+            s.first - channel_.sampleIndexOffset, s.last - channel_.sampleIndexOffset,
+            s.minimum - channel_.sampleIndexOffset, s.maximum - channel_.sampleIndexOffset,
+            (s.rise > 0 ? s.riseBefore : s.first) - channel_.sampleIndexOffset,
+            (s.rise > 0 ? s.riseBefore + 1 : s.first) - channel_.sampleIndexOffset,
+            (s.fall > 0 ? s.fallBefore : s.first) - channel_.sampleIndexOffset,
+            (s.fall > 0 ? s.fallBefore + 1 : s.first) - channel_.sampleIndexOffset};
+        appendSorted(indices);
+    };
+    const auto addLatestTail = [&](std::size_t bucketBegin) {
+        // 最新样本所在桶尚可能继续增长：固定首锚点，只让最多七个连续原始尾点变化。
+        std::array<std::size_t, 8> indices{};
+        indices.fill(latest);
+        indices[0] = bucketBegin;
+        const auto tailBegin = (std::max)(bucketBegin, latest > 6 ? latest - 6 : std::size_t{0});
+        auto output = std::size_t{1};
+        for (auto index = tailBegin; index <= latest; ++index) indices[output++] = index;
+        appendSorted(indices);
+    };
+    const auto finish = [&]() {
+        std::ranges::sort(result);
+        result.erase(std::unique(result.begin(), result.end()), result.end());
+        if (result.size() > budget) result.resize(budget);
+        return result;
+    };
+
+    // 低预算维持既有 guard 端点语义；空间足够时再保留固定首锚点与连续真实尾点。
     if (budget < 18) {
-        result.push_back(begin);
-        if (budget > 1) result.push_back(end - 1);
-        const auto s = summary(begin, end, counters);
+        addLocal(begin);
+        // 先按升序加入固定锚点和连续真实尾点；尾点集合已经包含最新样本。
+        if (latestInViewport && budget >= 9) addLatestTail(viewportBegin);
+        else if (budget > 1) addLocal(end - 1);
+        const auto s = summary(viewportBegin, viewportEnd, counters);
         std::array<std::pair<double, std::size_t>, 2> jumps{{{s.rise, s.riseBefore}, {s.fall, s.fallBefore}}};
         std::sort(jumps.begin(), jumps.end(), [](auto a, auto b) {
             return a.first == b.first ? a.second < b.second : a.first > b.first;
@@ -459,38 +493,44 @@ std::vector<std::size_t> WaveQueryView::stableEdgeIndices(
         }
         for (const auto index : {s.minimum, s.maximum})
             if (result.size() < budget) add(index);
-        std::ranges::sort(result);
-        return result;
+        return finish();
     }
+
+    // guard 只负责把视口内曲线连接到窗外，摘要和尾桶竞争严格限制在真实视口范围。
+    if (hasLeftGuard) addLocal(begin);
+
     const auto buckets = (budget - 2) / 8;
-    // 完整桶以横轴零点为锚，桶宽只在二倍层级上改变，滚动不会重分完整桶。
+    // 固定桶以横轴零点为锚，桶宽只在二倍层级上改变，追加不会重分已经闭合的桶。
     const auto span = maxTime - minTime;
     const auto requestedWidth = span / static_cast<double>(buckets - 1);
     double width = std::exp2(std::ceil(std::log2(requestedWidth)));
     if (width < requestedWidth) width *= 2;
     if (!(width > 0) || !std::isfinite(width)) {
-        addSummary(summary(begin, end, counters));
-        std::ranges::sort(result);
-        return result;
+        addSummary(summary(viewportBegin, viewportEnd, counters));
+        if (latestInViewport) addLocal(latest);
+        if (hasRightGuard) addLocal(viewportEnd);
+        return finish();
     }
-    result.push_back(begin);
+
     const auto firstBucket = std::floor(minTime / width);
-    auto left = begin;
-    for (std::size_t bucket = 0; bucket < buckets; ++bucket) {
-        auto right = end;
+    auto left = viewportBegin;
+    for (std::size_t bucket = 0; bucket < buckets && left < viewportEnd; ++bucket) {
+        auto right = viewportEnd;
         if (bucket + 1 < buckets) {
-            const auto t = (firstBucket + static_cast<double>(bucket + 1)) * width;
-            right = range(t, t, false).first;
-            right = (std::clamp)(right, left, end);
+            const auto boundary = (firstBucket + static_cast<double>(bucket + 1)) * width;
+            right = (std::clamp)(range(boundary, boundary, false).first, left, viewportEnd);
         }
-        // 左邻点纳入当前摘要，桶边界上的跳变也必须保留原始点对。
-        if (right > left) addSummary(summary(left > begin ? left - 1 : left, right, counters));
+        if (right == left) continue;
+        if (latestInViewport && latest >= left && latest < right) {
+            addLatestTail(left);
+        } else {
+            // 闭合桶继续保留首尾、极值与最强升降沿；左邻点补足跨桶边界的真实点对。
+            addSummary(summary(left > viewportBegin ? left - 1 : left, right, counters));
+        }
         left = right;
-        if (left == end) break;
     }
-    add(end - 1 + channel_.sampleIndexOffset);
-    std::ranges::sort(result);
-    return result;
+    if (hasRightGuard) addLocal(viewportEnd);
+    return finish();
 }
 
 std::vector<WaveSample> WaveQueryView::extract(double minTime, double maxTime) const
