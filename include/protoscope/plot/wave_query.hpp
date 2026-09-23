@@ -117,7 +117,7 @@ public:
                                           std::size_t budget,
                                           WaveQueryCounters* counters = nullptr,
                                           bool guards = true,
-                                          WaveDownsampleMode mode = WaveDownsampleMode::StableEdges) const;
+                                          WaveDownsampleMode mode = WaveDownsampleMode::LegacyUniform) const;
     std::vector<WaveSample> extract(double minTime, double maxTime) const;
     std::vector<WaveDigitalBucket> digitalBuckets(double minTime,
                                                   double maxTime,

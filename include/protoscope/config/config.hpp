@@ -130,7 +130,7 @@ struct GuiWaveConfig {
     bool interactionAnimationEnabled{true};
     bool zoomSelectionAutoExit{false};
     bool peakDetectDownsample{true};
-    plot::WaveDownsampleMode downsampleMode{plot::WaveDownsampleMode::StableEdges};
+    plot::WaveDownsampleMode downsampleMode{plot::WaveDownsampleMode::LegacyUniform};
     plot::WaveBitDenseRenderMode bitDenseRenderMode{plot::WaveBitDenseRenderMode::CompressedSteps};
     std::size_t maxRenderPointsPerChannel{1200};
     std::size_t maxRenderVertices{60000};

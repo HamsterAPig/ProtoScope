@@ -2896,6 +2896,8 @@ void test_config_repo_default_yaml_loads()
     require(loaded.config.gui.theme == protoscope::config::GuiTheme::ProfessionalDark,
             "源码默认配置应读取 professional_dark 主题");
     require(loaded.config.gui.wave.peakDetectDownsample, "源码默认配置应开启 peak-detect 降采样");
+    require(loaded.config.gui.wave.downsampleMode == protoscope::plot::WaveDownsampleMode::LegacyUniform,
+            "源码默认配置应使用 legacy_uniform 降采样");
     require(loaded.config.gui.wave.legendOverlayDoubleClickAutoCollapse, "源码默认配置应开启图例双击展开自动收起");
     require(loaded.config.gui.interactionFeedback.enabled, "源码默认配置应开启全局交互反馈");
     require(loaded.config.gui.interactionFeedback.statusDurationMs == 2000,

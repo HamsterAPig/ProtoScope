@@ -219,7 +219,8 @@ void testAnalogEdgeStability()
                     for (int pan = 0; pan < 240; pan += 3) {
                         const auto first = query.time(std::size_t(pan));
                         const auto last = query.time(std::size_t(pan + 3000));
-                        const auto trace = query.traceIndices(first, last, budget);
+                        const auto trace = query.traceIndices(first, last, budget,
+                                                              nullptr, true, WaveDownsampleMode::StableEdges);
                         require(trace.size() <= budget, "analog strict point budget");
                         require(std::is_sorted(trace.begin(), trace.end()), "analog trace order");
                         require(std::adjacent_find(trace.begin(), trace.end()) == trace.end(), "analog unique points");
@@ -235,7 +236,8 @@ void testAnalogEdgeStability()
                     }
                 }
                 for (std::size_t budget = 0; budget < 24; ++budget) {
-                    const auto trace = query.traceIndices(query.time(0), query.time(3000), budget);
+                    const auto trace = query.traceIndices(query.time(0), query.time(3000), budget,
+                                                          nullptr, true, WaveDownsampleMode::StableEdges);
                     require(trace.size() <= budget, "small analog budget");
                     if (budget >= 2)
                         require(trace.front() == 0 && trace.back() == 3001, "small budget keeps guarded endpoints");
@@ -264,7 +266,8 @@ void testIrregularAnalogEdges()
     const WaveQueryView query(snapshot.channels[0], WaveTimeAxisSource::ScriptTime, 0, snapshot.config.displayFormula);
     for (const auto budget : {18U, 24U, 32U, 80U, 1200U}) {
         for (int pan = 0; pan < 100; ++pan) {
-            const auto trace = query.traceIndices(-3900 + pan * 0.7, 7000 + pan * 0.7, budget);
+            const auto trace = query.traceIndices(-3900 + pan * 0.7, 7000 + pan * 0.7, budget,
+                                                  nullptr, true, WaveDownsampleMode::StableEdges);
             require(trace.size() <= budget, "irregular analog budget");
             for (const auto i : {4095U, 4096U, 4097U, 4098U})
                 require(std::ranges::find(trace, i) != trace.end(), "irregular pulse lost original edge neighbors");
@@ -273,10 +276,11 @@ void testIrregularAnalogEdges()
     for (const auto budget : {0U, 1U, 2U, 3U, 8U, 18U, 1200U})
         for (const auto bounds : {std::pair{-1e300, 1e300}, std::pair{7000.0, -3900.0},
                                  std::pair{0.0, 0.0}, std::pair{1e6, 1e7}})
-            require(query.traceIndices(bounds.first, bounds.second, budget).size() <= budget,
+            require(query.traceIndices(bounds.first, bounds.second, budget,
+                                       nullptr, true, WaveDownsampleMode::StableEdges).size() <= budget,
                     "degenerate window budget");
     WaveQueryCounters counters;
-    query.traceIndices(-3900, 7000, 80, &counters);
+    query.traceIndices(-3900, 7000, 80, &counters, true, WaveDownsampleMode::StableEdges);
     require(counters.summaryHits > 0 && counters.rawSamples < samples.size() / 2,
             "analog query must reuse summary index");
 }
@@ -403,7 +407,7 @@ int main()
             snap.channels[0], WaveTimeAxisSource::SampleFrequency, 2, WaveDisplayFormula::ScaleThenOffset);
         require(query.sample(255).value == samples[255].value * -6 + 5, "negative transform");
         require(query.time(256) == 128, "sample frequency time");
-        const auto trace = query.traceIndices(0, 5000, 1200);
+        const auto trace = query.traceIndices(0, 5000, 1200, nullptr, true, WaveDownsampleMode::StableEdges);
         require(trace.size() <= 1200, "point budget");
         require(std::ranges::find(trace, 255) != trace.end(), "boundary pulse");
         require(std::ranges::find(trace, 256) != trace.end(), "boundary negative pulse");

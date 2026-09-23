@@ -699,8 +699,8 @@ namespace {
             readScalar<bool>(wave, "zoom_selection_auto_exit", config.gui.wave.zoomSelectionAutoExit);
         config.gui.wave.peakDetectDownsample =
             readScalar<bool>(wave, "peak_detect_downsample", config.gui.wave.peakDetectDownsample);
-        config.gui.wave.downsampleMode = readScalar<std::string>(wave, "downsample_mode", "stable_edges") ==
-            "legacy_uniform" ? plot::WaveDownsampleMode::LegacyUniform : plot::WaveDownsampleMode::StableEdges;
+        config.gui.wave.downsampleMode = readScalar<std::string>(wave, "downsample_mode", "legacy_uniform") ==
+            "stable_edges" ? plot::WaveDownsampleMode::StableEdges : plot::WaveDownsampleMode::LegacyUniform;
         const auto bitDenseMode = readScalar<std::string>(wave, "bit_dense_render_mode", "compressed_steps");
         config.gui.wave.bitDenseRenderMode = bitDenseMode == "activity_band"
             ? plot::WaveBitDenseRenderMode::ActivityBand : plot::WaveBitDenseRenderMode::CompressedSteps;

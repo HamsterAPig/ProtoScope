@@ -17,11 +17,15 @@ void require(bool ok, const char* message)
 
 void testConfig()
 {
+    require(config::AppConfig{}.gui.wave.downsampleMode == WaveDownsampleMode::LegacyUniform,
+            "AppConfig 默认应使用 LegacyUniform");
+    require(plot::WaveViewState{}.downsampleMode == WaveDownsampleMode::LegacyUniform,
+            "WaveViewState 默认应使用 LegacyUniform");
     config::ConfigStore configs;
     for (const auto text : {"stable_edges", "legacy_uniform", "unknown", ""}) {
         const auto loaded = configs.loadText(std::string("gui:\n  wave:\n    downsample_mode: '") + text + "'\n");
-        const auto expected = std::string_view(text) == "legacy_uniform"
-            ? WaveDownsampleMode::LegacyUniform : WaveDownsampleMode::StableEdges;
+        const auto expected = std::string_view(text) == "stable_edges"
+            ? WaveDownsampleMode::StableEdges : WaveDownsampleMode::LegacyUniform;
         require(loaded.error.empty() && loaded.config.gui.wave.downsampleMode == expected, "config parse");
         dock::DockStore docks;
         configs.applyToDock(loaded.config, docks);
@@ -37,10 +41,58 @@ void testConfig()
         const auto fromDisk = configs.load(path);
         require(fromDisk.loadedFromDisk && fromDisk.config.gui.wave.downsampleMode == expected, "startup disk load");
         configs.applyToDock(configs.loadText("gui:\n  wave:\n    peak_detect_downsample: false\n").config, docks);
-        require(docks.waveState().view.downsampleMode == WaveDownsampleMode::StableEdges, "missing mode on reload");
+        require(docks.waveState().view.downsampleMode == WaveDownsampleMode::LegacyUniform, "missing mode on reload");
     }
-    require(configs.loadText("{}").config.gui.wave.downsampleMode == WaveDownsampleMode::StableEdges,
+    require(configs.loadText("{}").config.gui.wave.downsampleMode == WaveDownsampleMode::LegacyUniform,
             "missing wave config default");
+}
+
+void testDefaultQueryMode()
+{
+    // 窄预算与远离桶边界的阶跃确保真正降采样，且两种算法不能碰巧给出相同结果。
+    plot::OscilloscopeBuffer buffer;
+    std::vector<plot::WaveSample> samples;
+    for (int i = 0; i < 10000; ++i) samples.push_back({double(i), double(i >= 1234 && i < 4567)});
+    buffer.append(0, {{}, samples});
+    constexpr std::size_t budget = 80;
+    constexpr double minTime = 100.25, maxTime = 8100.75;
+    const auto snapshot = buffer.snapshot(minTime, maxTime, false);
+    const plot::WaveQueryView query(snapshot.channels[0], plot::WaveTimeAxisSource::ScriptTime,
+                                    0, snapshot.config.displayFormula);
+    const auto implicit = query.traceIndices(minTime, maxTime, budget);
+    const auto legacy = query.traceIndices(minTime, maxTime, budget, nullptr, true,
+                                           WaveDownsampleMode::LegacyUniform);
+    const auto stable = query.traceIndices(minTime, maxTime, budget, nullptr, true,
+                                           WaveDownsampleMode::StableEdges);
+    require(!implicit.empty() && implicit.size() <= budget && implicit.size() < samples.size(),
+            "默认查询必须执行非平凡降采样并遵守预算");
+    require(implicit == legacy, "traceIndices 省略模式应等同显式 LegacyUniform");
+    require(implicit != stable, "查询样本必须区分默认模式与 StableEdges");
+
+    // 同时覆盖省略全部可选参数及只显式传入视口的调用形式。
+    for (const auto range : {std::optional<std::pair<double, double>>{},
+                             std::optional{std::pair{minTime, maxTime}}}) {
+        plot::WaveDisplayData defaultData, legacyData, stableData;
+        if (range)
+            plot::buildQueryDisplayDataInto(snapshot, 0, budget, defaultData, range);
+        else
+            plot::buildQueryDisplayDataInto(snapshot, 0, budget, defaultData);
+        plot::buildQueryDisplayDataInto(snapshot, 0, budget, legacyData, range, WaveDownsampleMode::LegacyUniform);
+        plot::buildQueryDisplayDataInto(snapshot, 0, budget, stableData, range, WaveDownsampleMode::StableEdges);
+        const auto& actual = defaultData.channels[0];
+        const auto& expected = legacyData.channels[0];
+        require(!actual.samples.empty() && actual.samples.size() <= budget && actual.samples.size() < samples.size(),
+                "默认显示构建必须执行非平凡降采样并遵守预算");
+        require(actual.sourceIndices == expected.sourceIndices && actual.actualValues == expected.actualValues &&
+                    actual.samples.size() == expected.samples.size(),
+                "buildQueryDisplayDataInto 省略模式应等同显式 LegacyUniform");
+        require(actual.sourceIndices != stableData.channels[0].sourceIndices,
+                "显示样本必须区分默认模式与 StableEdges");
+        for (std::size_t i = 0; i < actual.samples.size(); ++i)
+            require(actual.samples[i].time == expected.samples[i].time &&
+                        actual.samples[i].value == expected.samples[i].value,
+                    "默认显示轨迹时间和值应与 LegacyUniform 一致");
+    }
 }
 
 void testDisplaySwitch()
@@ -77,7 +129,8 @@ void testDisplaySwitch()
         const plot::WaveQueryView query(*display.source, display.axis, display.frequency, display.formula);
         const auto& source = frame.snapshot.channels[0];
         const auto expected = mode == WaveDownsampleMode::StableEdges
-            ? query.traceIndices(view.viewMinTime, view.viewMaxTime, frame.renderBudget.pointsPerChannel)
+            ? query.traceIndices(view.viewMinTime, view.viewMaxTime, frame.renderBudget.pointsPerChannel,
+                                 nullptr, true, WaveDownsampleMode::StableEdges)
             : query.traceIndices(query.time(source.visibleBegin), query.time(source.visibleEnd - 1),
                                  frame.renderBudget.pointsPerChannel, nullptr, false, mode);
         require(display.sourceIndices == expected, "display uses correct range and strategy");
@@ -129,9 +182,11 @@ void testLegacyDrawingGolden()
                 envelope[i].maxValue == expected[i].maxValue && envelope[i].sampleCount == expected[i].sampleCount,
                 "legacy drawing envelope golden");
     plot::WaveDockState::RenderEnvelopeCacheKey a, b;
+    a.downsampleMode = WaveDownsampleMode::StableEdges;
     b.downsampleMode = WaveDownsampleMode::LegacyUniform;
     require(!(a == b), "envelope cache key separates modes");
     plot::WaveDockState::OverviewRenderKey c, d;
+    c.downsampleMode = WaveDownsampleMode::StableEdges;
     d.downsampleMode = WaveDownsampleMode::LegacyUniform;
     require(!(c == d), "overview render key separates modes");
 }
@@ -141,6 +196,7 @@ int main()
 {
     try {
         testConfig();
+        testDefaultQueryMode();
         testDisplaySwitch();
         testLegacyDrawingGolden();
         std::cout << "wave downsample mode: all checks passed\n";

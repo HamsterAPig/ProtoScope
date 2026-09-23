@@ -287,7 +287,7 @@ struct WaveViewState {
     double visibleDuration{1.0};
     double minVisibleTimeSpan{0.001};
     double downsampleStartMultiplier{2.0};
-    WaveDownsampleMode downsampleMode{WaveDownsampleMode::StableEdges};
+    WaveDownsampleMode downsampleMode{WaveDownsampleMode::LegacyUniform};
     std::uint64_t phosphorResetGeneration{0};
     double channelCardFixedWidth{128.0};
     double channelCardAdaptiveRatio{0.22};
@@ -406,11 +406,11 @@ struct WaveDockState {
     bool mainToolbarNeedsHorizontalScroll{true};
     std::uint64_t displayDataRevision{0};
     double displayDataSampleFrequencyHz{0.0};
-    WaveDownsampleMode displayDataDownsampleMode{WaveDownsampleMode::StableEdges};
+    WaveDownsampleMode displayDataDownsampleMode{WaveDownsampleMode::LegacyUniform};
     std::size_t lastLegendMeasurementChannelIndex{static_cast<std::size_t>(-1)};
 
     struct DisplayDataCacheKey {
-        WaveDownsampleMode downsampleMode{WaveDownsampleMode::StableEdges};
+        WaveDownsampleMode downsampleMode{WaveDownsampleMode::LegacyUniform};
         std::uint64_t dataRevision{0};
         double sampleFrequencyHz{0.0};
         double viewMinTime{0.0};
@@ -430,7 +430,7 @@ struct WaveDockState {
     };
 
     struct OverviewDisplayDataCacheKey {
-        WaveDownsampleMode downsampleMode{WaveDownsampleMode::StableEdges};
+        WaveDownsampleMode downsampleMode{WaveDownsampleMode::LegacyUniform};
         std::uint64_t dataRevision{0};
         double sampleFrequencyHz{0.0};
         std::size_t channelCount{0};
@@ -448,7 +448,7 @@ struct WaveDockState {
     };
 
     struct RenderEnvelopeCacheKey {
-        WaveDownsampleMode downsampleMode{WaveDownsampleMode::StableEdges};
+        WaveDownsampleMode downsampleMode{WaveDownsampleMode::LegacyUniform};
         std::uint64_t dataRevision{0};
         double sampleFrequencyHz{0.0};
         double visibleMinTime{0.0};
@@ -534,7 +534,7 @@ struct WaveDockState {
         double frequency{0}, minTime{0}, maxTime{0}, ratio{1}, scale{1}, offset{0};
         WaveDisplayFormula formula{WaveDisplayFormula::OffsetThenScale};
         bool normalize{false};
-        WaveDownsampleMode downsampleMode{WaveDownsampleMode::StableEdges};
+        WaveDownsampleMode downsampleMode{WaveDownsampleMode::LegacyUniform};
         bool operator==(const OverviewRenderKey&) const = default;
     };
     struct OverviewRenderEntry {

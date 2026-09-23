@@ -67,7 +67,7 @@ gui:
     max_render_vertices: 60000
     peak_detect_downsample: true
     # stable_edges: 稳定分桶并保留边沿邻点；legacy_uniform: 旧版均匀分桶及绘制路径
-    downsample_mode: stable_edges
+    downsample_mode: legacy_uniform
     downsample_start_multiplier: 2.0
     overview_max_samples: 20000
     min_visible_time_span: 0.001

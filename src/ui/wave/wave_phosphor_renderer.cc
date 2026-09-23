@@ -294,7 +294,7 @@ void main()
         bool viewportInvalid_{false};
         std::uint64_t lastResetGeneration_{0};
         std::uint64_t lastThemeRevision_{0};
-        plot::WaveDownsampleMode lastDownsampleMode_{plot::WaveDownsampleMode::StableEdges};
+        plot::WaveDownsampleMode lastDownsampleMode_{plot::WaveDownsampleMode::LegacyUniform};
         std::optional<ImPlotRect> lastViewport_;
 
         bool textureApiAvailable() const

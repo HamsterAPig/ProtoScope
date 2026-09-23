@@ -168,7 +168,7 @@ void buildDisplayDataInto(const WaveSnapshot& snapshot, double sampleFrequencyHz
 void buildQueryDisplayDataInto(const WaveSnapshot& snapshot, double sampleFrequencyHz,
                               std::size_t pointBudget, WaveDisplayData& data,
                               std::optional<std::pair<double, double>> timeRange = std::nullopt,
-                              WaveDownsampleMode mode = WaveDownsampleMode::StableEdges);
+                              WaveDownsampleMode mode = WaveDownsampleMode::LegacyUniform);
 WaveDisplayChannel extractDisplayWindow(const WaveDisplayChannel& channel, double minTime, double maxTime,
                                        bool guards = false);
 WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFrequencyHz);
