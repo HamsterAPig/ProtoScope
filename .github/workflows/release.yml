@@ -115,7 +115,11 @@ jobs:
           }
 
           "Checking whitespace in range: $range"
-          git diff --check $range
+          # SQLite 上游源码保持原样，仅排除其空白检查，适配层和构建文件仍需检查。
+          git diff --check $range -- . `
+            ':(exclude)3rdparty/sqlite/sqlite3.c' `
+            ':(exclude)3rdparty/sqlite/sqlite3.h' `
+            ':(exclude)3rdparty/sqlite/sqlite3ext.h'
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
