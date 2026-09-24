@@ -109,6 +109,15 @@ void test_ui_theme_high_contrast_tokens_and_grid_contrast()
 
     ImGui::CreateContext();
     ImPlot::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1280.0F, 720.0F);
+    io.DeltaTime = 1.0F / 60.0F;
+    io.IniFilename = nullptr;
+    unsigned char* pixels = nullptr;
+    int atlasWidth = 0;
+    int atlasHeight = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &atlasWidth, &atlasHeight);
+    ImGui::NewFrame();
     protoscope::ui::applyUiTheme(protoscope::config::GuiTheme::ProfessionalDark);
     requireColor(ImGui::GetStyle().Colors[ImGuiCol_WindowBg],
                  rgb8(15, 23, 34),
@@ -240,6 +249,7 @@ void test_ui_theme_high_contrast_tokens_and_grid_contrast()
         }
     }
     protoscope::ui::applyUiTheme(protoscope::config::GuiTheme::ProfessionalDark);
+    ImGui::EndFrame();
     ImPlot::DestroyContext();
     ImGui::DestroyContext();
 }
