@@ -9,6 +9,11 @@
 #include <iostream>
 #include <thread>
 
+#if defined(_MSC_VER)
+#include <crtdbg.h>
+#include <cstdlib>
+#endif
+
 namespace protoscope::ui {
 struct GuiRuntimeTestAccess {
     static void draw(GuiRuntime& runtime, const std::vector<scripting::ControlSnapshot>& controls,
@@ -121,6 +126,14 @@ void capture(const std::filesystem::path& directory, int width, int height)
 
 int main(int argc,char** argv)
 {
+#if defined(_MSC_VER)
+    _set_error_mode(_OUT_TO_STDERR);
+    _set_abort_behavior(_WRITE_ABORT_MSG,_WRITE_ABORT_MSG|_CALL_REPORTFAULT);
+    _CrtSetReportMode(_CRT_ASSERT,_CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT,_CRTDBG_FILE_STDERR);
+    _CrtSetReportMode(_CRT_ERROR,_CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ERROR,_CRTDBG_FILE_STDERR);
+#endif
     using namespace protoscope;
     if (argc<2) return 2;
     const bool withGl=argc>2;
@@ -141,7 +154,7 @@ int main(int argc,char** argv)
     iconConfig.MergeMode=true;
     static constexpr ImWchar iconRanges[]={0xf000,0xf8ff,0};
     const auto iconPath=std::filesystem::absolute(argv[1]).parent_path().parent_path()/"assets/fonts/fa-solid-900.ttf";
-    if (!io.Fonts->AddFontFromFileTTF(iconPath.string().c_str(),13.0F,&iconConfig,iconRanges)) return 2;
+    if (!io.Fonts->AddFontFromFileTTF(iconPath.string().c_str(),0.0F,&iconConfig,iconRanges)) return 2;
     unsigned char* pixels;int w,h;
     if (withGl) {
         if (!ImGui_ImplOpenGL3_Init("#version 130")) return 2;
