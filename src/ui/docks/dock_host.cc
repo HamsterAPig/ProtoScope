@@ -853,9 +853,6 @@ void GuiRuntime::drawTransferLogSection(float logHeight)
                                           parsedFrames)) {
                 receive.displayMode =
                     parsedFrames ? dock::TransferLogDisplayMode::RawChunks : dock::TransferLogDisplayMode::ParsedFrames;
-                if (receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames) {
-                    application_.activateParsedTransferLogView();
-                }
             }
 
             ImGui::TableSetColumnIndex(7);
@@ -899,14 +896,17 @@ void GuiRuntime::drawTransferLogSection(float logHeight)
         const auto& filteredRows =
             filteredLogRowsCached(transferLogRowsCache_, visibleRows, visibleRowsVersion, receive.filter, true);
 
-        drawTransferLogRows(
-            "transfer_rows",
-            filteredRows.rows,
-            receive.showTimestamps,
-            receive.showHex,
-            receive.pauseScroll,
-            receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames ? "暂无已解析帧" : "暂无 TX/RX 原始数据",
-            filteredRows.endpointWidth);
+        const bool hasStreamSchema = application_.rawCaptureReplayStatus().hasStreamSchema;
+        const char* emptyMessage = receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames
+                                       ? (hasStreamSchema ? "暂无已解析帧" : "当前协议没有 stream schema，无法生成逐帧记录")
+                                       : "暂无 TX/RX 原始数据";
+        drawTransferLogRows("transfer_rows",
+                            filteredRows.rows,
+                            receive.showTimestamps,
+                            receive.showHex,
+                            receive.pauseScroll,
+                            emptyMessage,
+                            filteredRows.endpointWidth);
     }
     ImGui::EndChild();
 }

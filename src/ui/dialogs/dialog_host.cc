@@ -546,7 +546,8 @@ void GuiRuntime::openUnifiedDataImport()
     focusUnifiedDataDialog_ = true;
     unifiedDataError_.clear();
     unifiedExportMode_ = false;
-    importParseWaveform_ = false;
+    importProcessingMode_ = 0;
+    importReplayPacing_ = 1;
     unifiedDataDialogOpen_ = true;
 #if defined(_WIN32)
     const auto path = builtinFileDialog(window_, L"导入数据",
@@ -680,11 +681,27 @@ void GuiRuntime::drawUnifiedDataDialog()
                 ImGui::TextWrapped("波形范围: %s", status.metadata.waveform->rangeDescription.c_str());
             if (status.includesRecords) ImGui::TextWrapped("收发范围: %s", status.metadata.rangeDescription.c_str());
             if (status.includesRecords && !status.metadata.waveform) {
-                protoscope::ui::beginDisabled(!application_.docks().luaState().loaded);
-                ImGui::Checkbox("使用当前协议解析波形", &importParseWaveform_);
-                protoscope::ui::endDisabled();
+                ImGui::TextUnformatted("处理方式（互斥，默认不执行 Lua）");
+                ImGui::RadioButton("仅浏览原始 RX/TX", &importProcessingMode_, 0);
+                ImGui::RadioButton("使用当前磁盘协议重新解析", &importProcessingMode_, 1);
+                if (status.hasPackageProtocol) {
+                    ImGui::RadioButton("使用现场包内协议重新解析（执行外部 Lua）", &importProcessingMode_, 2);
+                }
+                if (importProcessingMode_ != 0) {
+                    ImGui::Combo("重放节奏", &importReplayPacing_, "按原始时间轴\0快速分批解析\0");
+                }
             }
-            if (ImGui::Button("确认替换并导入")) application_.confirmDataImport(importParseWaveform_);
+            if (ImGui::Button("确认替换并导入")) {
+                const auto processing = importProcessingMode_ == 1
+                                            ? app::Application::OfflineReplayProcessing::CurrentProtocol
+                                            : importProcessingMode_ == 2
+                                                  ? app::Application::OfflineReplayProcessing::PackageProtocol
+                                                  : app::Application::OfflineReplayProcessing::BrowseRaw;
+                const auto pacing = importReplayPacing_ == 0
+                                        ? app::Application::OfflineReplayPacing::OriginalTimeline
+                                        : app::Application::OfflineReplayPacing::FastBatchParse;
+                application_.confirmDataImport(processing, pacing);
+            }
         } else {
             const float progress = status.total ? static_cast<float>(status.submitted) / static_cast<float>(status.total) :
                                    status.complete ? 1.0F : 0.0F;
@@ -1141,38 +1158,19 @@ void GuiRuntime::openElfStaticAddressDialog()
 void GuiRuntime::importRawCaptureFromPath(const std::filesystem::path& path)
 {
     rememberFileDialogPath(path, false);
-    // 核心流程：原生对话框和非 Windows 回退弹窗共用同一条导入链路，避免两套行为分叉。
     rawCaptureImportPath_ = fileDialogPathText(path);
-    std::string error;
-    const auto capture = plot::readRawCaptureFile(path, error);
-    if (!capture.has_value()) {
-        rawCaptureImportError_ = error;
-        application_.setStatusMessage("原始波形导入失败: " + error);
-        return;
-    }
-    std::error_code protocolEntryError;
-    if (!std::filesystem::exists(configStore_.mainLuaPath(capture->protocolDir), protocolEntryError)) {
-        rawCaptureImportError_ = "导入文件引用的协议目录不存在: " + capture->protocolDir;
-        if (protocolEntryError) {
-            rawCaptureImportError_ += " (" + protocolEntryError.message() + ")";
-        }
+    rawCaptureImportError_.clear();
+    unifiedDataPath_ = rawCaptureImportPath_;
+    unifiedExportMode_ = false;
+    unifiedDataDialogOpen_ = true;
+    importProcessingMode_ = 0;
+    importReplayPacing_ = 1;
+    if (!application_.startDataImport(path, rawCaptureImportError_)) {
         application_.setStatusMessage("原始波形导入失败: " + rawCaptureImportError_);
         return;
     }
-
-    const auto& currentLua = application_.docks().luaState();
-    if (currentLua.protocolDir != capture->protocolDir && !switchProtocolWorkspace(capture->protocolDir, false)) {
-        rawCaptureImportError_ = "切换导入协议失败";
-        application_.setStatusMessage("原始波形导入失败: " + rawCaptureImportError_);
-    } else if (!application_.importWaveRawCapture(*capture, error)) {
-        rawCaptureImportError_ = error;
-        application_.setStatusMessage("原始波形导入失败: " + error);
-    } else {
-        application_.setStatusMessage("原始波形导入成功");
-        rawCaptureImportDialogOpen_ = false;
-        rawCaptureImportDialogOpened_ = false;
-        rawCaptureImportError_.clear();
-    }
+    rawCaptureImportDialogOpen_ = false;
+    rawCaptureImportDialogOpened_ = false;
 }
 
 void GuiRuntime::importCsvDataFromPath(const std::filesystem::path& path)
@@ -1204,34 +1202,13 @@ void GuiRuntime::importCsvDataFromPath(const std::filesystem::path& path)
         return;
     }
 
-    const auto capture = plot::readRawCaptureCsvFile(path, error);
-    if (!capture.has_value()) {
-        csvDataImportError_ = error;
-        application_.setStatusMessage("CSV 数据导入失败: " + error);
-        return;
-    }
-    std::error_code protocolEntryError;
-    if (!capture->protocolDir.empty() &&
-        !std::filesystem::exists(configStore_.mainLuaPath(capture->protocolDir), protocolEntryError)) {
-        csvDataImportError_ = "导入文件引用的协议目录不存在: " + capture->protocolDir;
-        if (protocolEntryError) {
-            csvDataImportError_ += " (" + protocolEntryError.message() + ")";
-        }
+    unifiedDataPath_ = csvDataImportPath_;
+    unifiedExportMode_ = false;
+    unifiedDataDialogOpen_ = true;
+    importProcessingMode_ = 0;
+    importReplayPacing_ = 1;
+    if (!application_.startDataImport(path, csvDataImportError_)) {
         application_.setStatusMessage("CSV 数据导入失败: " + csvDataImportError_);
-        return;
-    }
-
-    const auto& currentLua = application_.docks().luaState();
-    if (!capture->protocolDir.empty() && currentLua.protocolDir != capture->protocolDir &&
-        !switchProtocolWorkspace(capture->protocolDir, false)) {
-        csvDataImportError_ = "切换导入协议失败";
-        application_.setStatusMessage("CSV 数据导入失败: " + csvDataImportError_);
-    } else if (!application_.importWaveRawCapture(*capture, error)) {
-        csvDataImportError_ = error;
-        application_.setStatusMessage("CSV 数据导入失败: " + error);
-    } else {
-        application_.setStatusMessage("原始事件 CSV 导入成功");
-        csvDataImportError_.clear();
     }
 }
 
@@ -1286,50 +1263,18 @@ void GuiRuntime::loadRawCaptureReplayTimelineFromPath(const std::filesystem::pat
 {
     rememberFileDialogPath(path, false);
     rawCaptureReplayTimelinePath_ = fileDialogPathText(path);
-    std::string error;
-    std::optional<plot::RawCaptureFileData> capture;
-    const auto csvKind = plot::detectCsvKind(path, error);
-    if (csvKind == plot::CsvKind::Wave) {
-        rawCaptureReplayTimelineError_ = "波形 CSV 不能作为原始回放时间轴载入";
+    unifiedDataPath_ = rawCaptureReplayTimelinePath_;
+    unifiedExportMode_ = false;
+    unifiedDataDialogOpen_ = true;
+    importProcessingMode_ = 0;
+    importReplayPacing_ = 0;
+    rawCaptureReplayTimelineError_.clear();
+    if (!application_.startDataImport(path, rawCaptureReplayTimelineError_)) {
         application_.setStatusMessage("原始回放时间轴载入失败: " + rawCaptureReplayTimelineError_);
         return;
     }
-    if (csvKind == plot::CsvKind::RawEvents) {
-        capture = plot::readRawCaptureCsvFile(path, error);
-    } else {
-        error.clear();
-        capture = plot::readRawCaptureFile(path, error);
-    }
-    if (!capture.has_value()) {
-        rawCaptureReplayTimelineError_ = error;
-        application_.setStatusMessage("原始回放时间轴载入失败: " + error);
-        return;
-    }
-    std::error_code protocolEntryError;
-    if (!capture->protocolDir.empty() &&
-        !std::filesystem::exists(configStore_.mainLuaPath(capture->protocolDir), protocolEntryError)) {
-        rawCaptureReplayTimelineError_ = "回放文件引用的协议目录不存在: " + capture->protocolDir;
-        if (protocolEntryError) {
-            rawCaptureReplayTimelineError_ += " (" + protocolEntryError.message() + ")";
-        }
-        application_.setStatusMessage("原始回放时间轴载入失败: " + rawCaptureReplayTimelineError_);
-        return;
-    }
-
-    const auto& currentLua = application_.docks().luaState();
-    if (!capture->protocolDir.empty() && currentLua.protocolDir != capture->protocolDir &&
-        !switchProtocolWorkspace(capture->protocolDir, false)) {
-        rawCaptureReplayTimelineError_ = "切换回放协议失败";
-        application_.setStatusMessage("原始回放时间轴载入失败: " + rawCaptureReplayTimelineError_);
-    } else if (!application_.loadRawCaptureReplayTimeline(*capture, error)) {
-        rawCaptureReplayTimelineError_ = error;
-        application_.setStatusMessage("原始回放时间轴载入失败: " + error);
-    } else {
-        application_.setStatusMessage("原始回放时间轴已载入");
-        rawCaptureReplayTimelineDialogOpen_ = false;
-        rawCaptureReplayTimelineDialogOpened_ = false;
-        rawCaptureReplayTimelineError_.clear();
-    }
+    rawCaptureReplayTimelineDialogOpen_ = false;
+    rawCaptureReplayTimelineDialogOpened_ = false;
 }
 
 void GuiRuntime::startRawCaptureRecordingToPath(const std::filesystem::path& path)
@@ -1352,18 +1297,19 @@ void GuiRuntime::importSessionPackageFromPath(const std::filesystem::path& path)
 {
     rememberFileDialogPath(path, false);
     sessionPackageImportPath_ = fileDialogPathText(path);
-    std::string error;
-    if (!application_.importSessionPackage(path, error)) {
-        sessionPackageImportError_ = error;
-        application_.setStatusMessage("现场会话包导入失败: " + error);
+    unifiedDataPath_ = sessionPackageImportPath_;
+    unifiedExportMode_ = false;
+    unifiedDataDialogOpen_ = true;
+    importProcessingMode_ = 0;
+    importReplayPacing_ = 0;
+    sessionPackageImportError_.clear();
+    if (!application_.startDataImport(path, sessionPackageImportError_)) {
+        application_.setStatusMessage("现场会话包导入失败: " + sessionPackageImportError_);
         return;
     }
     showOfflineReplayDock_ = true;
-    pendingProtocolWorkspaceSave_ = true;
-    application_.setStatusMessage("现场会话包已导入，原始回放已暂停在起点");
     sessionPackageImportDialogOpen_ = false;
     sessionPackageImportDialogOpened_ = false;
-    sessionPackageImportError_.clear();
 }
 
 void GuiRuntime::exportSessionPackageToPath(const std::filesystem::path& path)
