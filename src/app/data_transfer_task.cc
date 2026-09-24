@@ -75,9 +75,7 @@ std::optional<DataImportBatch> DataTransferTask::take(std::size_t maxSamples, st
     if (batches_.empty()) return std::nullopt;
     std::size_t eventBytes = 0;
     for (const auto& event : batches_.front().events) eventBytes += (std::max<std::size_t>)(1, event.bytes.size());
-    if (batches_.front().samples.size() > maxSamples ||
-        eventBytes > maxBytes ||
-        (batches_.front().event && batches_.front().event->bytes.size() > maxBytes)) return std::nullopt;
+    if (batches_.front().samples.size() > maxSamples || eventBytes > maxBytes) return std::nullopt;
     auto batch = std::move(batches_.front());
     batches_.pop_front();
     if (batches_.empty() && status_.complete) status_.active = false;
@@ -115,12 +113,19 @@ bool DataTransferTask::startImport(const std::filesystem::path& path)
             const std::string_view text(prefix.data(), static_cast<std::size_t>(in.gcount()));
             std::shared_ptr<session::SessionPackageData> package;
             DataImportBatch pending;
+            std::optional<plot::RawCaptureEvent> streamedEvent;
             std::size_t pendingBytes = 0;
             const auto flush = [&]() {
                 if (pending.events.empty()) return true;
                 const bool accepted = push(std::move(pending), stop);
                 pending = {};
                 pendingBytes = 0;
+                return accepted;
+            };
+            const auto flushStreamedEvent = [&]() {
+                if (!streamedEvent) return true;
+                const bool accepted = push({.event = std::move(*streamedEvent)}, stop);
+                streamedEvent.reset();
                 return accepted;
             };
             const auto produced = [&](std::size_t count) {
@@ -133,6 +138,10 @@ bool DataTransferTask::startImport(const std::filesystem::path& path)
                     std::unique_lock lock(mutex_);
                     status_.metadata = metadata;
                     status_.includesRecords = records || package != nullptr;
+                    status_.hasPackageProtocol = package != nullptr && std::any_of(
+                        package->entries.begin(), package->entries.end(), [](const auto& entry) {
+                            return entry.name.starts_with("protocol/");
+                        });
                     status_.awaitingConfirmation = true;
                     if (!changed_.wait(lock, stop, [&] { return confirmed_; })) return false;
                 }
@@ -143,22 +152,28 @@ bool DataTransferTask::startImport(const std::filesystem::path& path)
                 return push({.channel = channel, .sampleIndexOffset = offset, .samples = std::move(samples)}, stop);
             };
             callbacks.event = [&](plot::RawCaptureEvent event, bool continuation) {
-                if (!continuation) produced(1);
+                if (!continuation) {
+                    if (!flushStreamedEvent()) return false;
+                    produced(1);
+                }
                 if (event.type != plot::RawCaptureEventType::RxBytes && event.type != plot::RawCaptureEventType::TxBytes) {
                     if (!flush()) return false;
                     return push({.event = std::move(event)}, stop);
                 }
-                if (event.bytes.size() > 65536 || continuation) {
+                if (continuation) {
+                    if (!streamedEvent) streamedEvent = event;
+                    else streamedEvent->bytes.insert(streamedEvent->bytes.end(), event.bytes.begin(), event.bytes.end());
+                    if (event.bytes.size() == 65536U) return true;
+                    return flushStreamedEvent();
+                }
+                if (event.bytes.size() == 65536U) {
                     if (!flush()) return false;
-                    auto bytes = std::move(event.bytes);
-                    for (std::size_t i = 0; i < bytes.size(); i += 65536) {
-                        auto chunk = event;
-                        const auto end = (std::min)(i + 65536, bytes.size());
-                        chunk.bytes.assign(bytes.begin() + i, bytes.begin() + end);
-                        if (!push({.event = std::move(chunk), .eventContinuation = continuation || i != 0}, stop))
-                            return false;
-                    }
+                    streamedEvent = std::move(event);
                     return true;
+                }
+                if (event.bytes.size() > 65536U) {
+                    if (!flush()) return false;
+                    return push({.event = std::move(event)}, stop);
                 }
                 const auto cost = (std::max<std::size_t>)(1, event.bytes.size());
                 if (pendingBytes + cost > 65536 || pending.events.size() >= 256)
@@ -175,12 +190,12 @@ bool DataTransferTask::startImport(const std::filesystem::path& path)
                 const auto* raw = session::findSessionPackageEntry(*package, "raw_capture.psraw");
                 if (!raw) { finish("现场包缺少原始数据", false); return; }
                 auto capture = plot::readRawCaptureFileRegion(path, rawSlice.offset, rawSlice.size, error, callbacks);
-                const bool flushed = capture && flush();
+                const bool flushed = capture && flushStreamedEvent() && flush();
                 finish(std::move(error), !flushed && stop.stop_requested());
                 return;
             } else if (text.starts_with("ProtoScopeRawCapture")) {
                 const bool loaded = plot::readRawCaptureFile(path, error, &callbacks).has_value();
-                const bool flushed = loaded && flush();
+                const bool flushed = loaded && flushStreamedEvent() && flush();
                 finish(std::move(error), !flushed && stop.stop_requested());
                 return;
             } else {

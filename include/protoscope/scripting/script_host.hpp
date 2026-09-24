@@ -518,6 +518,7 @@ public:
     void setExecutionConfig(ExecutionConfig config);
     void setStorageRoot(std::filesystem::path root);
     void setStorageConfig(storage::Config config);
+    void setOfflineRestricted(bool restricted);
     void requestStop() noexcept;
     [[nodiscard]] bool executionFaulted() const;
     void resetRuntime();
@@ -752,6 +753,7 @@ private:
     std::filesystem::path storageRoot_;
     storage::Config storageConfig_;
     FileIoConfig fileIoConfig_{};
+    bool offlineRestricted_{false};
     std::uint64_t nextTxRequestId_{1};
     std::uint64_t nextDialogId_{1};
     std::uint64_t nextFileDialogId_{1};

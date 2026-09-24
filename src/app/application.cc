@@ -31,7 +31,9 @@ namespace {
 
     constexpr std::size_t kRawCaptureReplayLargeChunkBytes = 64U * 1024U;
     constexpr std::size_t kRawCaptureReplaySyncBatchBytes = 1024U * 1024U;
-    constexpr std::size_t kRawCaptureReplaySeekNoticeEvents = 4096;
+    constexpr std::size_t kRawCaptureReplayEventsPerPump = 256;
+    constexpr std::size_t kRawCaptureReplayBytesPerPump = 64U * 1024U;
+    constexpr auto kRawCaptureReplayPumpBudget = std::chrono::milliseconds(4);
     constexpr std::size_t kTransportEventsPerPump = 256;
     constexpr auto kTransportEventBudget = std::chrono::milliseconds(4);
     constexpr std::uint64_t kCommPressureDebugLogIntervalMs = 2000;
@@ -918,31 +920,6 @@ namespace {
         return true;
     }
 
-    bool validateReleasedProtocolDirectory(const std::filesystem::path& protocolDir,
-                                           const scripting::FileIoConfig& fileIoConfig,
-                                           const scripting::ExecutionConfig& executionConfig,
-                                           std::string& error)
-    {
-        std::error_code protocolEntryError;
-        const auto mainLuaPath = protocolDir / "main.lua";
-        if (!std::filesystem::is_regular_file(mainLuaPath, protocolEntryError) || protocolEntryError) {
-            error = "现场包缺少 protocol/main.lua";
-            if (protocolEntryError) {
-                error += ": " + protocolEntryError.message();
-            }
-            return false;
-        }
-
-        scripting::ScriptHost probeHost;
-        probeHost.setFileIoConfig(fileIoConfig);
-        probeHost.setExecutionConfig(executionConfig);
-        if (!probeHost.loadProtocolDirectory(protocolDir.generic_string())) {
-            error = "现场包协议脚本无效: " + probeHost.lastError();
-            return false;
-        }
-        return true;
-    }
-
     bool decodeSessionRawCaptureEntry(const session::SessionPackageData& package,
                                       const std::optional<std::string>& importedProtocolDir,
                                       std::optional<plot::RawCaptureFileData>& rawCapture,
@@ -1529,7 +1506,9 @@ bool Application::pumpOnce()
         loggingFacade_.error("wave", replayError);
         dockStore_.waveState().statusMessage = replayError;
     }
-    scriptWorker_.postTick(nowMs());
+    if (!rawCaptureReplay_.loaded && !dataImportActive_ && !replayReceiveHistory_) {
+        scriptWorker_.postTick(nowMs());
+    }
     changed = flushScriptOutputs() || changed;
     changed = processRequestTimeouts() || changed;
     changed = flushScriptOutputs() || changed;
@@ -1547,9 +1526,11 @@ void Application::shutdown()
     dataTransfer_.cancel();
     if (rawCaptureReplay_.loaded) {
         cancelRawCaptureImportReplay();
+        cleanupOfflineReplayResources();
         rawCaptureReplay_ = RawCaptureReplayState{};
     }
     closeTransport();
+    cleanupOfflineReplayResources();
     scriptWorker_.stop();
 }
 
@@ -1692,8 +1673,8 @@ bool Application::sendManualPayload(const std::string& payload, bool hexMode)
 
 void Application::appendTransferRow(dock::ReceiveRow row)
 {
-    // 核心流程：RawChunks 模式只维护原始历史；逐帧解析延迟到 ParsedFrames 视图，避免高速 RX 时主线程逐帧膨胀。
-    if (dockStore_.receiveState().displayMode == dock::TransferLogDisplayMode::ParsedFrames) {
+    // 离线重放始终同步生成独立逐帧缓存；视图按钮只选择 rows/frameRows，不能触发 Lua 或重建语义。
+    if (replayReceiveHistory_ || dockStore_.receiveState().displayMode == dock::TransferLogDisplayMode::ParsedFrames) {
         appendTransferFrameRows(row);
     }
     dockStore_.appendReceiveRow(std::move(row));
@@ -1967,7 +1948,12 @@ void Application::recordPlotSetupSnapshot(const plot::RawCapturePlotSetupEventDa
 
 std::optional<Application::TransferFrameParserState> Application::makeTransferFrameParserState() const
 {
-    const auto snapshot = scriptWorker_.snapshot();
+    return makeTransferFrameParserState(scriptWorker_.snapshot());
+}
+
+std::optional<Application::TransferFrameParserState> Application::makeTransferFrameParserState(
+    const scripting::ScriptRuntimeSnapshot& snapshot) const
+{
     const auto bufferDefinition = snapshot.streamBuffer;
     auto frameDefinitions = snapshot.streamFrames;
     if (!bufferDefinition.has_value() || frameDefinitions.empty()) {
@@ -2059,20 +2045,9 @@ void Application::rebuildTransferFrameRows()
 
 void Application::activateParsedTransferLogView()
 {
-    if (replayReceiveHistory_) {
-        // 回放时逐帧结果已经按 profile/原始事件顺序预生成，切换视图不能重置 parser 或丢弃结果。
-        flushPendingTransferFrameRows(std::numeric_limits<std::size_t>::max());
-        return;
-    }
-    // 核心流程：默认只解析切换后的新 raw 行；开启兼容开关时才重放旧 RawChunks 历史。
-    resetTransferFrameDisplayState();
-    if (!runtimeConfig_.gui.replayRawHistoryOnSchemaSwitch) {
-        return;
-    }
-    for (const auto& row : dockStore_.receiveState().rows) {
-        appendTransferFrameRows(row);
-    }
-    flushPendingTransferFrameRows(std::numeric_limits<std::size_t>::max());
+    // 视图切换不调用 Lua；兼容开关仅用独立 UI parser 重建 rows -> frameRows。
+    if (!runtimeConfig_.gui.replayRawHistoryOnSchemaSwitch || replayReceiveHistory_) return;
+    rebuildTransferFrameRows();
 }
 
 void Application::applyHistoryLimits(const config::GuiLogHistoryConfig& config)
@@ -2413,6 +2388,37 @@ bool Application::importRawRecords(const plot::RawCaptureFileData& data, std::st
     return true;
 }
 
+void Application::confirmDataImport(const OfflineReplayProcessing processing, const OfflineReplayPacing pacing)
+{
+    dataImportProcessing_ = processing;
+    dataImportPacing_ = pacing;
+    parseImportedWave_ = processing != OfflineReplayProcessing::BrowseRaw;
+    dataTransfer_.confirm();
+}
+
+void Application::resetDataImportGenerationState(const bool cleanupReplayResources)
+{
+    importReset_.reset();
+    importProfile_.reset();
+    pendingImportSession_.reset();
+    pendingImportMarkers_.clear();
+    pendingImportedCapture_ = {};
+    suppressRawCaptureProfileEvents_ = false;
+    suppressRawCapturePlotSetupEvents_ = false;
+    pendingScriptPlotAppends_.clear();
+    pendingTransferFrameRows_.clear();
+    if (cleanupReplayResources) cleanupOfflineReplayResources();
+}
+
+void Application::cancelDataTransfer()
+{
+    dataTransfer_.cancel();
+    ++rawCaptureReplay_.generation;
+    rawCaptureReplay_.phase = OfflineReplayPhase::Cancelled;
+    rawCaptureReplay_.playing = false;
+    resetDataImportGenerationState(true);
+}
+
 bool Application::startDataImport(const std::filesystem::path& path, std::string& error)
 {
     if (dataTransferStatus().active) { error = "已有数据任务正在执行"; return false; }
@@ -2423,8 +2429,9 @@ bool Application::startDataImport(const std::filesystem::path& path, std::string
     importReplacedWave_ = false;
     parseImportedWave_ = false;
     importReplacedRecords_ = false;
-    importReset_.reset();
-    importProfile_.reset();
+    resetDataImportGenerationState(true);
+    dataImportProcessing_ = OfflineReplayProcessing::BrowseRaw;
+    dataImportPacing_ = OfflineReplayPacing::FastBatchParse;
     dataImportActive_ = dataTransfer_.startImport(path);
     return dataImportActive_;
 }
@@ -2432,11 +2439,31 @@ bool Application::startDataImport(const std::filesystem::path& path, std::string
 bool Application::pumpDataImport()
 {
     const auto status = dataTransfer_.status();
+    if (rawCaptureReplay_.loaded && !status.awaitingConfirmation && !status.active) {
+        std::string replayError;
+        pumpRawCaptureReplay(replayError);
+        if (rawCaptureReplay_.phase == OfflineReplayPhase::Preparing ||
+            rawCaptureReplay_.phase == OfflineReplayPhase::Replaying ||
+            rawCaptureReplay_.phase == OfflineReplayPhase::Draining) {
+            return true;
+        }
+        if (rawCaptureReplay_.phase == OfflineReplayPhase::Failed) {
+            dataTransfer_.fail(replayError.empty() ? rawCaptureReplay_.error : replayError);
+        }
+    }
     const auto started = std::chrono::steady_clock::now();
     std::size_t samples = 0;
     std::size_t bytes = 0;
     try {
-        // 配置操作由脚本线程执行；UI 只轮询完成状态，不能等待正在运行的 Lua 回调。
+        // 协议加载和状态重置都由脚本线程执行；UI 只轮询，不能 runSync 等待。
+        if (rawCaptureReplay_.phase == OfflineReplayPhase::Preparing && rawCaptureReplay_.preparation.valid()) {
+            if (rawCaptureReplay_.preparation.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return true;
+            const auto result = rawCaptureReplay_.preparation.get();
+            rawCaptureReplay_.preparation = {};
+            if (!result.ok) throw std::runtime_error("离线协议准备失败: " + result.lastError);
+            prepareRawCaptureImportReplay(rawCaptureReplay_.capture);
+            rawCaptureReplay_.phase = OfflineReplayPhase::Replaying;
+        }
         if (importReset_) {
             if (importReset_->wait_for(std::chrono::seconds(0)) != std::future_status::ready) return true;
             if (!importReset_->get()) throw std::runtime_error("重置离线解析状态失败");
@@ -2449,12 +2476,13 @@ bool Application::pumpDataImport()
             if (!result.first) throw std::runtime_error(result.second);
         }
         if (parseImportedWave_) {
-            flushScriptOutputs();
-            if (scriptWorker_.pendingRxBytes() > 65536) return true;
+            flushOfflineScriptOutputs();
+            if (offlineScriptWorker_ && offlineScriptWorker_->pendingRxBytes() > 65536) return true;
         }
         while (samples < 8192 && bytes < 65536 &&
                std::chrono::steady_clock::now() - started < std::chrono::milliseconds(4)) {
-            if (parseImportedWave_ && (importReset_ || importProfile_ || !scriptWorker_.idle())) break;
+            if (parseImportedWave_ &&
+                (importReset_ || importProfile_ || (offlineScriptWorker_ && !offlineScriptWorker_->inputIdle()))) break;
             auto batch = dataTransfer_.take(8192 - samples, 65536 - bytes);
             if (!batch) break;
             if (batch->id != status.id) continue;
@@ -2466,13 +2494,19 @@ bool Application::pumpDataImport()
             auto& receive = dockStore_.receiveState();
             if (batch->metadata) {
                 std::string error;
+                pendingImportSession_ = batch->session;
                 if (batch->session) {
-                    applyingImportContext_ = true;
-                    const bool restored = applySessionPackage(*batch->session, false, error,
-                                                               batch->metadata->waveform.has_value());
-                    applyingImportContext_ = false;
-                    if (!restored) throw std::runtime_error(error);
-                    if (!batch->metadata->waveform) parseImportedWave_ = true;
+                    std::vector<plot::WaveAnalysisMarker> markers;
+                    if (!restoreSessionPackageContext(*batch->session,
+                                                      batch->metadata->waveform.has_value(),
+                                                      markers,
+                                                      error)) {
+                        throw std::runtime_error(error);
+                    }
+                    pendingImportMarkers_ = std::move(markers);
+                }
+                if (dataImportProcessing_ == OfflineReplayProcessing::PackageProtocol && !batch->session) {
+                    throw std::runtime_error("当前导入文件不包含现场包协议");
                 }
                 if (batch->metadata->waveform) {
                     parseImportedWave_ = false;
@@ -2481,86 +2515,104 @@ bool Application::pumpDataImport()
                     importedWaveIncomplete_ = true;
                 }
                 if (status.includesRecords) {
-                    if (!importRawRecords(*batch->metadata, error)) throw std::runtime_error(error);
+                    pendingImportedCapture_ = *batch->metadata;
+                    pendingImportedCapture_.events.clear();
+                    pendingImportedCapture_.payload.clear();
                     importReplacedRecords_ = true;
-                    wave.rawCapture.incomplete = true;
-                    if (parseImportedWave_ && !batch->metadata->waveform) {
-                        if (!dockStore_.luaState().loaded) throw std::runtime_error("当前协议不可用");
-                        importReset_ = scriptWorker_.resetStreamReplayStateAsync();
-                        wave.buffer.clear();
-                        wave.buffer.setHistoryTrimSuspended(true);
-                        wave.defaultChannelSpecs.clear();
-                        wave.channelOverrides.clear();
-                        wave.view.sampleFrequencyHz = batch->metadata->sampleFrequencyHz;
-                        importReplacedWave_ = true;
-                        importedWaveIncomplete_ = true;
-                        suppressRawCaptureProfileEvents_ = true;
-                        suppressRawCapturePlotSetupEvents_ = true;
-                    }
+                    if (batch->metadata->waveform) wave.rawCapture.incomplete = true;
                 }
             } else if (!batch->samples.empty()) {
                 wave.buffer.appendImported(batch->channel, batch->samples, batch->sampleIndexOffset);
                 dataTransfer_.submitted(batch->samples.size());
+            } else if (!pendingImportedCapture_.protocolDir.empty() || status.includesRecords) {
+                for (auto& event : batch->events) {
+                    pendingImportedCapture_.events.push_back(event);
+                    if (event.type == plot::RawCaptureEventType::RxBytes) {
+                        pendingImportedCapture_.payload.insert(
+                            pendingImportedCapture_.payload.end(), event.bytes.begin(), event.bytes.end());
+                    } else if (event.type == plot::RawCaptureEventType::TxBytes) {
+                        pendingImportedCapture_.rxOnly = false;
+                    }
+                    dataTransfer_.submitted(1);
+                }
             } else for (auto& event : batch->events) {
                 auto& capture = wave.rawCapture;
+                const bool bytesEvent = event.type == plot::RawCaptureEventType::RxBytes ||
+                                        event.type == plot::RawCaptureEventType::TxBytes;
                 if (event.type == plot::RawCaptureEventType::TxBytes) capture.rxOnly = false;
                 if (parseImportedWave_) {
                     auto context = makeRawCaptureReplayContext(capture);
                     context.timestampMs = event.timestampMs;
                     context.endpoint = event.endpoint;
-                    if (event.type == plot::RawCaptureEventType::RxBytes)
-                        scriptWorker_.postTransportBytes({context, event.bytes}, false);
-                    else if (event.type == plot::RawCaptureEventType::ProfileSet ||
-                             event.type == plot::RawCaptureEventType::ProfileClear) {
-                        importProfile_ = scriptWorker_.applyStreamRuntimeProfileEventAsync({
-                            .cleared = event.type == plot::RawCaptureEventType::ProfileClear,
-                            .frameName = event.profile.frameName, .length = event.profile.length,
-                            .channelMap = event.profile.channelMap});
-                    } else if (event.type != plot::RawCaptureEventType::TxBytes) {
-                        std::string error;
-                        if (!replayRawCaptureEvent(event, context, error)) throw std::runtime_error(error);
-                    }
+                    std::string replayError;
+                    if (!replayRawCaptureEvent(event, context, replayError)) throw std::runtime_error(replayError);
                 }
-                const bool bytesEvent = event.type == plot::RawCaptureEventType::RxBytes ||
-                                        event.type == plot::RawCaptureEventType::TxBytes;
                 if (event.type == plot::RawCaptureEventType::RxBytes)
                     capture.payload.insert(capture.payload.end(), event.bytes.begin(), event.bytes.end());
-                if (batch->eventContinuation && !capture.events.empty()) {
-                    auto& bytes = capture.events.back().bytes;
-                    bytes.insert(bytes.end(), event.bytes.begin(), event.bytes.end());
-                    if (bytesEvent && !receive.rows.empty()) {
-                        auto& rowBytes = receive.rows.back().bytes;
-                        rowBytes.insert(rowBytes.end(), event.bytes.begin(), event.bytes.end());
-                    }
-                } else {
-                    capture.events.push_back(event);
-                    if (bytesEvent) {
-                        // 离线文件不受实时面板行数上限裁剪，完整文件计数以原始事件为准。
-                        receive.rows.push_back({.timestampMs = event.timestampMs,
-                            .direction = event.type == plot::RawCaptureEventType::TxBytes ? "TX" : "RX",
-                            .endpoint = event.endpoint, .bytes = event.bytes, .message = event.writeStatus});
-                    }
-                    dataTransfer_.submitted(1);
+                capture.events.push_back(event);
+                if (bytesEvent) {
+                    // 大事件必须先完整组装，再同时提交 Lua 与原始记录，保持一个现代事件一个 callback。
+                    receive.rows.push_back({.timestampMs = event.timestampMs,
+                        .direction = event.type == plot::RawCaptureEventType::TxBytes ? "TX" : "RX",
+                        .endpoint = event.endpoint, .bytes = event.bytes, .message = event.writeStatus});
                 }
+                dataTransfer_.submitted(1);
                 ++receive.rowsVersion;
             }
         }
     } catch (const std::exception& ex) {
         applyingImportContext_ = false;
-        importReset_.reset();
-        importProfile_.reset();
+        resetDataImportGenerationState(true);
         dataTransfer_.fail(std::string("导入提交失败，已保留部分数据: ") + ex.what());
     }
     const auto current = dataTransfer_.status();
     if (!current.active && current.complete) {
-        if (parseImportedWave_) {
-            flushScriptOutputs();
-            if (importReset_ || importProfile_ || !scriptWorker_.idle() || !pendingScriptPlotAppends_.empty()) return true;
-            dockStore_.waveState().buffer.setImportedLabelsReadOnly(true);
+        if (!rawCaptureReplay_.loaded && !pendingImportedCapture_.events.empty()) {
+            std::string replayError;
+            if (dataImportProcessing_ == OfflineReplayProcessing::BrowseRaw) {
+                if (!importRawRecords(pendingImportedCapture_, replayError)) {
+                    dataTransfer_.fail(replayError);
+                    return true;
+                }
+            } else {
+                if (!loadRawCaptureReplayTimeline(pendingImportedCapture_,
+                                                  dataImportProcessing_,
+                                                  dataImportPacing_,
+                                                  replayError,
+                                                  pendingImportSession_.get())) {
+                    dataTransfer_.fail(replayError);
+                    return true;
+                }
+                rawCaptureReplay_.generation = current.id;
+                rawCaptureReplay_.playing = true;
+                importReplacedWave_ = true;
+                importedWaveIncomplete_ = true;
+                return true;
+            }
+        }
+        if (rawCaptureReplay_.loaded &&
+            (rawCaptureReplay_.phase == OfflineReplayPhase::Preparing ||
+             rawCaptureReplay_.phase == OfflineReplayPhase::Replaying ||
+             rawCaptureReplay_.phase == OfflineReplayPhase::Draining)) {
+            return true;
+        }
+            if (parseImportedWave_) {
+                flushOfflineScriptOutputs();
+                const auto replaySnapshot = offlineScriptWorker_ ? offlineScriptWorker_->snapshot()
+                                                                 : scripting::ScriptRuntimeSnapshot{};
+                if (importReset_ || importProfile_ || replaySnapshot.pendingWorkerRxBytes > 0U ||
+                    replaySnapshot.inputQueueSize > 0U || replaySnapshot.outputQueueSize > 0U ||
+                    !pendingScriptPlotAppends_.empty() || !pendingTransferFrameRows_.empty()) return true;
+                dockStore_.waveState().buffer.setImportedLabelsReadOnly(true);
+
             suppressRawCaptureProfileEvents_ = false;
             suppressRawCapturePlotSetupEvents_ = false;
         }
+        if (!pendingImportMarkers_.empty() || pendingImportSession_) {
+            dockStore_.waveState().analysisMarkers = pendingImportMarkers_;
+        }
         dataImportActive_ = false;
+        resetDataImportGenerationState(current.canceled || !current.error.empty());
         const bool incomplete = current.canceled || !current.error.empty();
         if (importReplacedWave_)
             importedWaveIncomplete_ = incomplete || (current.metadata.waveform && current.metadata.waveform->incomplete);
@@ -2783,116 +2835,66 @@ bool Application::importSessionPackage(const std::filesystem::path& path, std::s
     return package && applySessionPackage(*package, true, error);
 }
 
-bool Application::applySessionPackage(const session::SessionPackageData& packageData, bool restoreCapture,
-                                      std::string& error, bool allowMissingProtocol)
+bool Application::restoreSessionPackageContext(const session::SessionPackageData& package,
+                                               const bool allowMissingProtocol,
+                                               std::vector<plot::WaveAnalysisMarker>& markers,
+                                               std::string& error)
 {
-    const auto* package = &packageData;
-    if (!validateOfflineReplayTransport(error)) {
-        return false;
-    }
-    const auto previousConfig = runtimeConfig_;
-    const auto previousWave = dockStore_.waveState();
-    const auto previousReceive = dockStore_.receiveState();
-    const auto previousCaptureProtocolOverride = captureProtocolConfigOverride_;
-    const auto previousReplay = rawCaptureReplay_;
-    const auto previousTransferFrameParser = transferFrameParser_;
-    const auto previousPendingTransferFrameRows = pendingTransferFrameRows_;
-    const bool previousReplayReceiveHistory = replayReceiveHistory_;
-    auto rollbackImport = [&]() {
-        std::string rollbackError;
-        if (!applyConfig(previousConfig)) {
-            rollbackError = "恢复导入前配置失败";
-        }
-        dockStore_.waveState() = previousWave;
-        dockStore_.receiveState() = previousReceive;
-        captureProtocolConfigOverride_ = previousCaptureProtocolOverride;
-        rawCaptureReplay_ = previousReplay;
-        transferFrameParser_ = previousTransferFrameParser;
-        pendingTransferFrameRows_ = previousPendingTransferFrameRows;
-        replayReceiveHistory_ = previousReplayReceiveHistory;
-        syncDockState();
-        if (!rollbackError.empty()) {
-            error += "; " + rollbackError;
-        }
-    };
-
-    if (!validateSessionPackageEntries(*package, error)) {
-        return false;
-    }
-
-    const auto* configEntry = session::findSessionPackageEntry(*package, "config.yaml");
+    if (!validateSessionPackageEntries(package, error)) return false;
+    const auto* configEntry = session::findSessionPackageEntry(package, "config.yaml");
     if (configEntry == nullptr) {
         error = "现场包缺少 config.yaml";
         return false;
     }
-
+    const auto previousConfig = runtimeConfig_;
     auto loaded = configStore_.loadText(stringFromBytes(configEntry->bytes));
     if (!loaded.error.empty()) {
         error = loaded.error;
         return false;
     }
     loaded.config.configPath = runtimeConfig_.configPath;
-    // 现场包只恢复采集和协议现场，不覆盖本机全局界面偏好。
     loaded.config.gui.theme = previousConfig.gui.theme;
     loaded.config.gui.fileDialogs = previousConfig.gui.fileDialogs;
-
-    std::optional<config::ProtocolConfig> persistentProtocolConfig;
-    std::optional<std::string> importedProtocolDir;
-    const auto protocolEntries = collectSessionProtocolEntries(*package);
-    if (!protocolEntries.empty()) {
-        persistentProtocolConfig = loaded.config.protocol;
-        const auto protocolDir =
-            std::filesystem::temp_directory_path() / ("ProtoScope-session-protocol-" + std::to_string(nowUs()));
-        if (!releaseSessionProtocolEntries(protocolEntries, protocolDir, error)) {
-            return false;
-        }
-        if (!validateReleasedProtocolDirectory(protocolDir, loaded.config.scripting.fileIo,
-                                               loaded.config.scripting.execution, error)) {
-            return false;
-        }
-        loaded.config.protocol.rootDir = protocolDir.parent_path().generic_string();
-        loaded.config.protocol.selectedDir = protocolDir.generic_string();
-        importedProtocolDir = loaded.config.protocol.selectedDir;
-    }
-
-    std::optional<plot::RawCaptureFileData> rawCapture;
-    if (restoreCapture && !decodeSessionRawCaptureEntry(*package, importedProtocolDir, rawCapture, error)) {
-        return false;
-    }
-
-    std::vector<plot::WaveAnalysisMarker> importedMarkers;
-    if (!decodeSessionAnalysisMarkers(*package, importedMarkers, error)) {
-        return false;
-    }
-
-    if (!applyConfig(loaded.config) &&
-        !(protocolEntries.empty() && (allowMissingProtocol || (rawCapture && rawCapture->waveform)))) {
+    // BrowseRaw/CurrentProtocol 不允许包内配置替换当前协议；只恢复其余现场配置。
+    const auto persistentProtocolConfig = loaded.config.protocol;
+    loaded.config.protocol = previousConfig.protocol;
+    applyingImportContext_ = true;
+    const bool applied = applyConfig(loaded.config);
+    applyingImportContext_ = false;
+    if (!applied && !allowMissingProtocol) {
         error = "应用现场包配置失败";
-        rollbackImport();
+        applyingImportContext_ = true;
+        static_cast<void>(applyConfig(previousConfig));
+        applyingImportContext_ = false;
         return false;
     }
-    if (persistentProtocolConfig.has_value()) {
-        captureProtocolConfigOverride_ = *persistentProtocolConfig;
-    }
+    captureProtocolConfigOverride_ = persistentProtocolConfig;
+    return decodeSessionAnalysisMarkers(package, markers, error);
+}
 
+bool Application::applySessionPackage(const session::SessionPackageData& packageData, bool restoreCapture,
+                                      std::string& error, bool allowMissingProtocol)
+{
+    const auto* package = &packageData;
+    if (!validateOfflineReplayTransport(error)) return false;
+    std::vector<plot::WaveAnalysisMarker> importedMarkers;
+    if (!restoreSessionPackageContext(*package, allowMissingProtocol, importedMarkers, error)) return false;
+    std::optional<plot::RawCaptureFileData> rawCapture;
+    if (restoreCapture && !decodeSessionRawCaptureEntry(*package, std::nullopt, rawCapture, error)) return false;
     if (rawCapture.has_value()) {
         if (rawCapture->waveform) {
-            if (!importWaveCsvData(*rawCapture->waveform, error) || !importRawRecords(*rawCapture, error)) {
-                rollbackImport();
-                return false;
-            }
-        } else if (!loadRawCaptureReplayTimeline(*rawCapture, error)) {
-            rollbackImport();
+            if (!importWaveCsvData(*rawCapture->waveform, error) || !importRawRecords(*rawCapture, error)) return false;
+        } else if (!loadRawCaptureReplayTimeline(*rawCapture,
+                                                 OfflineReplayProcessing::BrowseRaw,
+                                                 OfflineReplayPacing::OriginalTimeline,
+                                                 error,
+                                                 package)) {
             return false;
         }
     }
-
-    auto& wave = dockStore_.waveState();
-    wave.analysisMarkers.clear();
-    wave.analysisMarkers = std::move(importedMarkers);
-
-    setStatusMessage("现场包已导入");
-    loggingFacade_.info("session", "session imported kind=session");
+    dockStore_.waveState().analysisMarkers = std::move(importedMarkers);
+    setStatusMessage("现场包已载入，默认仅浏览原始记录；执行包内 Lua 前必须明确选择");
+    loggingFacade_.info("session", "session loaded in browse-raw mode");
     return true;
 }
 
@@ -2965,37 +2967,164 @@ std::uint64_t Application::rawCaptureRecordingBytes() const
     return rawCaptureRecording_.bytesWritten();
 }
 
-bool Application::validateRawCaptureImport(const plot::RawCaptureFileData& capture, std::string& error) const
+bool Application::validateRawCaptureImport(const plot::RawCaptureFileData&, std::string& error) const
 {
-    if (dataTransferStatus().active) { error = "数据任务进行中，不能载入回放"; return false; }
-    if (!validateOfflineReplayTransport(error)) {
+    if (dataTransferStatus().active && !dataImportActive_) {
+        error = "数据任务进行中，不能载入回放";
         return false;
     }
-    const auto& lua = dockStore_.luaState();
-    if (!lua.loaded) {
-        error = "当前协议尚未加载";
-        return false;
+    return validateOfflineReplayTransport(error);
+}
+
+bool Application::prepareOfflineReplayProtocol(const plot::RawCaptureFileData& capture,
+                                               const OfflineReplayProcessing processing,
+                                               const session::SessionPackageData* package,
+                                               std::string& error)
+{
+    static_cast<void>(capture);
+    rawCaptureReplay_.processing = processing;
+    rawCaptureReplay_.protocolSource = processing == OfflineReplayProcessing::BrowseRaw
+                                           ? "不执行 Lua"
+                                           : processing == OfflineReplayProcessing::CurrentProtocol ? "当前磁盘协议"
+                                                                                                     : "现场包内协议";
+    const auto existingProtocolDirectory = rawCaptureReplay_.protocolDirectory;
+    rawCaptureReplay_.protocolDirectory.clear();
+    if (processing == OfflineReplayProcessing::BrowseRaw) {
+        return true;
     }
-    if (capture.protocolDir.empty() || capture.protocolDir != lua.protocolDir) {
-        error = "导入文件协议目录与当前工作区不一致";
-        return false;
+
+    auto offlineConfig = runtimeConfig_;
+    offlineConfig.scripting.fileIo = {};
+    offlineConfig.scripting.fileIo.enabled = false;
+    offlineConfig.scripting.fileIo.dialog.enabled = false;
+    rawCaptureReplay_.temporaryStorageDir =
+        std::filesystem::temp_directory_path() /
+        ("ProtoScope-offline-storage-" + std::to_string(rawCaptureReplay_.generation));
+    offlineConfig.scripting.storageRootDir = rawCaptureReplay_.temporaryStorageDir.generic_string();
+    offlineScriptWorker_ = std::make_unique<scripting::ScriptRuntimeWorker>();
+    offlineScriptWorker_->configure(scripting::ScriptRuntimeWorkerConfig{
+        .execution = offlineConfig.scripting.execution,
+        .storageRoot = offlineConfig.scripting.storageRootDir,
+        .storageConfig = offlineConfig.scripting.storage,
+        .enabled = offlineConfig.scripting.workerEnabled,
+        .offlineRestricted = true,
+        .postprocessWorkerThreads = scripting::resolvePipelineWorkerThreads(
+            offlineConfig.scripting.pipeline.workerThreads, std::thread::hardware_concurrency()),
+        .rxQueueLimitBytes = offlineConfig.scripting.workerRxQueueLimitBytes,
+        .memoryBudgetBytes = offlineConfig.scripting.workerMemoryBudgetBytes,
+        .memoryBudgetAvailableRatio = offlineConfig.scripting.workerMemoryBudgetAvailableRatio,
+        .outputQueueLimit = offlineConfig.scripting.workerOutputQueueLimit,
+        .batchBytes = offlineConfig.scripting.workerBatchBytes,
+        .backpressureEnabled = offlineConfig.scripting.workerBackpressureEnabled,
+        .backpressureHighWatermark = offlineConfig.scripting.workerBackpressureHighWatermark,
+        .backpressureLowWatermark = offlineConfig.scripting.workerBackpressureLowWatermark,
+    });
+    offlineScriptWorker_->setFileIoConfig(offlineConfig.scripting.fileIo);
+
+    std::filesystem::path protocolDir;
+    if (processing == OfflineReplayProcessing::PackageProtocol && !rawCaptureReplay_.packageProtocolEntries.empty()) {
+        protocolDir = std::filesystem::temp_directory_path() /
+                      ("ProtoScope-session-protocol-" + std::to_string(nowUs()));
+        rawCaptureReplay_.temporaryProtocolDir = protocolDir;
+        std::vector<const session::SessionPackageEntry*> protocolEntries;
+        protocolEntries.reserve(rawCaptureReplay_.packageProtocolEntries.size());
+        for (const auto& entry : rawCaptureReplay_.packageProtocolEntries) protocolEntries.push_back(&entry);
+        if (!releaseSessionProtocolEntries(protocolEntries, protocolDir, error)) {
+            cleanupOfflineReplayResources();
+            return false;
+        }
+    } else if (!existingProtocolDirectory.empty()) {
+        protocolDir = existingProtocolDirectory;
+    } else if (processing == OfflineReplayProcessing::CurrentProtocol) {
+        protocolDir = dockStore_.luaState().protocolDir;
+        if (protocolDir.empty()) {
+            error = "当前磁盘协议尚未加载";
+            return false;
+        }
+    } else {
+        if (package == nullptr) {
+            error = "现场包协议来源不可用";
+            return false;
+        }
+        const auto protocolEntries = collectSessionProtocolEntries(*package);
+        if (protocolEntries.empty()) {
+            error = "现场包不包含协议目录";
+            return false;
+        }
+        rawCaptureReplay_.packageProtocolEntries.clear();
+        rawCaptureReplay_.packageProtocolEntries.reserve(protocolEntries.size());
+        for (const auto* entry : protocolEntries) rawCaptureReplay_.packageProtocolEntries.push_back(*entry);
+        protocolDir = std::filesystem::temp_directory_path() /
+                      ("ProtoScope-session-protocol-" + std::to_string(nowUs()));
+        rawCaptureReplay_.temporaryProtocolDir = protocolDir;
+        if (!releaseSessionProtocolEntries(protocolEntries, protocolDir, error)) {
+            cleanupOfflineReplayResources();
+            return false;
+        }
     }
+
+    rawCaptureReplay_.protocolDirectory = protocolDir.generic_string();
+    rawCaptureReplay_.phase = OfflineReplayPhase::Preparing;
+    rawCaptureReplay_.preparation = offlineScriptWorker_->loadProtocolDirectoryAsync(rawCaptureReplay_.protocolDirectory).share();
     return true;
+}
+
+void Application::prepareRawCaptureBrowse(const plot::RawCaptureFileData& capture)
+{
+    dockStore_.clearScriptRows();
+    const auto liveSnapshot = scriptWorker_.snapshot();
+    static_cast<void>(scriptWorker_.drainOutputs());
+    const auto discarded = clearPendingRealtimeBacklog();
+    logRealtimeBacklogDiscard(discarded);
+    resetWaveHistoryForTrigger(WaveResetViewportTrigger::RawImport);
+    dockStore_.clearReceiveRows();
+    pendingTransferFrameRows_.clear();
+    transferFrameParser_ = makeTransferFrameParserState(liveSnapshot);
+    replayReceiveHistory_ = true;
+    auto& wave = dockStore_.waveState();
+    wave.rawCapture = capture;
+    wave.view.sampleFrequencyHz = capture.sampleFrequencyHz;
+    wave.view.sampleFrequencyInput = formatFrequencyInput(capture.sampleFrequencyHz);
+    wave.view.sampleFrequencyError.clear();
+}
+
+void Application::cleanupOfflineReplayResources()
+{
+    rawCaptureReplay_.preparation = {};
+    rawCaptureReplay_.profileFence = {};
+    if (offlineScriptWorker_) {
+        auto retiringWorker = std::move(offlineScriptWorker_);
+        offlineScriptWorker_.reset();
+        retiringWorker->stop();
+    }
+    const auto removeTemporaryDirectory = [this](std::filesystem::path& path, std::string_view label) {
+        if (path.empty()) return;
+        std::error_code removeError;
+        std::filesystem::remove_all(path, removeError);
+        if (removeError) {
+            const auto message = std::string("清理离线") + std::string(label) + "目录失败: " + removeError.message();
+            loggingFacade_.warn("raw_capture", message);
+            if (rawCaptureReplay_.error.empty()) rawCaptureReplay_.error = message;
+        }
+        path.clear();
+    };
+    removeTemporaryDirectory(rawCaptureReplay_.temporaryProtocolDir, "协议");
+    removeTemporaryDirectory(rawCaptureReplay_.temporaryStorageDir, "存储");
 }
 
 void Application::prepareRawCaptureImportReplay(const plot::RawCaptureFileData& capture)
 {
-    // 核心流程：导入回放必须同时清空旧波形、收发记录和帧 parser，
-    // 后续播放或 seek 才能从时间轴起点确定性地重建同一份离线现场。
-    scriptWorker_.waitIdle();
-    static_cast<void>(scriptWorker_.drainOutputs());
+    // 离线结果是可替换快照；每次 seek/模式切换都整体重建，不能叠加旧 generation 的日志和事件。
+    dockStore_.clearScriptRows();
+    // 核心流程：协议准备由 worker 异步完成；这里只在准备完成后清空离线展示状态。
+    if (offlineScriptWorker_) static_cast<void>(offlineScriptWorker_->drainOutputs());
     const auto discarded = clearPendingRealtimeBacklog();
     logRealtimeBacklogDiscard(discarded);
-    scriptWorker_.resetStreamReplayState();
     resetWaveHistoryForTrigger(WaveResetViewportTrigger::RawImport);
     dockStore_.clearReceiveRows();
     pendingTransferFrameRows_.clear();
-    resetTransferFrameParser();
+    transferFrameParser_ = offlineScriptWorker_ ? makeTransferFrameParserState(offlineScriptWorker_->snapshot())
+                                                : std::nullopt;
     replayReceiveHistory_ = true;
     auto& wave = dockStore_.waveState();
     wave.rawCapture = capture;
@@ -3003,7 +3132,8 @@ void Application::prepareRawCaptureImportReplay(const plot::RawCaptureFileData& 
     wave.view.sampleFrequencyInput = formatFrequencyInput(capture.sampleFrequencyHz);
     wave.view.sampleFrequencyError.clear();
     wave.buffer.setHistoryTrimSuspended(true);
-    rawCaptureReplayChunkBytes_ = resolveRawCaptureReplayChunkBytes(scriptWorker_.snapshot().streamBuffer);
+    rawCaptureReplayChunkBytes_ = resolveRawCaptureReplayChunkBytes(
+        offlineScriptWorker_ ? offlineScriptWorker_->snapshot().streamBuffer : std::nullopt);
     rawCaptureReplayPendingBytes_ = 0U;
     rawCaptureReplayBatchBytes_.clear();
     rawCaptureReplayBatchContext_ = {};
@@ -3056,20 +3186,46 @@ bool Application::replayRawCaptureEvents(const plot::RawCaptureFileData& capture
 
 bool Application::pumpRawCaptureReplay(std::string& error)
 {
-    if (!rawCaptureReplay_.loaded || !rawCaptureReplay_.playing) {
+    if (!rawCaptureReplay_.loaded) {
         return false;
     }
-    if (rawCaptureReplay_.capture.events.empty()) {
-        loggingFacade_.trace("raw_capture",
-                             "raw replay payload kind=raw_replay endpoint=" + rawCaptureReplay_.capture.protocolDir +
-                                 " bytes=" + std::to_string(rawCaptureReplay_.capture.payload.size()));
-        replayRawCaptureBytes(rawCaptureReplay_.context, rawCaptureReplay_.capture.payload);
-        finishRawCaptureImportReplay();
-        rawCaptureReplay_.playing = false;
-        rawCaptureReplay_.eventIndex = rawCaptureReplay_.capture.payload.empty() ? 0U : 1U;
-        rawCaptureReplay_.lastPumpMs = 0;
-        rawCaptureReplay_.accumulatedMs = 0.0;
+    if (rawCaptureReplay_.phase == OfflineReplayPhase::Preparing) {
+        if (!rawCaptureReplay_.preparation.valid() ||
+            rawCaptureReplay_.preparation.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            return true;
+        }
+        const auto result = rawCaptureReplay_.preparation.get();
+        rawCaptureReplay_.preparation = {};
+        if (!result.ok) {
+            rawCaptureReplay_.phase = OfflineReplayPhase::Failed;
+            rawCaptureReplay_.error = result.lastError;
+            rawCaptureReplay_.playing = false;
+            error = "离线协议准备失败: " + result.lastError;
+            return false;
+        }
+        rawCaptureReplay_.hasStreamSchema = result.snapshot.streamBuffer.has_value() && !result.snapshot.streamFrames.empty();
+        prepareRawCaptureImportReplay(rawCaptureReplay_.capture);
+        rawCaptureReplay_.context = makeRawCaptureReplayContext(rawCaptureReplay_.capture);
+        rawCaptureReplay_.phase = rawCaptureReplay_.targetEventIndex > 0 || rawCaptureReplay_.playing
+                                      ? OfflineReplayPhase::Replaying
+                                      : OfflineReplayPhase::Paused;
+        rawCaptureReplay_.playing = rawCaptureReplay_.targetEventIndex > 0 || rawCaptureReplay_.playing;
+        // 准备完成后必须从下一帧才推进前缀，避免调用方观察到一半完成的 seek 状态。
+        rawCaptureReplay_.lastPumpMs = nowMs();
         return true;
+    }
+    if (rawCaptureReplay_.phase == OfflineReplayPhase::Draining) {
+        return drainRawCaptureReplay(error);
+    }
+    if (rawCaptureReplay_.processing != OfflineReplayProcessing::BrowseRaw) {
+        static_cast<void>(flushOfflineScriptOutputs());
+        if (offlineScriptWorker_ && offlineScriptWorker_->idle()) {
+            rawCaptureReplay_.completedLuaInputs = rawCaptureReplay_.eventIndex;
+        }
+    }
+    if (!rawCaptureReplay_.playing || rawCaptureReplay_.phase == OfflineReplayPhase::Failed ||
+        rawCaptureReplay_.phase == OfflineReplayPhase::Cancelled) {
+        return false;
     }
 
     const auto now = nowMs();
@@ -3079,44 +3235,118 @@ bool Application::pumpRawCaptureReplay(std::string& error)
     rawCaptureReplay_.accumulatedMs +=
         static_cast<double>(now - rawCaptureReplay_.lastPumpMs) * rawCaptureReplay_.speed;
     rawCaptureReplay_.lastPumpMs = now;
+    rawCaptureReplay_.phase = OfflineReplayPhase::Replaying;
 
+    const auto started = std::chrono::steady_clock::now();
+    std::size_t events = 0;
+    std::size_t bytes = 0;
     bool changed = false;
-    while (rawCaptureReplay_.eventIndex < rawCaptureReplay_.capture.events.size()) {
-        double waitMs = 0.0;
-        if (rawCaptureReplay_.eventIndex == 0) {
-            const auto& current = rawCaptureReplay_.capture.events[0];
-            if (current.timestampMs > rawCaptureReplay_.capture.capturedAtMs) {
-                waitMs = static_cast<double>(current.timestampMs - rawCaptureReplay_.capture.capturedAtMs);
-            }
-        } else {
-            const auto& previous = rawCaptureReplay_.capture.events[rawCaptureReplay_.eventIndex - 1];
-            const auto& current = rawCaptureReplay_.capture.events[rawCaptureReplay_.eventIndex];
-            if (current.timestampMs > previous.timestampMs) {
-                waitMs = static_cast<double>(current.timestampMs - previous.timestampMs);
+    const auto eventCount = rawCaptureReplay_.capture.events.size();
+    while (rawCaptureReplay_.eventIndex < eventCount && events < kRawCaptureReplayEventsPerPump &&
+           bytes < kRawCaptureReplayBytesPerPump &&
+           std::chrono::steady_clock::now() - started < kRawCaptureReplayPumpBudget) {
+        if (rawCaptureReplay_.profileFence.valid()) {
+            if (rawCaptureReplay_.profileFence.wait_for(std::chrono::seconds(0)) != std::future_status::ready) break;
+            const auto result = rawCaptureReplay_.profileFence.get();
+            rawCaptureReplay_.profileFence = {};
+            if (!result.first) {
+                error = result.second;
+                rawCaptureReplay_.phase = OfflineReplayPhase::Failed;
+                rawCaptureReplay_.error = error;
+                rawCaptureReplay_.playing = false;
+                return false;
             }
         }
-        if (waitMs > rawCaptureReplay_.accumulatedMs) {
+        if (rawCaptureReplay_.targetEventIndex > 0 &&
+            rawCaptureReplay_.eventIndex >= rawCaptureReplay_.targetEventIndex &&
+            (rawCaptureReplay_.processing == OfflineReplayProcessing::BrowseRaw ||
+             rawCaptureReplay_.completedLuaInputs >= rawCaptureReplay_.targetEventIndex)) {
+            rawCaptureReplay_.playing = rawCaptureReplay_.resumeAfterSeek;
+            rawCaptureReplay_.phase = OfflineReplayPhase::Draining;
+            rawCaptureReplay_.pacing = rawCaptureReplay_.pacingAfterSeek;
+            rawCaptureReplay_.targetEventIndex = 0;
+            rawCaptureReplay_.resumeAfterSeek = false;
             break;
         }
-        rawCaptureReplay_.accumulatedMs -= waitMs;
+        const auto& current = rawCaptureReplay_.capture.events[rawCaptureReplay_.eventIndex];
+        double waitMs = 0.0;
+        if (rawCaptureReplay_.pacing == OfflineReplayPacing::OriginalTimeline) {
+            const auto previousTimestamp = rawCaptureReplay_.eventIndex == 0
+                                               ? rawCaptureReplay_.capture.capturedAtMs
+                                               : rawCaptureReplay_.capture.events[rawCaptureReplay_.eventIndex - 1].timestampMs;
+            if (current.timestampMs > previousTimestamp) waitMs = static_cast<double>(current.timestampMs - previousTimestamp);
+            if (waitMs > rawCaptureReplay_.accumulatedMs) break;
+            rawCaptureReplay_.accumulatedMs -= waitMs;
+        }
+        if (current.bytes.size() > kRawCaptureReplayBytesPerPump && events > 0) break;
+        if (rawCaptureReplay_.processing != OfflineReplayProcessing::BrowseRaw) {
+            if (!offlineScriptWorker_) break;
+            const bool controlEvent = current.type != plot::RawCaptureEventType::RxBytes;
+            if ((controlEvent && (!offlineScriptWorker_->idle() || !pendingScriptPlotAppends_.empty())) ||
+                (!controlEvent && offlineScriptWorker_->pendingRxBytes() >= kRawCaptureReplayBytesPerPump)) {
+                break;
+            }
+        }
         if (!replayRawCaptureEventAt(rawCaptureReplay_.eventIndex, error)) {
             rawCaptureReplay_.playing = false;
-            cancelRawCaptureImportReplay();
-            rawCaptureReplay_ = RawCaptureReplayState{};
-            dockStore_.waveState().statusMessage = "原始回放时间轴已卸载: " + error;
+            rawCaptureReplay_.phase = OfflineReplayPhase::Failed;
+            rawCaptureReplay_.error = error;
             return false;
         }
+        ++events;
+        bytes += current.bytes.size();
         changed = true;
+        if (rawCaptureReplay_.targetEventIndex > 0 &&
+            rawCaptureReplay_.eventIndex >= rawCaptureReplay_.targetEventIndex) {
+            // 已提交到半开前缀边界；等待该输入的 callback/output 完整 drain 后再宣布 seek 完成。
+            break;
+        }
     }
 
-    if (rawCaptureReplay_.eventIndex >= rawCaptureReplay_.capture.events.size()) {
-        finishRawCaptureImportReplay();
+    if (rawCaptureReplay_.eventIndex >= eventCount) {
         rawCaptureReplay_.playing = false;
-        rawCaptureReplay_.lastPumpMs = 0;
-        rawCaptureReplay_.accumulatedMs = 0.0;
-        return true;
+        rawCaptureReplay_.phase = OfflineReplayPhase::Draining;
+        return drainRawCaptureReplay(error) || changed;
     }
     return changed;
+}
+
+bool Application::drainRawCaptureReplay(std::string& error)
+{
+    if (rawCaptureReplay_.profileFence.valid()) {
+        if (rawCaptureReplay_.profileFence.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return true;
+        const auto result = rawCaptureReplay_.profileFence.get();
+        rawCaptureReplay_.profileFence = {};
+        if (!result.first) {
+            error = result.second;
+            rawCaptureReplay_.phase = OfflineReplayPhase::Failed;
+            rawCaptureReplay_.error = error;
+            return false;
+        }
+    }
+    flushOfflineScriptOutputs();
+    flushPendingTransferFrameRows(transferFrameRowsPerPump());
+    const auto snapshot = offlineScriptWorker_ ? offlineScriptWorker_->snapshot() : scripting::ScriptRuntimeSnapshot{};
+    if (rawCaptureReplay_.processing != OfflineReplayProcessing::BrowseRaw &&
+        (!offlineScriptWorker_ || !offlineScriptWorker_->idle() || snapshot.pendingWorkerRxBytes > 0U ||
+         snapshot.inputQueueSize > 0U || snapshot.outputQueueSize > 0U || snapshot.pendingPlotAppends > 0U ||
+         !pendingScriptPlotAppends_.empty())) {
+        return true;
+    }
+    // idle 之后再 drain 一次，覆盖 callback 结束与输出发布之间的边界。
+    if (rawCaptureReplay_.processing != OfflineReplayProcessing::BrowseRaw && flushOfflineScriptOutputs()) return true;
+    if (!pendingTransferFrameRows_.empty()) return true;
+    const bool resumeAfterDrain = rawCaptureReplay_.playing;
+    finishRawCaptureImportReplay();
+    rawCaptureReplay_.playing = rawCaptureReplay_.eventIndex >= rawCaptureReplay_.capture.events.size()
+                                    ? false
+                                    : (rawCaptureReplay_.targetEventIndex == 0 ? resumeAfterDrain : rawCaptureReplay_.playing);
+    rawCaptureReplay_.phase = rawCaptureReplay_.eventIndex >= rawCaptureReplay_.capture.events.size()
+                                  ? OfflineReplayPhase::Completed
+                                  : (rawCaptureReplay_.playing ? OfflineReplayPhase::Replaying : OfflineReplayPhase::Paused);
+    rawCaptureReplay_.lastPumpMs = 0;
+    rawCaptureReplay_.accumulatedMs = 0.0;
+    return true;
 }
 
 bool Application::replayRawCaptureEventAt(const std::size_t eventIndex, std::string& error)
@@ -3141,7 +3371,6 @@ bool Application::replayRawCaptureEventAt(const std::size_t eventIndex, std::str
     }
     suppressRawCaptureProfileEvents_ = false;
     suppressRawCapturePlotSetupEvents_ = false;
-    flushScriptOutputs();
     rawCaptureReplay_.eventIndex = eventIndex + 1;
     return true;
 }
@@ -3155,11 +3384,29 @@ bool Application::replayRawCaptureEvent(const plot::RawCaptureEvent& event,
             .endpoint = event.endpoint, .bytes = event.bytes, .message = event.writeStatus});
         return true;
     }
-    if (event.type == plot::RawCaptureEventType::ProfileSet) {
-        return applyRawCaptureRuntimeProfileEvent(event, false, error);
-    }
-    if (event.type == plot::RawCaptureEventType::ProfileClear) {
-        return applyRawCaptureRuntimeProfileEvent(event, true, error);
+    if (event.type == plot::RawCaptureEventType::ProfileSet ||
+        event.type == plot::RawCaptureEventType::ProfileClear) {
+        const scripting::StreamRuntimeProfileEvent profile{
+            .cleared = event.type == plot::RawCaptureEventType::ProfileClear,
+            .frameName = event.profile.frameName,
+            .length = event.type == plot::RawCaptureEventType::ProfileClear ? 0U : event.profile.length,
+            .channelMap = event.type == plot::RawCaptureEventType::ProfileClear
+                              ? std::vector<std::size_t>{}
+                              : event.profile.channelMap,
+        };
+        std::string frameError;
+        if (!applyTransferFrameRuntimeProfileEvent(profile, frameError)) {
+            error = frameError;
+            return false;
+        }
+        if (rawCaptureReplay_.processing != OfflineReplayProcessing::BrowseRaw) {
+            if (!offlineScriptWorker_) {
+                error = "离线脚本 worker 不可用";
+                return false;
+            }
+            rawCaptureReplay_.profileFence = offlineScriptWorker_->applyStreamRuntimeProfileEventAsync(profile).share();
+        }
+        return true;
     }
     if (event.type == plot::RawCaptureEventType::PlotSetup) {
         auto& wave = dockStore_.waveState();
@@ -3171,7 +3418,44 @@ bool Application::replayRawCaptureEvent(const plot::RawCaptureEvent& event,
         return true;
     }
     if (!event.bytes.empty()) {
-        replayRawCaptureBytes(replayContext, event.bytes);
+        dockStore_.appendReceiveRow(dock::ReceiveRow{
+            .timestampMs = replayContext.timestampMs,
+            .direction = "RX",
+            .endpoint = replayContext.endpoint,
+            .bytes = event.bytes,
+            .message = {},
+        });
+        appendTransferFrameRows(dock::ReceiveRow{
+            .timestampMs = replayContext.timestampMs,
+            .direction = "RX",
+            .endpoint = replayContext.endpoint,
+            .bytes = event.bytes,
+            .message = {},
+        });
+        if (rawCaptureReplay_.processing != OfflineReplayProcessing::BrowseRaw) {
+            if (!offlineScriptWorker_) {
+                error = "离线脚本 worker 不可用";
+                return false;
+            }
+            const auto streamBuffer = offlineScriptWorker_->snapshot().streamBuffer;
+            if (event.sequence == 0U && streamBuffer.has_value() && event.bytes.size() > streamBuffer->capacity) {
+                // legacy payload 没有现代事件边界，按 parser 容量分段，避免 drop_oldest 覆盖整块数据。
+                const auto chunkBytes = resolveRawCaptureReplayChunkBytes(streamBuffer);
+                for (std::size_t offset = 0; offset < event.bytes.size(); offset += chunkBytes) {
+                    const auto end = (std::min)(event.bytes.size(), offset + chunkBytes);
+                    offlineScriptWorker_->postTransportBytes(
+                        transport::TransportBytesEvent{replayContext,
+                            std::vector<std::uint8_t>(event.bytes.begin() + static_cast<std::ptrdiff_t>(offset),
+                                                      event.bytes.begin() + static_cast<std::ptrdiff_t>(end))},
+                        false);
+                    offlineScriptWorker_->waitIdle();
+                    flushOfflineScriptOutputsUnbounded();
+                }
+            } else {
+                // 现代事件边界保持为一个 worker command；禁止按 UI 字节预算拆成多个 callback。
+                offlineScriptWorker_->postTransportBytes(transport::TransportBytesEvent{replayContext, event.bytes}, false);
+            }
+        }
     }
     return true;
 }
@@ -3318,18 +3602,20 @@ void Application::flushRawCaptureReplayBatch()
     }
     rawCaptureReplayPendingBytes_ = 0U;
     if (runtimeConfig_.scripting.workerEnabled) {
-        // 核心流程：连续 RX 事件只在此处等待一次，避免每个录制小块都做一次线程往返。
-        scriptWorker_.waitIdle();
+        // 兼容旧同步导入 API；正式离线时间轴使用独立 worker 的分帧状态机。
+        if (offlineScriptWorker_) offlineScriptWorker_->waitIdle();
+        else scriptWorker_.waitIdle();
     }
-    // 导入期间必须无预算清空脚本输出，避免 pending 波形追加影响最终快照。
-    flushScriptOutputsUnbounded();
+    if (offlineScriptWorker_) flushOfflineScriptOutputsUnbounded();
+    else flushScriptOutputsUnbounded();
     flushPendingTransferFrameRows(std::numeric_limits<std::size_t>::max());
 }
 
 void Application::finishRawCaptureImportReplay()
 {
     auto& wave = dockStore_.waveState();
-    flushScriptOutputsUnbounded();
+    if (offlineScriptWorker_) flushOfflineScriptOutputsUnbounded();
+    else flushScriptOutputsUnbounded();
     flushPendingTransferFrameRows(std::numeric_limits<std::size_t>::max());
     const auto importedSnapshot =
         wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), false);
@@ -3347,10 +3633,14 @@ void Application::finishRawCaptureImportReplay()
 
 void Application::cancelRawCaptureImportReplay()
 {
+    ++rawCaptureReplay_.generation;
+    rawCaptureReplay_.profileFence = {};
     suppressRawCaptureProfileEvents_ = false;
     suppressRawCapturePlotSetupEvents_ = false;
     rawCaptureReplayPendingBytes_ = 0U;
     rawCaptureReplayBatchBytes_.clear();
+    pendingScriptPlotAppends_.clear();
+    pendingTransferFrameRows_.clear();
     dockStore_.waveState().buffer.setHistoryTrimSuspended(false);
 }
 
@@ -3360,64 +3650,83 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
         if (!importWaveCsvData(*capture.waveform, error)) return false;
         return (capture.events.empty() && capture.payload.empty()) || importRawRecords(capture, error);
     }
-    if (!validateRawCaptureImport(capture, error)) {
+    if (!loadRawCaptureReplayTimeline(capture,
+                                      OfflineReplayProcessing::CurrentProtocol,
+                                      OfflineReplayPacing::FastBatchParse,
+                                      error)) {
         return false;
     }
-
-    prepareRawCaptureImportReplay(capture);
-    if (!capture.events.empty()) {
-        if (!replayRawCaptureEvents(capture, error)) {
-            return false;
-        }
-    } else if (!capture.payload.empty()) {
-        replayRawCaptureBytes(makeRawCaptureReplayContext(capture), capture.payload);
-    }
-
-    finishRawCaptureImportReplay();
+    rawCaptureReplay_.playing = true;
     return true;
 }
 
 bool Application::loadRawCaptureReplayTimeline(const plot::RawCaptureFileData& capture, std::string& error)
 {
-    if (!validateRawCaptureImport(capture, error)) {
-        return false;
-    }
+    return loadRawCaptureReplayTimeline(
+        capture, OfflineReplayProcessing::BrowseRaw, OfflineReplayPacing::OriginalTimeline, error);
+}
+
+bool Application::loadRawCaptureReplayTimeline(const plot::RawCaptureFileData& capture,
+                                               const OfflineReplayProcessing processing,
+                                               const OfflineReplayPacing pacing,
+                                               std::string& error,
+                                               const session::SessionPackageData* package)
+{
+    if (!validateRawCaptureImport(capture, error)) return false;
     if (capture.events.empty() && capture.payload.empty()) {
         error = "原始波形没有可回放事件";
         return false;
     }
 
-    if (rawCaptureReplay_.loaded) {
-        cancelRawCaptureImportReplay();
-    }
+    const auto nextGeneration = rawCaptureReplay_.generation + 1U;
+    cleanupOfflineReplayResources();
+    cancelRawCaptureImportReplay();
     auto replayCapture = capture;
     if (replayCapture.events.empty() && !replayCapture.payload.empty()) {
-        replayCapture.events.push_back(plot::RawCaptureEvent{
-            .type = plot::RawCaptureEventType::RxBytes,
-            .timestampMs = replayCapture.capturedAtMs,
-            .bytes = replayCapture.payload,
-            .profile = {},
-            .plotSetup = {},
-        });
+        for (std::size_t offset = 0; offset < replayCapture.payload.size(); offset += kRawCaptureReplayLargeChunkBytes) {
+            const auto end = (std::min)(replayCapture.payload.size(), offset + kRawCaptureReplayLargeChunkBytes);
+            replayCapture.events.push_back(plot::RawCaptureEvent{
+                .type = plot::RawCaptureEventType::RxBytes,
+                .timestampMs = replayCapture.capturedAtMs,
+                .bytes = std::vector<std::uint8_t>(replayCapture.payload.begin() + static_cast<std::ptrdiff_t>(offset),
+                                                   replayCapture.payload.begin() + static_cast<std::ptrdiff_t>(end)),
+                .profile = {},
+                .plotSetup = {},
+                .endpoint = replayCapture.source,
+                .sequence = 0U,
+            });
+        }
     }
-    prepareRawCaptureImportReplay(replayCapture);
     rawCaptureReplay_ = RawCaptureReplayState{};
+    rawCaptureReplay_.generation = nextGeneration;
     rawCaptureReplay_.loaded = true;
-    rawCaptureReplay_.playing = false;
     rawCaptureReplay_.capture = std::move(replayCapture);
     rawCaptureReplay_.context = makeRawCaptureReplayContext(rawCaptureReplay_.capture);
     rawCaptureReplay_.speed = 1.0;
-    dockStore_.waveState().statusMessage = "原始回放时间轴已载入";
+    rawCaptureReplay_.pacing = pacing;
+    rawCaptureReplay_.phase = OfflineReplayPhase::Paused;
+    if (!prepareOfflineReplayProtocol(rawCaptureReplay_.capture, processing, package, error)) {
+        rawCaptureReplay_.phase = OfflineReplayPhase::Failed;
+        rawCaptureReplay_.error = error;
+        return false;
+    }
+    if (processing == OfflineReplayProcessing::BrowseRaw) {
+        prepareRawCaptureBrowse(rawCaptureReplay_.capture);
+        rawCaptureReplay_.phase = OfflineReplayPhase::Paused;
+    }
+    dockStore_.waveState().statusMessage = "原始回放时间轴已载入，默认不执行 Lua";
     return true;
 }
 
 void Application::unloadRawCaptureReplayTimeline()
 {
-    if (!rawCaptureReplay_.loaded) {
-        return;
-    }
+    if (!rawCaptureReplay_.loaded) return;
+    const auto nextGeneration = rawCaptureReplay_.generation + 1U;
     cancelRawCaptureImportReplay();
+    cleanupOfflineReplayResources();
     rawCaptureReplay_ = RawCaptureReplayState{};
+    rawCaptureReplay_.generation = nextGeneration;
+    rawCaptureReplay_.phase = OfflineReplayPhase::Cancelled;
     dockStore_.waveState().statusMessage = "原始回放时间轴已卸载";
 }
 
@@ -3427,7 +3736,11 @@ bool Application::playRawCaptureReplay(std::string& error)
         error = "尚未载入原始回放时间轴";
         return false;
     }
+    if (rawCaptureReplay_.phase == OfflineReplayPhase::Completed) {
+        return seekRawCaptureReplay(0, error) && playRawCaptureReplay(error);
+    }
     rawCaptureReplay_.playing = true;
+    if (rawCaptureReplay_.phase != OfflineReplayPhase::Preparing) rawCaptureReplay_.phase = OfflineReplayPhase::Replaying;
     rawCaptureReplay_.lastPumpMs = nowMs();
     return true;
 }
@@ -3435,6 +3748,10 @@ bool Application::playRawCaptureReplay(std::string& error)
 void Application::pauseRawCaptureReplay()
 {
     rawCaptureReplay_.playing = false;
+    if (rawCaptureReplay_.loaded && rawCaptureReplay_.phase != OfflineReplayPhase::Completed &&
+        rawCaptureReplay_.phase != OfflineReplayPhase::Failed) {
+        rawCaptureReplay_.phase = OfflineReplayPhase::Paused;
+    }
 }
 
 bool Application::stepRawCaptureReplay(std::string& error)
@@ -3443,8 +3760,19 @@ bool Application::stepRawCaptureReplay(std::string& error)
         error = "尚未载入原始回放时间轴";
         return false;
     }
+    if (rawCaptureReplay_.phase == OfflineReplayPhase::Preparing) {
+        error = "离线协议仍在准备中";
+        return false;
+    }
     rawCaptureReplay_.playing = false;
-    return replayRawCaptureEventAt(rawCaptureReplay_.eventIndex, error);
+    const auto ok = replayRawCaptureEventAt(rawCaptureReplay_.eventIndex, error);
+    if (ok) {
+        rawCaptureReplay_.phase = rawCaptureReplay_.eventIndex >= rawCaptureReplay_.capture.events.size()
+                                      ? OfflineReplayPhase::Draining
+                                      : OfflineReplayPhase::Paused;
+        flushPendingTransferFrameRows(transferFrameRowsPerPump());
+    }
+    return ok;
 }
 
 bool Application::seekRawCaptureReplay(const std::size_t eventIndex, std::string& error)
@@ -3454,38 +3782,37 @@ bool Application::seekRawCaptureReplay(const std::size_t eventIndex, std::string
         return false;
     }
 
-    const auto capture = rawCaptureReplay_.capture;
-    const auto speed = rawCaptureReplay_.speed;
-    const bool wasPlaying = rawCaptureReplay_.playing;
-    const auto targetIndex = (std::min)(eventIndex, capture.events.empty() ? std::size_t{1} : capture.events.size());
-    if (targetIndex >= kRawCaptureReplaySeekNoticeEvents) {
-        dockStore_.waveState().statusMessage = "正在从头重放原始回放时间轴以完成定位...";
+    auto next = rawCaptureReplay_;
+    next.eventIndex = 0;
+    next.targetEventIndex = (std::min)(eventIndex, next.capture.events.size());
+    next.resumeAfterSeek = rawCaptureReplay_.playing;
+    next.pacingAfterSeek = rawCaptureReplay_.pacing;
+    next.pacing = OfflineReplayPacing::FastBatchParse;
+    next.playing = next.targetEventIndex > 0;
+    next.phase = OfflineReplayPhase::Paused;
+    next.lastPumpMs = nowMs();
+    next.accumulatedMs = 0.0;
+    next.generation = rawCaptureReplay_.generation + 1U;
+    next.preparation = {};
+    next.profileFence = {};
+    if (next.processing == OfflineReplayProcessing::PackageProtocol) {
+        next.protocolDirectory.clear();
+        next.temporaryProtocolDir.clear();
     }
-    prepareRawCaptureImportReplay(capture);
-    rawCaptureReplay_ = RawCaptureReplayState{};
-    rawCaptureReplay_.loaded = true;
-    rawCaptureReplay_.playing = false;
-    rawCaptureReplay_.capture = capture;
-    rawCaptureReplay_.context = makeRawCaptureReplayContext(capture);
-    rawCaptureReplay_.speed = speed;
-    for (std::size_t index = 0; index < targetIndex; ++index) {
-        if (!replayRawCaptureEventAt(index, error)) {
-            cancelRawCaptureImportReplay();
-            rawCaptureReplay_ = RawCaptureReplayState{};
-            dockStore_.waveState().statusMessage = "原始回放定位失败，时间轴已卸载";
-            return false;
-        }
+    cleanupOfflineReplayResources();
+    rawCaptureReplay_ = std::move(next);
+
+    if (rawCaptureReplay_.processing == OfflineReplayProcessing::BrowseRaw) {
+        prepareRawCaptureBrowse(rawCaptureReplay_.capture);
+        rawCaptureReplay_.phase = rawCaptureReplay_.playing ? OfflineReplayPhase::Replaying : OfflineReplayPhase::Paused;
+        return true;
     }
-    if (rawCaptureReplay_.eventIndex >= rawCaptureReplay_.capture.events.size()) {
-        finishRawCaptureImportReplay();
-        rawCaptureReplay_.playing = false;
-    } else {
-        rawCaptureReplay_.playing = wasPlaying;
-        rawCaptureReplay_.lastPumpMs = nowMs();
+    if (!prepareOfflineReplayProtocol(rawCaptureReplay_.capture, rawCaptureReplay_.processing, nullptr, error)) {
+        rawCaptureReplay_.phase = OfflineReplayPhase::Failed;
+        rawCaptureReplay_.error = error;
+        return false;
     }
-    if (targetIndex >= kRawCaptureReplaySeekNoticeEvents) {
-        dockStore_.waveState().statusMessage = "原始回放定位完成";
-    }
+    dockStore_.waveState().statusMessage = "正在准备干净离线状态并分批定位...";
     return true;
 }
 
@@ -3496,13 +3823,12 @@ void Application::setRawCaptureReplaySpeed(const double speed)
 
 Application::RawCaptureReplayStatus Application::rawCaptureReplayStatus() const
 {
-    const auto eventCount = rawCaptureReplay_.capture.events.empty()
-                                ? (rawCaptureReplay_.capture.payload.empty() ? 0U : 1U)
-                                : rawCaptureReplay_.capture.events.size();
-    const double progress =
-        eventCount == 0U
-            ? 0.0
-            : (std::min)(1.0, static_cast<double>(rawCaptureReplay_.eventIndex) / static_cast<double>(eventCount));
+    const auto eventCount = rawCaptureReplay_.capture.events.size();
+    const double progress = eventCount == 0U
+                                ? 0.0
+                                : (std::min)(1.0, static_cast<double>(rawCaptureReplay_.eventIndex) /
+                                                      static_cast<double>(eventCount));
+    const auto snapshot = offlineScriptWorker_ ? offlineScriptWorker_->snapshot() : scripting::ScriptRuntimeSnapshot{};
     return RawCaptureReplayStatus{
         .loaded = rawCaptureReplay_.loaded,
         .playing = rawCaptureReplay_.playing,
@@ -3510,6 +3836,18 @@ Application::RawCaptureReplayStatus Application::rawCaptureReplayStatus() const
         .eventCount = eventCount,
         .progress = progress,
         .speed = rawCaptureReplay_.speed,
+        .phase = rawCaptureReplay_.phase,
+        .processing = rawCaptureReplay_.processing,
+        .pacing = rawCaptureReplay_.pacing,
+        .protocolSource = rawCaptureReplay_.protocolSource,
+        .inputBacklog = eventCount > rawCaptureReplay_.eventIndex ? eventCount - rawCaptureReplay_.eventIndex : 0U,
+        .workerBacklog = snapshot.inputQueueSize + snapshot.pendingWorkerRxBytes,
+        .outputBacklog = snapshot.outputQueueSize + pendingScriptPlotAppends_.size() + pendingTransferFrameRows_.size(),
+        .hasStreamSchema = rawCaptureReplay_.processing == OfflineReplayProcessing::BrowseRaw
+                               ? transferFrameParser_.has_value()
+                               : rawCaptureReplay_.hasStreamSchema,
+        .truncated = rawCaptureReplay_.capture.truncated,
+        .error = rawCaptureReplay_.error,
     };
 }
 
@@ -4592,7 +4930,12 @@ bool Application::applyScriptPlotSetups(const std::vector<scripting::PlotSetup>&
 
 void Application::enqueueScriptPlotAppends(const std::vector<std::pair<std::size_t, plot::WaveAppendRequest>>& appends)
 {
+    const auto hardLimit = (std::max)(runtimeConfig_.scripting.workerOutputQueueLimit, std::size_t{1U});
     for (auto append : appends) {
+        if (pendingScriptPlotAppends_.size() >= hardLimit) {
+            loggingFacade_.warn("worker", "plot 输出达到硬上界，已丢弃超限离线输出");
+            break;
+        }
         pendingScriptPlotAppends_.push_back(std::move(append));
     }
 }
@@ -4636,6 +4979,51 @@ bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBat
     changed = applyScriptOscilloscopeOutputs(batch) || changed;
     changed = applyScriptPlotOutputs(batch) || changed;
     changed = driveTxScheduler() || changed;
+    return changed;
+}
+
+bool Application::applyOfflineScriptOutputBatch(scripting::ScriptRuntimeOutputBatch batch)
+{
+    // 离线输出只允许影响解析可见结果；物理发送、请求、弹窗、文件弹窗和运行状态更新一律丢弃。
+    batch.txRequests.clear();
+    batch.requestGuardResets.clear();
+    batch.requestDoneResults.clear();
+    batch.dialogRequests.clear();
+    batch.fileDialogRequests.clear();
+    batch.statusUpdates.clear();
+    batch.oscilloscopeRunningUpdates.clear();
+    bool changed = false;
+    changed = applyScriptTransportStats(batch) || changed;
+    changed = applyScriptRuntimeProfileEvents(batch) || changed;
+    changed = applyScriptUiAndLogOutputs(batch) || changed;
+    changed = applyScriptPlotOutputs(batch) || changed;
+    return changed;
+}
+
+bool Application::flushOfflineScriptOutputs()
+{
+    if (!offlineScriptWorker_) return false;
+    bool changed = false;
+    const auto flushBudgetMs = outputFlushBudgetMs();
+    const auto flushStartedAt = nowUs();
+    auto batch = offlineScriptWorker_->drainOneOutput();
+    while (batch.has_value()) {
+        changed = applyOfflineScriptOutputBatch(std::move(*batch)) || changed;
+        if (flushBudgetMs > 0.0 && (nowUs() - flushStartedAt) >= static_cast<std::uint64_t>(flushBudgetMs * 1000.0)) break;
+        batch = offlineScriptWorker_->drainOneOutput();
+    }
+    return changed;
+}
+
+bool Application::flushOfflineScriptOutputsUnbounded()
+{
+    if (!offlineScriptWorker_) return false;
+    bool changed = false;
+    auto batch = offlineScriptWorker_->drainOneOutput();
+    while (batch.has_value()) {
+        changed = applyOfflineScriptOutputBatch(std::move(*batch)) || changed;
+        batch = offlineScriptWorker_->drainOneOutput();
+    }
     return changed;
 }
 

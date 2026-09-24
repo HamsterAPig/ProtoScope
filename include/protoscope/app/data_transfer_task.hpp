@@ -20,6 +20,7 @@ struct DataTransferStatus {
     bool complete{false};
     bool importing{false};
     bool includesRecords{false};
+    bool hasPackageProtocol{false};
     std::size_t submitted{0};
     std::size_t total{0};
     std::string error;
@@ -33,7 +34,6 @@ struct DataImportBatch {
     std::size_t sampleIndexOffset{0};
     std::vector<plot::WaveSample> samples;
     std::optional<plot::RawCaptureEvent> event;
-    bool eventContinuation{false};
     std::shared_ptr<session::SessionPackageData> session;
     std::vector<plot::RawCaptureEvent> events;
 };

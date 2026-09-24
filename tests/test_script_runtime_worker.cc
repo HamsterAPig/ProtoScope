@@ -202,7 +202,7 @@ void test_script_runtime_worker_rx_limit_keeps_all_queued_bytes()
         .execution = {.callbackTimeoutMs = 5000},
         .enabled = true,
         .rxQueueLimitBytes = 6U,
-        .outputQueueLimit = 1U,
+        .outputQueueLimit = 16U,
         .batchBytes = 1U,
         .backpressureEnabled = false,
     });
@@ -228,11 +228,38 @@ void test_script_runtime_worker_rx_limit_keeps_all_queued_bytes()
     worker.waitIdle();
     const auto outputs = worker.drainOutputs();
 
-    require(hasLog(outputs, "输出队列超过告警阈值"), "输出队列超限时应通过脚本日志告警但不丢弃");
+    require(outputs.size() <= 16U, "worker 输出队列不得超过配置硬上界");
     require(hasEvent(outputs, "worker_bytes", "first=1"), "阻塞中的首个 RX 事件不应被限流清理");
     require(hasEvent(outputs, "worker_bytes", "first=161"), "RX 队列超过阈值后仍应保留最旧待解析字节");
     require(hasEvent(outputs, "worker_bytes", "first=178"), "RX 队列超过阈值后仍应保留较新的待解析字节");
     require(hasEvent(outputs, "worker_bytes", "first=195"), "RX 队列超过阈值后仍应保留最新待解析字节");
+}
+
+void test_script_runtime_worker_output_limit_drain_wakes_blocked_publisher()
+{
+    const ScopedTempPath protocolDir(makeWorkerProtocolDir("output-limit", R"lua(
+function on_bytes(ctx, bytes)
+  proto.emit("bounded_output", tostring(bytes[1]))
+end
+)lua"));
+    protoscope::scripting::ScriptRuntimeWorker worker;
+    worker.configure({.enabled = true, .outputQueueLimit = 1U, .backpressureEnabled = false});
+    require(worker.loadProtocolDirectory(protocolDir.path().generic_string()).ok,
+            "输出硬上界协议应可加载");
+    (void) worker.drainOutputs();
+    worker.postTransportBytes(bytesEvent({1}, 1), false);
+    worker.postTransportBytes(bytesEvent({2}, 2), false);
+    for (int i = 0; i < 200 && worker.snapshot().outputQueueSize == 0U; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    require(worker.snapshot().outputQueueSize == 1U, "输出队列应达到但不超过硬上界 1");
+    const auto first = worker.drainOutputs();
+    require(first.size() == 1U && hasEvent(first, "bounded_output", "1"),
+            "首次 drain 应得到第一批输出");
+    worker.waitIdle();
+    const auto second = worker.drainOutputs();
+    require(second.size() == 1U && hasEvent(second, "bounded_output", "2"),
+            "批量 drain 后必须唤醒被阻塞发布者且不丢第二批输出");
+    require(worker.snapshot().outputQueueSize == 0U, "最终输出队列应归零");
 }
 
 void test_script_runtime_worker_batch_bytes_merges_adjacent_rx_events()

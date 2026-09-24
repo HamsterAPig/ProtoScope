@@ -193,10 +193,20 @@ void ScriptHost::configureLuaRuntimeForScriptLoad(Runtime& runtime, const std::s
                                sol::lib::package,
                                sol::lib::string,
                                sol::lib::table,
-                               sol::lib::utf8,
-                               sol::lib::os);
+                               sol::lib::utf8);
+    if (!offlineRestricted_) runtime.lua.open_libraries(sol::lib::os);
 
     auto& lua = runtime.lua;
+    if (offlineRestricted_) {
+        lua["os"] = sol::nil;
+        lua["dofile"] = sol::nil;
+        lua["loadfile"] = sol::nil;
+        auto package = lua["package"].get<sol::table>();
+        package["cpath"] = "";
+        auto searchers = package["searchers"].get<sol::table>();
+        searchers[3] = sol::nil;
+        searchers[4] = sol::nil;
+    }
     lua.new_usertype<ProtoBuffer>(
         "ProtoBuffer",
         "size",

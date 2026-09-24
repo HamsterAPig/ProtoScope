@@ -517,6 +517,82 @@ std::size_t countScriptEvents(const protoscope::dock::ScriptDockState& scriptSta
         }));
 }
 
+std::vector<std::string> scriptEventPayloads(const protoscope::dock::ScriptDockState& scriptState,
+                                             const std::string& name)
+{
+    std::vector<std::string> payloads;
+    const auto prefix = name + ": ";
+    for (const auto& row : scriptState.rows) {
+        if (row.direction == "EVENT" && row.message.starts_with(prefix)) {
+            payloads.push_back(row.message.substr(prefix.size()));
+        }
+    }
+    return payloads;
+}
+
+std::vector<double> firstChannelValues(const protoscope::app::Application& application)
+{
+    const auto snapshot = application.docks().waveState().buffer.snapshot(
+        -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), false);
+    std::vector<double> values;
+    if (snapshot.channels.empty()) {
+        return values;
+    }
+    const auto& channel = snapshot.channels.front();
+    values.reserve(channel.totalSamples);
+    for (std::size_t index = 0; index < channel.totalSamples; ++index) {
+        values.push_back(channel.samples[index].value);
+    }
+    return values;
+}
+
+void pumpReplayUntil(protoscope::app::Application& application,
+                     const std::function<bool(const protoscope::app::Application::RawCaptureReplayStatus&)>& ready,
+                     const char* timeoutMessage)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (!ready(application.rawCaptureReplayStatus())) {
+        require(std::chrono::steady_clock::now() < deadline, timeoutMessage);
+        application.pumpOnce();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
+void waitReplayPrepared(protoscope::app::Application& application)
+{
+    pumpReplayUntil(
+        application,
+        [](const auto& status) { return status.phase != protoscope::app::Application::OfflineReplayPhase::Preparing; },
+        "离线协议准备超时");
+}
+
+void waitReplayCompleted(protoscope::app::Application& application)
+{
+    pumpReplayUntil(
+        application,
+        [](const auto& status) {
+            return status.phase == protoscope::app::Application::OfflineReplayPhase::Completed ||
+                   status.phase == protoscope::app::Application::OfflineReplayPhase::Failed;
+        },
+        "离线回放完成超时");
+    const auto status = application.rawCaptureReplayStatus();
+    if (status.phase != protoscope::app::Application::OfflineReplayPhase::Completed) {
+        throw std::runtime_error("离线回放失败: " + status.error);
+    }
+}
+
+void pumpUntilScriptEventCount(protoscope::app::Application& application,
+                               const std::string& name,
+                               const std::size_t expected)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (countScriptEvents(application.docks().scriptState(), name) < expected) {
+        require(std::chrono::steady_clock::now() < deadline, "等待离线 Lua callback 输出超时");
+        application.pumpOnce();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
 void writeTextFile(const std::filesystem::path& path, std::string_view text)
 {
     std::filesystem::create_directories(path.parent_path());
@@ -2250,6 +2326,7 @@ void test_application_raw_capture_export_import_roundtrip()
             "清空历史后不应保留旧波形样本");
 
     require(application.importWaveRawCapture(*capture, error), "应用导入 psraw 应成功");
+    waitReplayCompleted(application);
     const auto importedSnapshot = application.docks().waveState().buffer.snapshot(
         -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
     require(!importedSnapshot.channels.empty(), "导入 psraw 后应恢复波形通道");
@@ -2259,6 +2336,7 @@ void test_application_raw_capture_export_import_roundtrip()
             "导入 psraw 后应回填原始缓冲");
 
     require(application.importWaveRawCapture(*capture, error), "同一 psraw 第二次导入仍应成功");
+    waitReplayCompleted(application);
     const auto secondImportedSnapshot = application.docks().waveState().buffer.snapshot(
         -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
     require(!secondImportedSnapshot.channels.empty(), "第二次导入 psraw 后应恢复波形通道");
@@ -2352,8 +2430,8 @@ void test_application_session_package_export_contains_replay_assets()
     importedApplication.rememberFileDialogPreferences({"local-import", "local-export"});
     require(importedApplication.importSessionPackage(packagePath, error), "导入现场会话包应成功");
     const auto& importedLua = importedApplication.docks().luaState();
-    require(importedLua.protocolDir.find("ProtoScope-session-protocol-") != std::string::npos,
-            "导入现场包应使用释放出的临时协议目录");
+    require(importedLua.protocolDir.find("ProtoScope-session-protocol-") == std::string::npos,
+            "默认 BrowseRaw 不应替换实时协议运行时");
     const auto importedConfig = importedApplication.captureConfig();
     require(importedConfig.gui.fileDialogs.lastImportDirectory == "local-import" &&
                 importedConfig.gui.fileDialogs.lastExportDirectory == "local-export",
@@ -2363,7 +2441,9 @@ void test_application_session_package_export_contains_replay_assets()
     require(importedConfig.protocol.selectedDir.find("ProtoScope-session-protocol-") == std::string::npos,
             "保存配置时不应写入现场包临时协议目录");
     require(importedApplication.docks().waveState().rawCapture.payload == transportState->queuedRxBytes,
-            "导入现场包后应回放包内 raw payload");
+            "导入现场包后应恢复包内 raw payload");
+    require(importedApplication.docks().scriptState().rows.empty(),
+            "默认 BrowseRaw 导入现场包不得执行任何 Lua");
     auto importedReplayStatus = importedApplication.rawCaptureReplayStatus();
     require(importedReplayStatus.loaded && !importedReplayStatus.playing && importedReplayStatus.eventIndex == 0U,
             "导入现场包后应载入时间轴并暂停在起点");
@@ -2458,12 +2538,11 @@ end
     require(importer.initialize(), "导入应用初始化失败");
     require(importer.importSessionPackage(packagePath, error), "包含 helper.lua 的现场包应可导入");
     const auto& importedLua = importer.docks().luaState();
-    require(importedLua.protocolDir.find("ProtoScope-session-protocol-") != std::string::npos,
-            "导入现场包应释放到临时协议目录");
-    require(std::filesystem::exists(std::filesystem::path(importedLua.protocolDir) / "helper.lua"),
-            "导入现场包后临时协议目录应包含 helper.lua");
-    require(std::filesystem::exists(std::filesystem::path(importedLua.protocolDir) / "assets" / "info.txt"),
-            "导入现场包后临时协议目录应包含子目录资源文件");
+    require(importedLua.protocolDir.find("ProtoScope-session-protocol-") == std::string::npos,
+            "默认 BrowseRaw 不应替换实时协议目录");
+    require(protoscope::session::findSessionPackageEntry(*package, "protocol/helper.lua") != nullptr &&
+                protoscope::session::findSessionPackageEntry(*package, "protocol/assets/info.txt") != nullptr,
+            "完整包仍应保留 helper.lua 与子目录资源，供显式 PackageProtocol 使用");
     require(importer.docks().waveState().rawCapture.payload == transportState->queuedRxBytes,
             "导入现场包后应回放包内 raw payload");
     importer.shutdown();
@@ -2638,13 +2717,14 @@ void test_application_session_package_import_invalid_protocol_rolls_back_runtime
     require(importer.initialize(), "导入应用初始化失败");
     const auto beforeLua = importer.docks().luaState();
     const auto beforeConfig = importer.captureConfig();
-    require(!importer.importSessionPackage(invalidPackagePath, error), "无效协议现场包导入应失败");
+    require(importer.importSessionPackage(invalidPackagePath, error),
+            "默认 BrowseRaw 不执行无效包内协议，因此仍应可载入原始记录");
     const auto& afterLua = importer.docks().luaState();
     const auto afterConfig = importer.captureConfig();
-    require(afterLua.protocolDir == beforeLua.protocolDir, "现场包导入失败后运行协议目录应回滚");
-    require(afterLua.scriptPath == beforeLua.scriptPath, "现场包导入失败后运行脚本路径应回滚");
+    require(afterLua.protocolDir == beforeLua.protocolDir, "BrowseRaw 不应替换运行协议目录");
+    require(afterLua.scriptPath == beforeLua.scriptPath, "BrowseRaw 不应替换运行脚本路径");
     require(afterConfig.protocol.selectedDir == beforeConfig.protocol.selectedDir,
-            "现场包导入失败后保存配置不应指向临时协议目录");
+            "BrowseRaw 保存配置不应指向临时协议目录");
     importer.shutdown();
 }
 
@@ -2704,6 +2784,9 @@ void test_application_raw_capture_replay_timeline_steps_events()
             "接收框应保留首个回放事件的完整原始字节");
 
     require(application.seekRawCaptureReplay(2, error), "回放时间轴应可定位到中间事件");
+    pumpReplayUntil(application,
+                    [](const auto& replay) { return replay.eventIndex == 2U && !replay.playing; },
+                    "回放时间轴定位到中间事件超时");
     status = application.rawCaptureReplayStatus();
     require(status.loaded && !status.playing, "暂停状态定位到中间事件后仍应暂停");
     require(status.eventIndex == 2 && status.eventCount == 3, "定位到中间事件后事件索引应正确");
@@ -2711,6 +2794,9 @@ void test_application_raw_capture_replay_timeline_steps_events()
 
     require(application.playRawCaptureReplay(error), "中间位置继续播放应成功");
     require(application.seekRawCaptureReplay(1, error), "播放中定位应成功并恢复播放状态");
+    pumpReplayUntil(application,
+                    [](const auto& replay) { return replay.eventIndex >= 1U; },
+                    "播放中定位到前缀超时");
     status = application.rawCaptureReplayStatus();
     require(status.loaded && status.playing, "播放中定位到未结束位置后应恢复播放状态");
     require(status.eventIndex == 1, "播放中定位后事件索引应正确");
@@ -2718,6 +2804,7 @@ void test_application_raw_capture_replay_timeline_steps_events()
     application.pauseRawCaptureReplay();
 
     require(application.seekRawCaptureReplay(status.eventCount, error), "回放时间轴应可定位到末尾");
+    waitReplayCompleted(application);
     status = application.rawCaptureReplayStatus();
     require(status.loaded && !status.playing, "定位到末尾后应停止播放");
     require(status.eventIndex == status.eventCount && status.progress == 1.0, "定位到末尾后进度应为 100%");
@@ -2785,12 +2872,571 @@ void test_application_raw_capture_replay_populates_parsed_receive_rows()
     require(receive.frameRows.size() == 1U, "切换逐帧视图不应清空预生成的回放帧");
 
     require(application.seekRawCaptureReplay(1, error), "逐帧回放应可向后定位到半帧位置");
+    pumpReplayUntil(application,
+                    [](const auto& replay) { return replay.eventIndex == 1U && !replay.playing; },
+                    "逐帧回放定位到半帧超时");
     require(receive.rows.size() == 1U && receive.frameRows.empty(), "向后定位后原始行和逐帧结果应重建到目标位置");
     require(application.seekRawCaptureReplay(2, error), "逐帧回放应可重新定位到完整帧位置");
+    pumpReplayUntil(application,
+                    [](const auto& replay) { return replay.eventIndex == 2U && !replay.playing; },
+                    "逐帧回放定位到完整帧超时");
     require(receive.rows.size() == 2U && receive.frameRows.size() == 1U,
             "重新定位到完整帧位置后应恢复对应原始行和解析帧");
     require(application.docks().commState().lastPumpStreamErrors == 0U,
             "向后定位后 Lua stream parser 不应残留上轮半帧并产生解析错误");
+    application.shutdown();
+}
+
+void test_application_offline_replay_modes_preserve_boundaries_and_budget()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-offline-replay-modes"));
+    writeTextFile(protocolDir.path() / "main.lua", R"lua(
+proto.plot.setup({ channels = { { label = "boundary" } }, reset_history = true })
+function on_bytes(ctx, bytes)
+  proto.emit("offline_boundary", tostring(#bytes) .. ":" .. tostring(ctx.timestamp_ms or 0))
+  local sequence = (_G.offline_sequence or 0) + 1
+  _G.offline_sequence = sequence
+  proto.plot.push(1, { samples = { { t = sequence, y = #bytes } } })
+  proto.send({0xAA})
+end
+)lua");
+
+    protoscope::app::Application application;
+    auto transportState = std::make_shared<RecordingTransport::State>();
+    application.setTransportFactoryForTest([transportState](auto) {
+        return std::make_unique<RecordingTransport>(transportState);
+    });
+    require(application.initialize(), "离线模式测试应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "离线模式测试协议应可加载");
+
+    protoscope::plot::RawCaptureFileData capture;
+    capture.protocolDir = "旧现场协议目录";
+    capture.capturedAtMs = 10;
+    for (std::size_t index = 0; index < 600; ++index) {
+        capture.events.push_back({.type = protoscope::plot::RawCaptureEventType::RxBytes,
+                                  .timestampMs = 20,
+                                  .bytes = {static_cast<std::uint8_t>(index & 0xFFU)},
+                                  .endpoint = "recorded://device",
+                                  .sequence = index + 1U});
+        capture.payload.push_back(static_cast<std::uint8_t>(index & 0xFFU));
+    }
+    capture.events.push_back({.type = protoscope::plot::RawCaptureEventType::TxBytes,
+                              .timestampMs = 20,
+                              .bytes = {0x55},
+                              .endpoint = "recorded://device",
+                              .sequence = 601U});
+
+    std::string error;
+    require(application.loadRawCaptureReplayTimeline(capture, error), "BrowseRaw 时间轴应可载入");
+    require(application.playRawCaptureReplay(error), "BrowseRaw 应可播放");
+    application.setRawCaptureReplaySpeed(16.0);
+    application.pumpOnce();
+    auto browseStatus = application.rawCaptureReplayStatus();
+    require(browseStatus.eventIndex <= 256U, "相同 timestamp 事件单轮不得突破事件预算");
+    while (browseStatus.eventIndex < browseStatus.eventCount) {
+        application.pumpOnce();
+        browseStatus = application.rawCaptureReplayStatus();
+    }
+    require(countScriptEvents(application.docks().scriptState(), "offline_boundary") == 0U,
+            "BrowseRaw 不得执行 Lua callback");
+    const auto beforeViewSwitch = countScriptEvents(application.docks().scriptState(), "offline_boundary");
+    application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
+    application.activateParsedTransferLogView();
+    require(countScriptEvents(application.docks().scriptState(), "offline_boundary") == beforeViewSwitch,
+            "原始/逐帧视图切换不得增加 callback");
+    require(transportState->sentBytes.empty(), "BrowseRaw 中 TX 和脚本发送都不得触达物理 transport");
+
+    require(application.loadRawCaptureReplayTimeline(capture,
+        protoscope::app::Application::OfflineReplayProcessing::CurrentProtocol,
+        protoscope::app::Application::OfflineReplayPacing::FastBatchParse, error),
+        "旧包应可选择当前磁盘 Lua 重新解析");
+    require(application.playRawCaptureReplay(error), "当前协议快速解析应可启动");
+    for (int pump = 0; pump < 10000; ++pump) {
+        application.pumpOnce();
+        const auto status = application.rawCaptureReplayStatus();
+        if (status.phase == protoscope::app::Application::OfflineReplayPhase::Completed) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    require(application.rawCaptureReplayStatus().phase == protoscope::app::Application::OfflineReplayPhase::Completed,
+            "当前协议快速解析应完成 draining");
+    const auto parsedSnapshot = application.docks().waveState().buffer.snapshot(-1e9, 1e9, false);
+    if (parsedSnapshot.channels.empty() || parsedSnapshot.channels.front().totalSamples != 600U) {
+        throw std::runtime_error("现代 RawCaptureEvent::RxBytes 应各保持一个 Lua 输入边界: actual=" +
+                                 std::to_string(parsedSnapshot.channels.empty()
+                                                    ? 0U
+                                                    : parsedSnapshot.channels.front().totalSamples));
+    }
+    require(application.docks().receiveState().rows.size() == 601U, "RX/TX 原始事件应完整恢复");
+    require(transportState->sentBytes.empty(), "离线 Lua proto.send 不得触达物理 transport");
+    application.shutdown();
+}
+
+void test_application_offline_replay_current_and_package_protocol_have_independent_goldens()
+{
+    const ScopedTempPath currentProtocolDir(makeUniqueTempDir("protoscope-offline-current-golden"));
+    writeTextFile(currentProtocolDir.path() / "main.lua", R"lua(
+proto.plot.setup({ channels = { { label = "current" } }, reset_history = true })
+function on_bytes(ctx, bytes)
+  local value = bytes[1] * 10 + #bytes
+  proto.emit("protocol_golden", "current:" .. tostring(value))
+  proto.plot.push(1, { samples = { { t = 1, y = value } } })
+end
+)lua");
+
+    const std::string packageScript = R"lua(
+proto.plot.setup({ channels = { { label = "package" } }, reset_history = true })
+function on_bytes(ctx, bytes)
+  local value = bytes[1] + 100
+  proto.emit("protocol_golden", "package:" .. tostring(value))
+  proto.plot.push(1, { samples = { { t = 1, y = value } } })
+end
+)lua";
+    protoscope::session::SessionPackageData package;
+    package.entries.push_back({.name = "protocol/main.lua",
+                               .bytes = std::vector<std::uint8_t>(packageScript.begin(), packageScript.end())});
+
+    protoscope::plot::RawCaptureFileData capture;
+    capture.protocolName = "old-field-package";
+    capture.protocolDir = "removed/old/protocol";
+    capture.capturedAtMs = 100;
+    capture.payload = {3, 4};
+    capture.events = {{.type = protoscope::plot::RawCaptureEventType::RxBytes,
+                       .timestampMs = 101,
+                       .bytes = {3, 4},
+                       .endpoint = "recorded://golden",
+                       .sequence = 1}};
+    std::vector<std::uint8_t> rawBytes;
+    std::string packageError;
+    require(protoscope::plot::encodeRawCaptureFile(capture, rawBytes, packageError),
+            "完整包测试 raw_capture 应可编码");
+    protoscope::config::ConfigStore configStore;
+    std::string configYaml;
+    require(configStore.saveText(protoscope::config::AppConfig{}, configYaml, packageError),
+            "完整包测试 config.yaml 应可编码");
+    package.entries.push_back({.name = "config.yaml",
+                               .bytes = std::vector<std::uint8_t>(configYaml.begin(), configYaml.end())});
+    package.entries.push_back({.name = "raw_capture.psraw", .bytes = rawBytes});
+    package.entries.push_back({.name = "analysis/markers.yaml", .bytes = {}});
+
+    protoscope::app::Application application;
+    require(application.initialize(), "协议来源 golden 测试应用初始化失败");
+    require(application.reloadProtocolDirectory(currentProtocolDir.path().generic_string(), true),
+            "修改后的当前 Lua 应可加载");
+
+    std::string error;
+    require(application.loadRawCaptureReplayTimeline(
+                capture,
+                protoscope::app::Application::OfflineReplayProcessing::CurrentProtocol,
+                protoscope::app::Application::OfflineReplayPacing::FastBatchParse,
+                error),
+            "旧现场包应可使用修改后的当前 Lua 重解析");
+    require(application.playRawCaptureReplay(error), "当前 Lua 重解析应可启动");
+    waitReplayCompleted(application);
+    pumpUntilScriptEventCount(application, "protocol_golden", 1U);
+    const auto currentEvents = scriptEventPayloads(application.docks().scriptState(), "protocol_golden");
+    if (currentEvents != std::vector<std::string>{"current:32"}) {
+        std::string actual;
+        for (const auto& event : currentEvents) actual += event + ",";
+        throw std::runtime_error("当前 Lua callback 独立手写 golden 不符: actual=" + actual);
+    }
+
+    const ScopedTempPath packageFile(makeUniqueTempDir("protoscope-package-protocol-complete"));
+    const auto packagePath = packageFile.path() / "complete.pssession";
+    require(protoscope::session::writeSessionPackage(packagePath, package, error),
+            "完整 PackageProtocol 现场包应可写入");
+    const auto loadedPackage = protoscope::session::readSessionPackage(packagePath, error);
+    require(loadedPackage.has_value(), "完整 PackageProtocol 现场包应可读取");
+    require(application.loadRawCaptureReplayTimeline(
+                capture,
+                protoscope::app::Application::OfflineReplayProcessing::PackageProtocol,
+                protoscope::app::Application::OfflineReplayPacing::FastBatchParse,
+                error,
+                &*loadedPackage),
+            "旧现场包应可显式使用包内协议");
+    require(application.playRawCaptureReplay(error), "包内 Lua 重解析应可启动");
+    waitReplayCompleted(application);
+    pumpUntilScriptEventCount(application, "protocol_golden", 1U);
+    require(scriptEventPayloads(application.docks().scriptState(), "protocol_golden") ==
+                std::vector<std::string>{"package:103"},
+            "显式切换到包内 Lua 后应替换旧 generation 结果并保持包内逻辑");
+    application.shutdown();
+}
+
+void test_application_offline_replay_browse_raw_blocks_every_lua_callback()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-offline-browse-callbacks"));
+    writeTextFile(protocolDir.path() / "main.lua", R"lua(
+proto.set_timer("browse_probe", 0)
+function on_bytes(ctx, bytes) proto.emit("browse_callback", "on_bytes") end
+function on_batch(ctx, frames) proto.emit("browse_callback", "on_batch") end
+function on_frame(ctx, frame) proto.emit("browse_callback", "on_frame") end
+function on_timer(ctx, name) proto.emit("browse_callback", "timer") end
+function stream()
+  return {
+    buffer = { capacity = 64, overflow = "drop_oldest" },
+    frames = { {
+      name = "probe", header = { 0xAA, 0x55 },
+      len = { offset = 3, type = "u8", means = "payload", extra = 5 },
+      fields = { { name = "value", type = "u8", offset = 4 } },
+      on_frame = function(ctx, frame) proto.emit("browse_callback", "on_frame") end,
+    } },
+    on_batch = function(ctx, frames) proto.emit("browse_callback", "on_batch") end,
+  }
+end
+)lua");
+
+    protoscope::app::Application application;
+    require(application.initialize(), "BrowseRaw callback 测试应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
+            "BrowseRaw callback 探针协议应可加载");
+    application.docks().clearScriptRows();
+
+    const auto frame = makeRawImportStreamFrame(0x2A);
+    protoscope::plot::RawCaptureFileData capture;
+    capture.capturedAtMs = 10;
+    capture.payload = frame;
+    capture.events = {{.type = protoscope::plot::RawCaptureEventType::RxBytes,
+                       .timestampMs = 10,
+                       .bytes = frame,
+                       .endpoint = "recorded://browse",
+                       .sequence = 1}};
+
+    std::string error;
+    require(application.loadRawCaptureReplayTimeline(capture, error), "BrowseRaw callback 时间轴应可载入");
+    require(application.playRawCaptureReplay(error), "BrowseRaw callback 时间轴应可播放");
+    waitReplayCompleted(application);
+    for (int pump = 0; pump < 5; ++pump) {
+        application.pumpOnce();
+    }
+    require(countScriptEvents(application.docks().scriptState(), "browse_callback") == 0U,
+            "BrowseRaw 不得调用 on_bytes/on_batch/on_frame/tick/timer");
+    require(application.docks().receiveState().rows.size() == 1U,
+            "BrowseRaw 仍应恢复原始 RX 记录");
+    application.shutdown();
+}
+
+void test_application_offline_replay_timeline_and_fast_batch_match_goldens()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-offline-pacing-golden"));
+    writeTextFile(protocolDir.path() / "main.lua", R"lua(
+proto.plot.setup({ channels = { { label = "pacing" } }, reset_history = true })
+local count = 0
+function on_bytes(ctx, bytes)
+  count = count + 1
+  local value = count * 1000 + (ctx.timestamp_ms or 0) * 10 + bytes[1]
+  proto.emit("pacing_golden", tostring(value))
+  proto.plot.push(1, { samples = { { t = count, y = value } } })
+end
+)lua");
+
+    protoscope::plot::RawCaptureFileData capture;
+    capture.capturedAtMs = 100;
+    capture.payload = {1, 2, 3};
+    capture.events = {
+        {.type = protoscope::plot::RawCaptureEventType::RxBytes,
+         .timestampMs = 100,
+         .bytes = {1},
+         .endpoint = "recorded://pacing",
+         .sequence = 1},
+        {.type = protoscope::plot::RawCaptureEventType::RxBytes,
+         .timestampMs = 100,
+         .bytes = {2},
+         .endpoint = "recorded://pacing",
+         .sequence = 2},
+        {.type = protoscope::plot::RawCaptureEventType::RxBytes,
+         .timestampMs = 100,
+         .bytes = {3},
+         .endpoint = "recorded://pacing",
+         .sequence = 3},
+    };
+    const std::vector<std::string> expectedEvents{"2001", "3002", "4003"};
+
+    const auto run = [&](const protoscope::app::Application::OfflineReplayPacing pacing) {
+        protoscope::app::Application application;
+        require(application.initialize(), "pacing golden 测试应用初始化失败");
+        require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
+                "pacing golden 协议应可加载");
+        std::string error;
+        require(application.loadRawCaptureReplayTimeline(
+                    capture,
+                    protoscope::app::Application::OfflineReplayProcessing::CurrentProtocol,
+                    pacing,
+                    error),
+                "pacing golden 时间轴应可载入");
+        require(application.playRawCaptureReplay(error), "pacing golden 时间轴应可播放");
+        waitReplayCompleted(application);
+        pumpUntilScriptEventCount(application, "pacing_golden", 3U);
+        const auto values = firstChannelValues(application);
+        const auto events = scriptEventPayloads(application.docks().scriptState(), "pacing_golden");
+        auto status = application.rawCaptureReplayStatus();
+        for (int pump = 0; pump < 8 && (status.workerBacklog != 0U || status.outputBacklog != 0U); ++pump) {
+            application.pumpOnce();
+            status = application.rawCaptureReplayStatus();
+        }
+        if (status.workerBacklog != 0U || status.outputBacklog != 0U) {
+            throw std::runtime_error("回放完成后 worker/output/frameRows 背压应归零: worker=" +
+                                     std::to_string(status.workerBacklog) +
+                                     ", output=" + std::to_string(status.outputBacklog));
+        }
+        application.shutdown();
+        return std::pair{values, events};
+    };
+
+    const auto timeline = run(protoscope::app::Application::OfflineReplayPacing::OriginalTimeline);
+    const auto fast = run(protoscope::app::Application::OfflineReplayPacing::FastBatchParse);
+    const auto describe = [](const auto& values, const auto& events) {
+        std::string text = "values=";
+        for (const auto value : values) text += std::to_string(value) + ",";
+        text += " events=";
+        for (const auto& event : events) text += event + ",";
+        return text;
+    };
+    if (timeline.second != expectedEvents) {
+        throw std::runtime_error("timeline 最终 callback 结果未匹配手写 golden: " +
+                                 describe(timeline.first, timeline.second));
+    }
+    if (fast.second != expectedEvents) {
+        throw std::runtime_error("fast batch 最终 callback 结果未匹配手写 golden: " +
+                                 describe(fast.first, fast.second));
+    }
+}
+
+void test_application_offline_replay_profile_and_plot_fences_preserve_rx_order()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-offline-control-fence"));
+    writeTextFile(protocolDir.path() / "main.lua", R"lua(
+proto.plot.setup({ channels = { { label = "before" } }, reset_history = true })
+local function on_stream_frame(ctx, frame)
+  proto.emit("fence_rx", tostring(frame.raw[1]))
+  proto.plot.push(1, { samples = { { t = 1, y = frame.raw[1] } } })
+end
+function stream()
+  return { frames = {
+    {
+      name = "fixed_fence", header = { 0x07 }, size = 1,
+      fields = { { name = "value", type = "u8", offset = 1 } },
+      on_frame = on_stream_frame,
+    },
+    {
+      name = "dynamic_fence", header = { 0x08 }, runtime_profile = true,
+      fields = { { name = "value", type = "u8", offset = 1 } },
+      on_frame = on_stream_frame,
+    },
+  } }
+end
+)lua");
+
+    protoscope::plot::RawCaptureFileData capture;
+    capture.capturedAtMs = 1;
+    capture.payload = {7, 8};
+    capture.events.push_back({.type = protoscope::plot::RawCaptureEventType::RxBytes,
+                              .timestampMs = 1,
+                              .bytes = {7},
+                              .endpoint = "recorded://fence",
+                              .sequence = 1});
+    capture.events.push_back({.type = protoscope::plot::RawCaptureEventType::ProfileSet,
+                              .timestampMs = 1,
+                              .profile = {.frameName = "dynamic_fence", .length = 1, .channelMap = {}},
+                              .sequence = 2});
+    auto setup = makePlotSetupEvent(true);
+    setup.timestampMs = 1;
+    setup.sequence = 3;
+    capture.events.push_back(std::move(setup));
+    capture.events.push_back({.type = protoscope::plot::RawCaptureEventType::RxBytes,
+                              .timestampMs = 1,
+                              .bytes = {8},
+                              .endpoint = "recorded://fence",
+                              .sequence = 4});
+
+    protoscope::app::Application application;
+    require(application.initialize(), "控制事件 fence 测试应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
+            "控制事件 fence 探针协议应可加载");
+    std::string error;
+    require(application.loadRawCaptureReplayTimeline(
+                capture,
+                protoscope::app::Application::OfflineReplayProcessing::CurrentProtocol,
+                protoscope::app::Application::OfflineReplayPacing::FastBatchParse,
+                error),
+            "控制事件 fence 时间轴应可载入");
+    require(application.playRawCaptureReplay(error), "控制事件 fence 回放应可启动");
+    waitReplayCompleted(application);
+
+    pumpUntilScriptEventCount(application, "fence_rx", 2U);
+    require(scriptEventPayloads(application.docks().scriptState(), "fence_rx") ==
+                std::vector<std::string>{"7", "8"},
+            "Profile/Plot 控制事件不得越过此前 RX callback");
+    require(firstChannelValues(application) == std::vector<double>{8.0},
+            "PlotSetup(reset_history) 应在首个 RX callback 完成后清空 7，仅保留后续 8");
+    application.shutdown();
+}
+
+void test_application_offline_replay_without_stream_has_explicit_empty_frame_state()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-offline-no-stream"));
+    writeTextFile(protocolDir.path() / "main.lua", R"lua(
+function on_bytes(ctx, bytes)
+  proto.emit("no_stream_rx", tostring(bytes[1]))
+end
+)lua");
+
+    protoscope::plot::RawCaptureFileData capture;
+    capture.capturedAtMs = 1;
+    capture.payload = {9};
+    capture.events = {{.type = protoscope::plot::RawCaptureEventType::RxBytes,
+                       .timestampMs = 1,
+                       .bytes = {9},
+                       .endpoint = "recorded://no-stream",
+                       .sequence = 1}};
+
+    protoscope::app::Application application;
+    require(application.initialize(), "无 stream 回放测试应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
+            "无 stream 回放协议应可加载");
+    std::string error;
+    require(application.loadRawCaptureReplayTimeline(
+                capture,
+                protoscope::app::Application::OfflineReplayProcessing::CurrentProtocol,
+                protoscope::app::Application::OfflineReplayPacing::FastBatchParse,
+                error),
+            "无 stream 回放时间轴应可载入");
+    require(application.playRawCaptureReplay(error), "无 stream 回放应可启动");
+    waitReplayCompleted(application);
+    const auto status = application.rawCaptureReplayStatus();
+    require(!status.hasStreamSchema, "无 stream() 时状态必须明确标记无逐帧 schema");
+    require(application.docks().receiveState().frameRows.empty(), "无 stream() 时 frameRows 必须为空");
+    application.shutdown();
+}
+
+void test_application_offline_replay_seek_rebuilds_lua_global_state_deterministically()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-offline-seek-state"));
+    writeTextFile(protocolDir.path() / "main.lua", R"lua(
+proto.plot.setup({ channels = { { label = "seek" } }, reset_history = true })
+local accumulator = 0
+function on_bytes(ctx, bytes)
+  accumulator = accumulator * 10 + bytes[1]
+  proto.emit("seek_state", tostring(accumulator))
+  proto.plot.push(1, { samples = { { t = accumulator, y = accumulator } } })
+end
+)lua");
+
+    protoscope::plot::RawCaptureFileData capture;
+    capture.capturedAtMs = 1;
+    capture.payload = {1, 2, 3};
+    for (std::size_t index = 0; index < 3; ++index) {
+        capture.events.push_back({.type = protoscope::plot::RawCaptureEventType::RxBytes,
+                                  .timestampMs = 1,
+                                  .bytes = {static_cast<std::uint8_t>(index + 1U)},
+                                  .endpoint = "recorded://seek",
+                                  .sequence = index + 1U});
+    }
+
+    protoscope::app::Application application;
+    require(application.initialize(), "seek 全局状态测试应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
+            "seek 全局状态协议应可加载");
+    std::string error;
+    require(application.loadRawCaptureReplayTimeline(
+                capture,
+                protoscope::app::Application::OfflineReplayProcessing::CurrentProtocol,
+                protoscope::app::Application::OfflineReplayPacing::FastBatchParse,
+                error),
+            "seek 全局状态时间轴应可载入");
+    waitReplayPrepared(application);
+
+    if (!application.seekRawCaptureReplay(2, error)) {
+        throw std::runtime_error("首次 seek 到相同前缀应成功: " + error);
+    }
+    pumpReplayUntil(application,
+                    [](const auto& status) { return status.eventIndex == 2U && !status.playing; },
+                    "首次 seek 前缀重放超时");
+    const auto firstValues = firstChannelValues(application);
+    const auto firstEvents = scriptEventPayloads(application.docks().scriptState(), "seek_state");
+    if (firstValues != std::vector<double>{1.0, 12.0} || firstEvents != std::vector<std::string>{"1", "12"}) {
+        std::string actual = "values=";
+        for (const auto value : firstValues) actual += std::to_string(value) + ",";
+        actual += " events=";
+        for (const auto& value : firstEvents) actual += value + ",";
+        throw std::runtime_error("首次 seek 应匹配 Lua 全局状态手写 golden: " + actual);
+    }
+
+    if (!application.seekRawCaptureReplay(2, error)) {
+        throw std::runtime_error("第二次 seek 到同一前缀应成功: " + error);
+    }
+    pumpReplayUntil(application,
+                    [](const auto& status) { return status.eventIndex == 2U && !status.playing; },
+                    "第二次 seek 前缀重放超时");
+    require(firstChannelValues(application) == firstValues,
+            "两次 seek 到同一前缀的波形结果必须一致");
+    require(scriptEventPayloads(application.docks().scriptState(), "seek_state") == firstEvents,
+            "两次 seek 到同一前缀的 Lua 全局状态必须一致且不得叠加旧 generation");
+    require(application.docks().receiveState().rows.size() == 2U,
+            "两次 seek 到同一前缀的原始 rows 必须一致");
+    require(application.docks().receiveState().frameRows.empty(),
+            "无 stream schema 时两次 seek 的 frameRows 必须一致为空");
+    application.shutdown();
+}
+
+void test_application_offline_replay_cancel_discards_old_generation_outputs()
+{
+    const ScopedTempPath slowProtocolDir(makeUniqueTempDir("protoscope-offline-cancel-slow"));
+    const ScopedTempPath freshProtocolDir(makeUniqueTempDir("protoscope-offline-cancel-fresh"));
+    writeTextFile(slowProtocolDir.path() / "main.lua", R"lua(
+function on_bytes(ctx, bytes)
+  local value = 0
+  for i = 1, 100000000 do value = value + i end
+  proto.emit("generation_probe", "old:" .. tostring(value))
+end
+)lua");
+    writeTextFile(freshProtocolDir.path() / "main.lua", R"lua(
+function on_bytes(ctx, bytes)
+  proto.emit("generation_probe", "new")
+end
+)lua");
+
+    protoscope::plot::RawCaptureFileData capture;
+    capture.capturedAtMs = 1;
+    capture.payload = {1};
+    capture.events = {{.type = protoscope::plot::RawCaptureEventType::RxBytes,
+                       .timestampMs = 1,
+                       .bytes = {1},
+                       .endpoint = "recorded://generation",
+                       .sequence = 1}};
+
+    protoscope::app::Application application;
+    require(application.initialize(), "generation 隔离测试应用初始化失败");
+    require(application.reloadProtocolDirectory(slowProtocolDir.path().generic_string(), true),
+            "旧 generation 慢协议应可加载");
+    std::string error;
+    require(application.loadRawCaptureReplayTimeline(
+                capture,
+                protoscope::app::Application::OfflineReplayProcessing::CurrentProtocol,
+                protoscope::app::Application::OfflineReplayPacing::FastBatchParse,
+                error),
+            "旧 generation 时间轴应可载入");
+    require(application.playRawCaptureReplay(error), "旧 generation 回放应可启动");
+    waitReplayPrepared(application);
+    application.pumpOnce();
+    application.unloadRawCaptureReplayTimeline();
+
+    require(application.reloadProtocolDirectory(freshProtocolDir.path().generic_string(), true),
+            "新 generation 协议应可加载");
+    require(application.loadRawCaptureReplayTimeline(
+                capture,
+                protoscope::app::Application::OfflineReplayProcessing::CurrentProtocol,
+                protoscope::app::Application::OfflineReplayPacing::FastBatchParse,
+                error),
+            "新 generation 时间轴应可载入");
+    require(application.playRawCaptureReplay(error), "新 generation 回放应可启动");
+    waitReplayCompleted(application);
+    pumpUntilScriptEventCount(application, "generation_probe", 1U);
+    const auto generationEvents = scriptEventPayloads(application.docks().scriptState(), "generation_probe");
+    if (generationEvents != std::vector<std::string>{"new"}) {
+        std::string actual;
+        for (const auto& event : generationEvents) actual += event + ",";
+        throw std::runtime_error("cancel/模式切换后的旧 generation 输出污染新任务: actual=" + actual);
+    }
     application.shutdown();
 }
 
@@ -2974,6 +3620,7 @@ void test_application_live_raw_capture_trim_keeps_runtime_profile_event()
     require(importedApplication.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
             "导入验证协议应可加载");
     require(importedApplication.importWaveRawCapture(*exported, error), "导出的 runtime profile raw 应可重新导入");
+    waitReplayCompleted(importedApplication);
 }
 
 void test_application_session_package_export_trims_raw_capture_window()
@@ -3102,6 +3749,7 @@ void test_application_raw_capture_import_preserves_full_history()
 
     std::string error;
     require(application.importWaveRawCapture(capture, error), "导入 psraw 应成功");
+    waitReplayCompleted(application);
     const auto importedSnapshot = application.docks().waveState().buffer.snapshot(
         -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
     require(!importedSnapshot.channels.empty(), "导入后应生成波形通道");
@@ -3160,6 +3808,7 @@ void test_application_raw_capture_import_replays_runtime_profile_events()
 
     std::string error;
     require(application.importWaveRawCapture(capture, error), "事件流 psraw 导入应成功");
+    waitReplayCompleted(application);
     if (application.docks().waveState().rawCapture.events.size() != 3) {
         throw std::runtime_error("导入后应保留事件流: actual=" +
                                  std::to_string(application.docks().waveState().rawCapture.events.size()));
@@ -3209,6 +3858,7 @@ void test_application_raw_capture_import_replays_plot_setup_snapshot()
             "plot_setup 导入协议应可加载");
     std::string error;
     require(application.importWaveRawCapture(capture, error), "带 plot_setup 的 psraw 导入应成功");
+    waitReplayCompleted(application);
 
     const auto spec = application.docks().waveState().buffer.channelSpec(0);
     require(spec.has_value(), "导入 plot_setup 后应恢复通道配置");
@@ -3278,6 +3928,7 @@ void test_application_raw_capture_import_skips_duplicate_plot_setup_reset()
             "重复 plot_setup 导入协议应可加载");
     std::string error;
     require(application.importWaveRawCapture(capture, error), "重复 plot_setup psraw 导入应成功");
+    waitReplayCompleted(application);
 
     const auto snapshot = application.docks().waveState().buffer.snapshot(-std::numeric_limits<double>::infinity(),
                                                                           std::numeric_limits<double>::infinity());
@@ -3308,6 +3959,7 @@ void test_application_raw_capture_import_replays_stream_in_chunks()
 
     std::string error;
     require(application.importWaveRawCapture(capture, error), "导入大 payload psraw 应成功");
+    waitReplayCompleted(application);
     const auto importedSnapshot = application.docks().waveState().buffer.snapshot(
         -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
     require(!importedSnapshot.channels.empty(), "导入后应生成波形通道");
@@ -3349,6 +4001,7 @@ void test_application_raw_capture_import_batches_small_rx_events()
 
     std::string error;
     require(application.importWaveRawCapture(capture, error), "大量小 RX 事件导入应成功");
+    waitReplayCompleted(application);
     const auto importedSnapshot = application.docks().waveState().buffer.snapshot(
         -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
     require(!importedSnapshot.channels.empty(), "合批导入后应生成波形通道");

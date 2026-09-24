@@ -17,6 +17,7 @@ struct ScriptRuntimeWorkerConfig {
     std::filesystem::path storageRoot;
     storage::Config storageConfig;
     bool enabled{true};
+    bool offlineRestricted{false};
     std::size_t postprocessWorkerThreads{1U};
     std::size_t rxQueueLimitBytes{64U * 1024U * 1024U};
     std::size_t memoryBudgetBytes{256U * 1024U * 1024U};
@@ -81,6 +82,7 @@ public:
     void configure(ScriptRuntimeWorkerConfig config);
     void setFileIoConfig(FileIoConfig config);
     [[nodiscard]] ScriptRuntimeLoadResult loadProtocolDirectory(const std::string& directory);
+    [[nodiscard]] std::future<ScriptRuntimeLoadResult> loadProtocolDirectoryAsync(std::string directory);
     [[nodiscard]] bool setControlValue(const std::string& id, const ControlValue& value);
     [[nodiscard]] bool requestOscilloscopeToggle(transport::ConnectionContext context,
                                                  bool currentRunning,
@@ -109,6 +111,7 @@ public:
 
     void waitIdle();
     [[nodiscard]] bool idle() const;
+    [[nodiscard]] bool inputIdle() const;
     [[nodiscard]] std::size_t pendingRxBytes() const;
     [[nodiscard]] std::vector<ScriptRuntimeOutputBatch> drainOutputs();
     [[nodiscard]] std::optional<ScriptRuntimeOutputBatch> drainOneOutput();
