@@ -12,3 +12,7 @@ build-*/
 build_*/
 .idea
 /CMakeSettings.json
+
+/.lcode/
+/.zcode/
+/.zcodeignore
