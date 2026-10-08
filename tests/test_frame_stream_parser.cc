@@ -146,6 +146,53 @@ std::vector<std::int64_t> parseExpressionValues(protoscope::scripting::FrameStre
 
 } // namespace
 
+void test_lua_contract_order_parser_event_indexes()
+{
+    using namespace protoscope::scripting;
+    const auto checkIndexes = [](const StreamParseBatch& batch) {
+        std::size_t frameIndex = 0;
+        std::size_t errorIndex = 0;
+        for (const auto& event : batch.events) {
+            if (event.kind == StreamParseEventKind::Frame) {
+                require(event.index == frameIndex++ && event.index < batch.frames.size(), "帧事件索引必须完整且有效");
+            } else {
+                require(event.index == errorIndex++ && event.index < batch.errors.size(), "错误事件索引必须完整且有效");
+            }
+        }
+        require(frameIndex == batch.frames.size() && errorIndex == batch.errors.size(), "每个帧和错误必须恰好有一个事件");
+    };
+    auto parser = makeDynamicParser();
+    auto bytes = makeDynamicFrame({1, 17});
+    auto broken = makeDynamicFrame({1, 34});
+    broken.back() ^= 1U;
+    bytes.insert(bytes.end(), broken.begin(), broken.end());
+    const auto good = makeDynamicFrame({1, 51});
+    bytes.insert(bytes.end(), good.begin(), good.end());
+    const auto batch = parser.pushBytes(bytes);
+    checkIndexes(batch);
+    require(batch.events.size() == 4 && batch.events[0].kind == StreamParseEventKind::Frame &&
+                batch.events[1].kind == StreamParseEventKind::Error &&
+                batch.errors[batch.events[1].index].code == StreamParseErrorCode::CrcMismatch &&
+                batch.events[2].kind == StreamParseEventKind::Error &&
+                batch.errors[batch.events[2].index].code == StreamParseErrorCode::NoiseDiscarded &&
+                batch.events[3].kind == StreamParseEventKind::Frame,
+            "有序索引应包含 CRC 重同步的噪声事件，不能只记录 CRC");
+    auto prefixParser = makeDynamicParser();
+    auto prefix = std::vector<std::uint8_t>{0, 0};
+    prefix.insert(prefix.end(), good.begin(), good.end());
+    const auto prefixBatch = prefixParser.pushBytes(prefix);
+    checkIndexes(prefixBatch);
+    require(prefixBatch.events.front().kind == StreamParseEventKind::Error &&
+                prefixBatch.events.back().kind == StreamParseEventKind::Frame, "候选帧前噪声必须先于成功帧");
+    auto overflowParser = makeDynamicParser(6);
+    const auto overflow = overflowParser.pushBytes({1, 2, 3, 4, 5, 6, 7, 8});
+    checkIndexes(overflow);
+    require(overflow.events.size() == 2 && overflow.errors[0].code == StreamParseErrorCode::Overflow &&
+                overflow.errors[1].code == StreamParseErrorCode::NoiseDiscarded,
+            "追加 overflow 与无候选噪声都必须登记事件");
+    checkIndexes(parser.pushBytes({}));
+}
+
 void test_frame_stream_parser_waits_for_full_frame()
 {
     auto parser = makeDynamicParser();

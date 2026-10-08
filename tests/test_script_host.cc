@@ -1279,6 +1279,304 @@ void test_script_read_version_split_flow()
     require(foundFrame, "分包收到 OK 后仍应产出 frame");
 }
 
+namespace {
+
+// 固定 profile、无容量丢弃的单一 schema：只比较业务事件，不要求不同分块的批次数相同。
+std::vector<std::string> runLuaContractOrder(const std::vector<std::uint8_t>& bytes,
+                                           const std::vector<std::size_t>& chunkSizes, bool useBatch,
+                                           bool throwCallbacks = false)
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-lua-contract-order"));
+    std::string script = R"lua(
+local state = "waiting"
+local function ack(ctx, frame)
+    proto.emit("order", "F:" .. frame.fields.value .. ":" .. state)
+    state = "ack"
+end
+local function batch(ctx, frames)
+    proto.emit("batch_size", tostring(#frames))
+    for _, frame in ipairs(frames) do ack(ctx, frame) end
+end
+local function parse_error(ctx, err)
+    if err.code == "crc_mismatch" then
+        proto.emit("order", "E:" .. state)
+        state = "error"
+    end
+end
+function stream()
+    return {
+        buffer = { capacity = 256 },
+        frames = {{
+            name = "ack", header = {0xAA, 0x55},
+            len = {offset = 3, type = "u8", means = "payload", extra = 5},
+            crc = {type = "crc16_modbus", order = "lo_hi"},
+            fields = {{name = "value", type = "u8", offset = 4}},
+            on_frame = ack,
+        }},
+        on_error = parse_error,
+)lua";
+    if (useBatch) {
+        script += "        on_batch = batch,\n";
+    }
+    script += "    }\nend\n";
+    if (throwCallbacks) {
+        script += R"lua(
+local original_stream = stream
+function stream()
+    local schema = original_stream()
+    local original_batch = schema.on_batch
+    schema.on_batch = function(ctx, frames)
+        original_batch(ctx, frames)
+        error("batch ordinary error")
+    end
+    local original_error = schema.on_error
+    schema.on_error = function(ctx, err)
+        original_error(ctx, err)
+        error("parse ordinary error")
+    end
+    return schema
+end
+)lua";
+    }
+    writeMainLua(protocolDir.path(), script.c_str());
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "顺序回归协议应成功加载");
+    std::size_t offset = 0;
+    for (const auto size : chunkSizes) {
+        require(size > 0 && size <= bytes.size() - offset, "顺序回归分块必须在输入范围内");
+        const std::vector<std::uint8_t> chunk(bytes.begin() + offset, bytes.begin() + offset + size);
+        host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), chunk});
+        offset += size;
+    }
+    require(offset == bytes.size(), "顺序回归必须投递全部字节");
+    std::vector<std::string> result;
+    for (const auto& event : host.drainEvents()) {
+        if (event.name == "order" || event.name == "batch_size") {
+            result.push_back(event.name + "=" + event.payload);
+        }
+    }
+    return result;
+}
+
+void requireLuaContractOrderPartitions(bool useBatch)
+{
+    const auto first = makeStreamFixtureFrame(17);
+    const auto second = makeStreamFixtureFrame(34);
+    auto broken = makeStreamFixtureFrame(51);
+    broken.back() ^= 0xFFU;
+    // CRC 重同步还会报告噪声；此处只关注已定位的 CRC 与 ACK 业务事件。
+    const std::vector<std::vector<std::vector<std::uint8_t>>> cases{
+        {first, broken}, {broken, first}, {first, broken, second, broken, first},
+    };
+    const std::vector<std::vector<std::string>> expected{
+        {"order=F:17:waiting", "order=E:ack"},
+        {"order=E:waiting", "order=F:17:error"},
+        {"order=F:17:waiting", "order=E:ack", "order=F:34:error", "order=E:ack", "order=F:17:error"},
+    };
+    for (std::size_t index = 0; index < cases.size(); ++index) {
+        std::vector<std::uint8_t> bytes;
+        for (const auto& frame : cases[index]) {
+            appendBytes(bytes, frame);
+        }
+        auto check = [&](const std::vector<std::size_t>& sizes) {
+            auto events = runLuaContractOrder(bytes, sizes, useBatch);
+            std::erase_if(events, [](const std::string& event) { return event.starts_with("batch_size="); });
+            require(events == expected[index], "CRC 与 ACK 顺序及回调业务状态不应随输入分块改变");
+        };
+        check({bytes.size()});
+        for (std::size_t split = 1; split < bytes.size(); ++split) {
+            check({split, bytes.size() - split});
+        }
+        check(std::vector<std::size_t>(bytes.size(), 1));
+    }
+}
+
+} // namespace
+
+void test_lua_contract_order_frame_crc_partitions()
+{
+    requireLuaContractOrderPartitions(false);
+}
+
+void test_lua_contract_order_batch_crc_partitions()
+{
+    requireLuaContractOrderPartitions(true);
+}
+
+void test_lua_contract_order_batch_success_segments()
+{
+    auto bytes = makeStreamFixtureFrame(17);
+    appendBytes(bytes, makeStreamFixtureFrame(34));
+    require(runLuaContractOrder(bytes, {bytes.size()}, true) ==
+                std::vector<std::string>{"batch_size=2", "order=F:17:waiting", "order=F:34:ack"},
+            "无错误时应保留合批，且 on_batch 优先于 on_frame 不重复派发");
+    auto broken = makeStreamFixtureFrame(51);
+    broken.back() ^= 0xFFU;
+    appendBytes(bytes, broken);
+    appendBytes(bytes, makeStreamFixtureFrame(68));
+    require(runLuaContractOrder(bytes, {bytes.size()}, true) ==
+                std::vector<std::string>{"batch_size=2", "order=F:17:waiting", "order=F:34:ack",
+                                         "order=E:ack", "batch_size=1", "order=F:68:error"},
+            "错误应切断成功帧批次，不能把错误后的 ACK 提前应用");
+}
+
+void test_lua_contract_order_callback_errors_keep_priority()
+{
+    auto bytes = makeStreamFixtureFrame(17);
+    auto broken = makeStreamFixtureFrame(51);
+    broken.back() ^= 0xFFU;
+    appendBytes(bytes, broken);
+    appendBytes(bytes, makeStreamFixtureFrame(34));
+    require(runLuaContractOrder(bytes, {bytes.size()}, true, true) ==
+                std::vector<std::string>{"batch_size=1", "order=F:17:waiting", "order=E:ack",
+                                         "batch_size=1", "order=F:34:error"},
+            "普通 batch/error 异常应继续后续事件，batch 失败不能降级重复调用 on_frame");
+}
+
+void test_lua_contract_order_budget_fault_and_snapshot()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-order-budget"));
+    writeMainLua(protocolDir.path(), R"lua(
+function stream()
+    return {low_overhead = true, buffer = {capacity = 256}, frames = {{
+        name = "ack", header = {0xAA, 0x55},
+        len = {offset = 3, type = "u8", means = "payload", extra = 5},
+        crc = {type = "crc16_modbus", order = "lo_hi"},
+        fields = {{name = "value", type = "u8", offset = 4}},
+        on_frame = function() proto.emit("unexpected", "frame") end,
+    }},
+    on_batch = function()
+        proto.emit("entered", "batch")
+        while true do end
+    end,
+    on_error = function() proto.emit("unexpected", "error") end}
+end
+)lua");
+    protoscope::scripting::ScriptHost host;
+    host.setExecutionConfig({.loadTimeoutMs = 1000, .callbackTimeoutMs = 20});
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "预算顺序协议应加载");
+    auto bytes = makeStreamFixtureFrame(17);
+    auto broken = makeStreamFixtureFrame(51);
+    broken.back() ^= 0xFFU;
+    appendBytes(bytes, broken);
+    appendBytes(bytes, makeStreamFixtureFrame(34));
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), bytes});
+    require(host.executionFaulted(), "批回调超时应保留预算故障边界");
+    std::size_t entered = 0;
+    for (const auto& event : host.drainEvents()) {
+        require(event.name != "unexpected", "预算故障后不得继续错误/帧回调或降级 on_frame");
+        entered += event.name == "entered" ? 1U : 0U;
+    }
+    require(entered == 1, "预算故障后不得再次调用后续成功段");
+    const auto snapshot = host.lastStreamParseBatch();
+    require(snapshot.has_value() && snapshot->frames.empty() && !snapshot->errors.empty(),
+            "低开销快照应保留错误而移除成功帧");
+    require(snapshot->events.size() == snapshot->errors.size(), "低开销快照不应留下帧事件");
+    for (const auto& event : snapshot->events) {
+        require(event.kind == protoscope::scripting::StreamParseEventKind::Error && event.index < snapshot->errors.size(),
+                "低开销快照事件不能留下悬空帧索引");
+    }
+}
+
+void test_lua_contract_order_error_boundary_positions()
+{
+    const auto run = [](const std::vector<std::uint8_t>& bytes, std::size_t capacity) {
+        const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-order-error-boundaries"));
+        std::string script = R"lua(
+local state = "waiting"
+function stream()
+    return {
+        buffer = {capacity = )lua" + std::to_string(capacity) + R"lua(, overflow = "drop_oldest"},
+        frames = {{
+            name = "ack", header = {0xAA, 0x55},
+            len = {offset = 3, type = "u8", means = "payload", extra = 5},
+            crc = {type = "crc16_modbus", order = "lo_hi"},
+            fields = {{name = "value", type = "u8", offset = 4}},
+            on_frame = function(ctx, frame)
+                proto.emit("order", "F:" .. frame.fields.value .. ":" .. state)
+                state = "frame"
+            end,
+        }},
+        on_error = function(ctx, err)
+            proto.emit("order", "E:" .. err.code .. ":" .. state)
+            state = err.code
+        end,
+    }
+end
+)lua";
+        writeMainLua(protocolDir.path(), script.c_str());
+        protoscope::scripting::ScriptHost host;
+        require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "边界顺序协议应成功加载");
+        host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), bytes});
+        std::vector<std::string> events;
+        for (const auto& event : host.drainEvents()) {
+            if (event.name == "order") {
+                events.push_back(event.payload);
+            }
+        }
+        return events;
+    };
+
+    const auto first = makeStreamFixtureFrame(17);
+    auto withTrailingNoise = first;
+    appendBytes(withTrailingNoise, {0x10, 0x20, 0x30});
+    require(run(withTrailingNoise, 64) ==
+                std::vector<std::string>{"F:17:waiting", "E:noise_discarded:frame"},
+            "成功帧后的噪声错误必须保留在该帧之后，且观察到已更新的帧状态");
+
+    auto second = makeStreamFixtureFrame(34);
+    auto overflowInput = first;
+    appendBytes(overflowInput, second);
+    require(run(overflowInput, first.size()) ==
+                std::vector<std::string>{"E:overflow:waiting", "F:34:overflow"},
+            "追加阶段先产生的 Overflow 必须位于保留下来的帧之前");
+}
+
+void test_lua_contract_order_value_targets_per_frame()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-order-targets"));
+    writeMainLua(protocolDir.path(), R"lua(
+function ui()
+    return {{id = "safe", title = "Safe", controls = {
+        {type = "value_table", id = "regs", label = "寄存器",
+         rows = {{id = 0x3000, label = "当前值"}}}
+    }}}
+end
+function stream()
+    return {buffer = {capacity = 256}, frames = {{
+        name = "ack", header = {0xAA, 0x55},
+        len = {offset = 3, type = "u8", means = "payload", extra = 5},
+        crc = {type = "crc16_modbus", order = "lo_hi"},
+        fields = {{name = "value", type = "u8", offset = 4}},
+        value_targets = {controls = {{id = "regs", start_id = 0x3000, values_field = "value"}}},
+        on_frame = function(ctx, frame)
+            proto.emit("observed", tostring(frame.fields.value) .. ":" .. proto.get_control("regs")[1].value)
+        end,
+    }}}
+end
+)lua");
+    for (const bool merged : {true, false}) {
+        protoscope::scripting::ScriptHost host;
+        require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "值表顺序协议应加载");
+        auto bytes = makeStreamFixtureFrame(17);
+        if (merged) {
+            appendBytes(bytes, makeStreamFixtureFrame(34));
+        }
+        host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), bytes});
+        if (!merged) {
+            host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), makeStreamFixtureFrame(34)});
+        }
+        std::vector<std::string> observed;
+        for (const auto& event : host.drainEvents()) {
+            if (event.name == "observed") {
+                observed.push_back(event.payload);
+            }
+        }
+        require(observed == std::vector<std::string>{"17:17", "34:34"},
+                "每帧回调应读到本帧 value_targets，不能读到同批后续帧值");
+    }
+}
+
 void test_script_stream_schema_legacy_on_bytes_still_works()
 {
     protoscope::scripting::ScriptHost host;

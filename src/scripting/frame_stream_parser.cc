@@ -666,6 +666,8 @@ StreamParseBatch FrameStreamParser::appendIncomingBytes(const std::vector<std::u
     batch.overflowed = dropped > 0;
 
     if (dropped > 0) {
+        // overflow 是追加阶段事件，不表示丢弃字节在原始流中的精确位置。
+        batch.events.push_back({StreamParseEventKind::Error, batch.errors.size()});
         batch.errors.push_back(StreamParseError{
             .code = StreamParseErrorCode::Overflow,
             .message = "环形缓冲区超限，已丢弃最旧字节",
@@ -696,6 +698,7 @@ void FrameStreamParser::discardUnmatchedPrefix(StreamParseBatch& batch)
 
     const auto droppedNoise = buffer_.size() - keep;
     buffer_.discardFront(droppedNoise);
+    batch.events.push_back({StreamParseEventKind::Error, batch.errors.size()});
     batch.errors.push_back(StreamParseError{
         .code = StreamParseErrorCode::NoiseDiscarded,
         .message = "未找到匹配帧头，已丢弃噪声前缀",
@@ -712,6 +715,7 @@ bool FrameStreamParser::discardCandidatePrefix(const CandidateMatch& candidate, 
     }
 
     buffer_.discardFront(candidate.start);
+    batch.events.push_back({StreamParseEventKind::Error, batch.errors.size()});
     batch.errors.push_back(StreamParseError{
         .code = StreamParseErrorCode::NoiseDiscarded,
         .message = "已跳过帧头前噪声字节",
@@ -787,6 +791,7 @@ StreamParseBatch FrameStreamParser::pushBytes(const std::vector<std::uint8_t>& b
         const auto parseResult = analyzeCandidateFrames(*candidate, options);
         if (parseResult.action == CandidateParseResult::Action::Parsed && parseResult.frame.has_value()) {
             buffer_.discardFront(parseResult.frameLength);
+            batch.events.push_back({StreamParseEventKind::Frame, batch.frames.size()});
             batch.frames.push_back(*parseResult.frame);
             continue;
         }
@@ -795,6 +800,7 @@ StreamParseBatch FrameStreamParser::pushBytes(const std::vector<std::uint8_t>& b
         }
 
         if (parseResult.error.has_value()) {
+            batch.events.push_back({StreamParseEventKind::Error, batch.errors.size()});
             batch.errors.push_back(*parseResult.error);
         }
         buffer_.discardFront(1);

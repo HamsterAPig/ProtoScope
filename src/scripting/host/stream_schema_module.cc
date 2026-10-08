@@ -130,7 +130,7 @@ sol::table makeStreamFrameTable(sol::state_view lua,
 }
 
 sol::table makeStreamFrameArrayTable(sol::state_view lua,
-                                     const std::vector<StreamParsedFrame>& frames,
+                                     std::span<const StreamParsedFrame> frames,
                                      bool includeRaw,
                                      bool includeFieldAliases)
 {

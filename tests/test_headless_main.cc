@@ -17,6 +17,8 @@ const TestCase kHeadlessTests[] = {
      &test_frame_stream_parser_handles_sticky_frames_and_noise_prefix},
     {"frame_stream_parser_runtime_profile_length_and_channel_map",
      &test_frame_stream_parser_runtime_profile_length_and_channel_map},
+    {"lua_contract_order_parser_event_indexes", &test_lua_contract_order_parser_event_indexes},
+    {"lua_contract_order_offline_replay_crc", &test_lua_contract_order_offline_replay_crc},
     {"headless_script_host_loads_default_protocol", &test_headless_script_host_loads_default_protocol},
     {"script_runtime_worker_disabled_mode_waits_for_rx_idle",
      &test_script_runtime_worker_disabled_mode_waits_for_rx_idle},

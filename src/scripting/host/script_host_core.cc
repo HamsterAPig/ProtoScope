@@ -94,6 +94,12 @@ StreamParseBatch makeStreamParseBatchSnapshot(const StreamParseBatch& batch, boo
 
     StreamParseBatch snapshot;
     snapshot.errors = batch.errors;
+    // 成功帧已从快照移除，只保留仍指向 errors 的事件，不能留下悬空帧索引。
+    for (const auto& event : batch.events) {
+        if (event.kind == StreamParseEventKind::Error) {
+            snapshot.events.push_back(event);
+        }
+    }
     snapshot.bufferSize = batch.bufferSize;
     snapshot.bufferCapacity = batch.bufferCapacity;
     snapshot.nearOverflow = batch.nearOverflow;
@@ -3805,7 +3811,7 @@ void ScriptHost::updateStreamParseErrorSummary(const StreamParseBatch& batch)
     lastTransportStats_.lastErrorSummary = std::move(summary);
 }
 
-void ScriptHost::applyStreamValueTargets(const std::vector<StreamParsedFrame>& frames)
+void ScriptHost::applyStreamValueTargets(std::span<const StreamParsedFrame> frames)
 {
     if (!runtime_ || !runtime_->stream || runtime_->stream->valueTargetsByFrame.empty()) {
         return;
@@ -3858,13 +3864,21 @@ void ScriptHost::applyStreamValueTargets(const std::vector<StreamParsedFrame>& f
 }
 
 void ScriptHost::dispatchStreamFrames(const transport::ConnectionContext& context,
-                                      const std::vector<StreamParsedFrame>& frames)
+                                      std::span<const StreamParsedFrame> frames)
 {
-    // 核心流程：同一 parser 链顺序产出完整帧；若脚本支持 on_batch，则只批量调用一次，避免重复 on_frame。
-    if (!frames.empty() && !callbackOnStreamBatch(ScriptHostContext{context}, frames)) {
-        for (const auto& frame : frames) {
-            callbackOnStreamFrame(ScriptHostContext{context}, frame);
-        }
+    if (frames.empty()) {
+        return;
+    }
+    // 批回调观察整段最终值；逐帧回调则必须先应用本帧，不能提前看到后续帧。
+    // 是否定义 batch 与执行成功无关：batch 抛错或预算故障不能降级重复调用 on_frame。
+    if (runtime_ && runtime_->stream && runtime_->stream->onBatchCallbackKey.has_value()) {
+        applyStreamValueTargets(frames);
+        callbackOnStreamBatch(ScriptHostContext{context}, frames);
+        return;
+    }
+    for (const auto& frame : frames) {
+        applyStreamValueTargets(std::span<const StreamParsedFrame>(&frame, 1));
+        callbackOnStreamFrame(ScriptHostContext{context}, frame);
     }
 }
 
@@ -3874,10 +3888,27 @@ void ScriptHost::handleStreamTransportBytes(const transport::TransportBytesEvent
     std::chrono::steady_clock::time_point parserFinishedAt;
     const auto batch = parseTransportStreamBytes(event.bytes, parserFinishedAt);
     const auto callbackStartedAt = parserFinishedAt;
-    dispatchStreamParseErrors(event.context, batch);
+    // events 只记录解析时的产生顺序；profile 回调不会重新解释已解析的同块后续帧。
+    const std::span<const StreamParsedFrame> frames(batch.frames);
+    std::size_t segmentStart = 0;
+    std::size_t segmentSize = 0;
+    const auto flushFrames = [&] {
+        dispatchStreamFrames(event.context, frames.subspan(segmentStart, segmentSize));
+        segmentSize = 0;
+    };
+    for (const auto& parsedEvent : batch.events) {
+        if (parsedEvent.kind == StreamParseEventKind::Frame) {
+            if (segmentSize == 0) {
+                segmentStart = parsedEvent.index;
+            }
+            ++segmentSize;
+        } else {
+            flushFrames();
+            callbackOnStreamError(ScriptHostContext{event.context}, batch.errors.at(parsedEvent.index));
+        }
+    }
+    flushFrames();
     updateStreamParseErrorSummary(batch);
-    applyStreamValueTargets(batch.frames);
-    dispatchStreamFrames(event.context, batch.frames);
     const auto finishedAt = std::chrono::steady_clock::now();
     lastTransportStats_.callbackMs = elapsedMilliseconds(callbackStartedAt, finishedAt);
     lastTransportStats_.totalMs = elapsedMilliseconds(startedAt, finishedAt);

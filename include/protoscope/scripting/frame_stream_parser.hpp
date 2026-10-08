@@ -198,6 +198,14 @@ struct StreamParseError {
     std::vector<std::uint8_t> raw;
 };
 
+enum class StreamParseEventKind { Frame, Error };
+
+// 按产生顺序引用各自容器的索引；不保存可能因 vector 扩容而失效的指针。
+struct StreamParseEvent {
+    StreamParseEventKind kind;
+    std::size_t index;
+};
+
 struct StreamParseBatch {
     std::vector<StreamParsedFrame> frames;
     std::vector<StreamParseError> errors;
@@ -206,6 +214,8 @@ struct StreamParseBatch {
     bool nearOverflow{false};
     bool overflowed{false};
     std::size_t droppedBytes{0};
+    // 放在末尾，保留既有聚合初始化成员顺序。
+    std::vector<StreamParseEvent> events;
 };
 
 struct StreamParseOptions {

@@ -3115,6 +3115,74 @@ end
     application.shutdown();
 }
 
+void test_lua_contract_order_offline_replay_crc()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-order-offline"));
+    writeTextFile(protocolDir.path() / "main.lua", R"lua(
+local state = "waiting"
+local function ack(ctx, frame)
+    proto.emit("order", "F:" .. frame.fields.value .. ":" .. state)
+    state = "ack"
+end
+function stream()
+    return {
+        buffer = {capacity = 256},
+        frames = {{name = "ack", header = {0xAA, 0x55},
+            len = {offset = 3, type = "u8", means = "payload", extra = 5},
+            crc = {type = "crc16_modbus", order = "lo_hi"},
+            fields = {{name = "value", type = "u8", offset = 4}}, on_frame = ack}},
+        on_error = function(ctx, err)
+            if err.code == "crc_mismatch" then
+                proto.emit("order", "E:" .. state)
+                state = "error"
+            end
+        end,
+    }
+end
+)lua");
+    const auto frame = [](std::uint8_t value) {
+        std::vector<std::uint8_t> bytes{0xAA, 0x55, 1, value};
+        const auto crc = protoscope::protocol_utils::crc16Modbus(bytes);
+        bytes.push_back(static_cast<std::uint8_t>(crc & 0xFFU));
+        bytes.push_back(static_cast<std::uint8_t>(crc >> 8U));
+        return bytes;
+    };
+    auto bytes = frame(17);
+    auto broken = frame(51);
+    broken.back() ^= 0xFFU;
+    bytes.insert(bytes.end(), broken.begin(), broken.end());
+    const auto last = frame(34);
+    bytes.insert(bytes.end(), last.begin(), last.end());
+    const std::vector<std::string> expected{"F:17:waiting", "E:ack", "F:34:error"};
+    for (const auto pacing : {protoscope::app::Application::OfflineReplayPacing::OriginalTimeline,
+                              protoscope::app::Application::OfflineReplayPacing::FastBatchParse}) {
+        // 同一录制 RX 内交错成功和错误，不能用仅包含合法帧的回放代替顺序验证。
+        protoscope::plot::RawCaptureFileData capture;
+        capture.capturedAtMs = 100;
+        capture.payload = bytes;
+        capture.events = {{.type = protoscope::plot::RawCaptureEventType::RxBytes,
+                           .timestampMs = 100, .bytes = bytes, .endpoint = "recorded://order", .sequence = 1}};
+        protoscope::app::Application application;
+        struct ShutdownGuard {
+            protoscope::app::Application& application;
+            ~ShutdownGuard() { application.shutdown(); }
+        } shutdownGuard{application};
+        require(application.initialize(), "顺序回放应用应初始化");
+        require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
+                "顺序回放协议应加载");
+        std::string error;
+        require(application.loadRawCaptureReplayTimeline(
+                    capture, protoscope::app::Application::OfflineReplayProcessing::CurrentProtocol, pacing, error),
+                "顺序回放录制应加载");
+        require(application.playRawCaptureReplay(error), "顺序回放应启动");
+        waitReplayCompleted(application);
+        pumpUntilScriptEventCount(application, "order", 3U);
+        const auto events = scriptEventPayloads(application.docks().scriptState(), "order");
+        // 正常退出及断言/等待异常均由 ShutdownGuard 停止并回收 worker。
+        require(events == expected, "离线两种 pacing 的 CRC/ACK 业务顺序应与实时手写 golden 一致");
+    }
+}
+
 void test_application_offline_replay_timeline_and_fast_batch_match_goldens()
 {
     const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-offline-pacing-golden"));

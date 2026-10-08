@@ -21,6 +21,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -613,7 +614,7 @@ private:
     void callbackOnClose(const ScriptHostContext& ctx);
     void callbackOnError(const ScriptHostContext& ctx, const std::string& message);
     void callbackOnBytes(const ScriptHostContext& ctx, const std::vector<std::uint8_t>& bytes);
-    bool callbackOnStreamBatch(const ScriptHostContext& ctx, const std::vector<StreamParsedFrame>& frames);
+    bool callbackOnStreamBatch(const ScriptHostContext& ctx, std::span<const StreamParsedFrame> frames);
     void callbackOnStreamFrame(const ScriptHostContext& ctx, const StreamParsedFrame& frame);
     void callbackOnStreamError(const ScriptHostContext& ctx, const StreamParseError& error);
     void callbackOnTimer(const ScriptHostContext& ctx, const std::string& timerName);
@@ -633,9 +634,9 @@ private:
                                                std::chrono::steady_clock::time_point& parserFinishedAt);
     void dispatchStreamParseErrors(const transport::ConnectionContext& context, const StreamParseBatch& batch);
     void updateStreamParseErrorSummary(const StreamParseBatch& batch);
-    void applyStreamValueTargets(const std::vector<StreamParsedFrame>& frames);
+    void applyStreamValueTargets(std::span<const StreamParsedFrame> frames);
     void dispatchStreamFrames(const transport::ConnectionContext& context,
-                              const std::vector<StreamParsedFrame>& frames);
+                              std::span<const StreamParsedFrame> frames);
 
     void registerLuaApi(Runtime& runtime, sol::table& proto);
     void pollStorageCompletions();

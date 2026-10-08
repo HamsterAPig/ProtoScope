@@ -156,7 +156,7 @@ sol::table makeStreamFrameTable(sol::state_view lua,
                                 bool includeRaw,
                                 bool includeFieldAliases);
 sol::table makeStreamFrameArrayTable(sol::state_view lua,
-                                     const std::vector<StreamParsedFrame>& frames,
+                                     std::span<const StreamParsedFrame> frames,
                                      bool includeRaw,
                                      bool includeFieldAliases);
 sol::table makeStreamErrorTable(sol::state_view lua, const StreamParseError& error);
