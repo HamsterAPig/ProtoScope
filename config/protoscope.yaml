@@ -46,7 +46,7 @@ gui:
   # 启动时 ID 无法解析会回退显示专业深色，但配置中的原 ID 会被保留。
   # 运行中可在“设置 -> 主题”即时切换，不需重启，也不重载当前协议；切换会把配置标记为待保存。
   # 内置：professional_dark、professional_light、debug_high_contrast。
-  # 随附：graphite_cyan、warm_industrial、paper_lab；也可使用配置旁 themes 目录中的用户主题 ID。
+  # 配置旁 themes 目录可放入用户 YAML 主题；不再随附额外主题，不清理已有用户文件。
   theme: professional_dark
   # 是否显示应用顶部 header；默认 false，为 true 时顶部固定占用 58 像素高的区域。
   show_app_header: false

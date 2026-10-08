@@ -8,9 +8,6 @@ file(MAKE_DIRECTORY "${runtime_theme_dir}")
 
 set(runtime_files
     "protoscope.yaml"
-    "themes/graphite_cyan.yaml"
-    "themes/warm_industrial.yaml"
-    "themes/paper_lab.yaml"
 )
 
 foreach(relative_path IN LISTS runtime_files)

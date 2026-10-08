@@ -9,7 +9,6 @@
 using namespace protoscope;
 namespace {
 void check(bool ok, const char* text) { if (!ok) throw std::runtime_error(text); }
-bool nearComponent(float value, int component) { return std::abs(value - component / 255.F) <= 1.F / 255.F; }
 }
 
 int main()
@@ -81,67 +80,33 @@ int main()
         check(!store.loadText("gui:\n  wave:\n    overview_selection:\n      min_alpha: 0.8\n      max_alpha: 0.2\n").error.empty(),
               "selection alpha validation");
 
-        ui::ThemeManager bundledThemes;
-        bundledThemes.setConfigPath(std::filesystem::path{"config"} / "protoscope.yaml");
-        check(bundledThemes.reload(error), "加载随附主题");
-        const auto* graphite = bundledThemes.find("graphite_cyan");
-        const auto* warm = bundledThemes.find("warm_industrial");
-        const auto* paper = bundledThemes.find("paper_lab");
-        check(graphite && graphite->name == "Graphite + Cyan" && graphite->base == "professional_dark",
-              "发现 Graphite + Cyan");
-        check(warm && warm->name == "Warm Industrial" && warm->base == "professional_dark",
-              "发现 Warm Industrial");
-        check(paper && paper->name == "Paper Lab" && paper->base == "professional_light",
-              "发现 Paper Lab");
-        check(nearComponent(graphite->ui.appBackground.x, 11) && nearComponent(graphite->ui.accent.y, 211) &&
-                  nearComponent(graphite->wave.plotBackground.z, 18) && nearComponent(graphite->wave.selectionColor.z, 246) &&
-                  graphite->wave.channelPalette.size() == 8 && nearComponent(graphite->wave.channelPalette[0].y, 211),
-              "Graphite + Cyan 关键颜色");
-        check(nearComponent(warm->ui.panelBackground.x, 36) && nearComponent(warm->ui.accent.x, 217) &&
-                  nearComponent(warm->wave.plotBackground.x, 21) && nearComponent(warm->wave.selectionColor.y, 122) &&
-                  warm->wave.channelPalette.size() == 8 && nearComponent(warm->wave.channelPalette[1].y, 174),
-              "Warm Industrial 关键颜色");
-        check(nearComponent(paper->ui.appBackground.x, 243) && nearComponent(paper->ui.accent.z, 179) &&
-                  nearComponent(paper->wave.plotBackground.x, 255) && nearComponent(paper->wave.selectionColor.z, 230) &&
-                  paper->wave.channelPalette.size() == 8 && nearComponent(paper->wave.channelPalette[3].y, 130),
-              "Paper Lab 关键颜色");
-        check(graphite->ui.windowRounding ==
-                  ui::uiThemeDefinition(config::GuiTheme::ProfessionalDark).ui.windowRounding &&
-                  paper->ui.framePaddingY ==
-                  ui::uiThemeDefinition(config::GuiTheme::ProfessionalLight).ui.framePaddingY,
-              "随附主题继承基底尺寸");
-        check(bundledThemes.request("paper_lab", error) && bundledThemes.applyPending() &&
-                  ui::activeThemeDefinition().id == "paper_lab" &&
-                  nearComponent(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x, 243) &&
-                  nearComponent(ImGui::GetStyleColorVec4(ImGuiCol_ChildBg).y, 252) &&
-                  nearComponent(ImGui::GetStyleColorVec4(ImGuiCol_CheckMark).z, 179),
-              "外部主题应用到 ImGui 样式");
-        const auto contrast = [](ImVec4 foreground, ImVec4 background) {
-            const auto linear = [](float component) {
-                return component <= 0.04045F ? component / 12.92F :
-                    std::pow((component + 0.055F) / 1.055F, 2.4F);
-            };
-            const auto luminance = [&](ImVec4 color) {
-                return 0.2126F * linear(color.x) + 0.7152F * linear(color.y) + 0.0722F * linear(color.z);
-            };
-            const float foregroundLuminance = luminance(foreground);
-            const float backgroundLuminance = luminance(background);
-            return (std::max(foregroundLuminance, backgroundLuminance) + 0.05F) /
-                (std::min(foregroundLuminance, backgroundLuminance) + 0.05F);
-        };
-        for (const auto* bundled : {graphite, warm, paper}) {
-            ui::applyUiTheme(*bundled);
-            for (const auto semantic : {bundled->ui.success, bundled->ui.warning, bundled->ui.danger}) {
-                const auto readable = ui::displayColor(semantic, bundled->ui.panelBackgroundAlt, 1.0F, 4.5F);
-                check(contrast(readable, bundled->ui.panelBackgroundAlt) >= 4.49F,
-                      "语义正文颜色需达到 4.5:1");
-            }
+        ui::ThemeManager builtinThemes;
+        for (const auto* id : {"professional_dark", "professional_light", "debug_high_contrast"})
+            check(builtinThemes.find(id) != nullptr, "保留三个内置主题");
+        for (const auto* id : {"graphite_cyan", "warm_industrial", "paper_lab"}) {
+            check(builtinThemes.find(id) == nullptr, "退役主题不是内置主题");
+            builtinThemes.startup(id, error);
+            check(!error.empty() && builtinThemes.applyPending() &&
+                  ui::activeThemeDefinition().id == "professional_dark", "旧 ID 缺失时回退深色");
+            const auto original = store.loadText(std::string("gui:\n  theme: ") + id + "\n");
+            check(original.config.gui.theme == id, "回退不改写配置原 ID");
         }
 
         const auto directory = std::filesystem::temp_directory_path() /
             ("protoscope-theme-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-        std::filesystem::create_directories(directory / "themes");
         manager.setConfigPath(directory / "config.yaml");
+        check(manager.reload(error) && manager.find("professional_dark"), "缺失目录仍提供内置主题");
+        std::filesystem::create_directories(directory / "themes");
+        check(manager.reload(error) && manager.find("professional_light"), "空目录仍提供内置主题");
+        // 同名用户文件不能被退役策略封禁，也不能清理运行目录旧副本。
+        for (const auto* id : {"graphite_cyan", "warm_industrial", "paper_lab"}) {
+            std::ofstream file(directory / "themes" / (std::string(id) + ".yaml"));
+            file << "version: 1\nid: " << id << "\nname: User\nbase: professional_dark\n";
+        }
+        check(manager.reload(error), "发现用户自定义主题");
+        for (const auto* id : {"graphite_cyan", "warm_industrial", "paper_lab"})
+            check(manager.request(id, error) && manager.applyPending() &&
+                  ui::activeThemeDefinition().id == id, "同名用户主题仍能应用");
         check(manager.exportCurrent(directory / "themes/custom.yaml", error), "export file");
         check(manager.reload(error) && manager.find("custom"), "scan user theme");
         check(manager.request("custom", error) && manager.applyPending(), "apply user theme");
@@ -153,7 +118,7 @@ int main()
         check(!manager.reload(error) && error.find("id:") != std::string::npos, "reject duplicate registry ID");
         check(ui::activeThemeRevision() == beforeReload && manager.find("custom"), "reload failure preserves registry");
         check(!manager.exportCurrent(directory / "themes/custom.yaml", error), "export refuses overwrite");
-        std::cout << "theme_manager: parsing, bundled discovery, key colors, ImGui apply, inheritance, errors, roundtrip, deferred apply, fallback passed\n";
+        std::cout << "theme_manager: parsing, user discovery, inheritance, errors, roundtrip, deferred apply, retirement fallback passed\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         status = 1;

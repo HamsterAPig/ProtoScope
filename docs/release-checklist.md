@@ -103,8 +103,8 @@ Expand-Archive .\ProtoScope-windows-x64-<tag>.zip -DestinationPath .\release-che
 
 人工打开 GUI 后确认：
 
-- zip 内的发布目录包含 `ProtoScope.exe`、`README.md`、`LICENSE`、`config/protoscope.yaml`、`config/themes/graphite_cyan.yaml`、`config/themes/warm_industrial.yaml`、`config/themes/paper_lab.yaml`、README 引用的核心 `docs/*.md`、顶层 Lua 示例 `main.lua`、`protocols/protoscope_api.lua` 和 `protocols/templates/oscilloscope_control/main.lua`，并且不包含本机 `config/ui/protocol-control-state.yaml`。
-- “设置 → 主题”可见 Graphite + Cyan、Warm Industrial、Paper Lab，逐一切换后顶部栏、状态栏、波形工具栏、主波形框选和 Lua 交互反馈使用对应主题色。
+- zip 内的发布目录包含 `ProtoScope.exe`、`README.md`、`LICENSE`、`config/protoscope.yaml`、用户主题目录 `config/themes`、README 引用的核心 `docs/*.md`、顶层 Lua 示例 `main.lua`、`protocols/protoscope_api.lua` 和 `protocols/templates/oscilloscope_control/main.lua`，并且不包含本机 `config/ui/protocol-control-state.yaml`。
+- “设置 → 主题”可见专业深色、专业浅色、仪器深黑（高对比）；用户 YAML 主题仍可发现。逐一切换检查顶部栏、状态栏、工具栏、主波形和 Lua 控件；普通按钮无常驻亮框，输入边界与键盘焦点清晰。
 - 默认协议列表可见，`default_protocol`、`lua_waveform_demo` 和半双工示例可加载。
 - Lua Dock 控件能触发脚本回调。
 - 波形 Dock 的播放/暂停按钮能触发 `on_oscilloscope_toggle()`。

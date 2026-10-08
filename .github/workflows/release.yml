@@ -230,7 +230,12 @@ jobs:
           Copy-Item -Path README.md -Destination (Join-Path $packageDir "README.md") -Force
           Copy-Item -Path LICENSE -Destination (Join-Path $packageDir "LICENSE") -Force
           Copy-Item -Path config/protoscope.yaml -Destination (Join-Path $packageConfigDir "protoscope.yaml") -Force
-          Copy-Item -Path config/themes -Destination $packageConfigDir -Recurse -Force
+          # 仓库不跟踪空目录；退役随附主题后仍提供用户主题目录。
+          $packageThemesDir = Join-Path $packageConfigDir "themes"
+          New-Item -ItemType Directory -Force -Path $packageThemesDir | Out-Null
+          if (Test-Path config/themes) {
+            Get-ChildItem -Path config/themes | Copy-Item -Destination $packageThemesDir -Recurse -Force
+          }
           Copy-Item -Path docs/* -Destination $packageDocsDir -Recurse -Force
           Copy-Item -Path protocols/* -Destination $packageProtocolsDir -Recurse -Force
 
@@ -239,9 +244,7 @@ jobs:
             "README.md",
             "LICENSE",
             "config/protoscope.yaml",
-            "config/themes/graphite_cyan.yaml",
-            "config/themes/warm_industrial.yaml",
-            "config/themes/paper_lab.yaml",
+            "config/themes",
             "docs/user-manual.md",
             "docs/config-reference.md",
             "docs/lua-host-integration.md",
@@ -357,7 +360,7 @@ jobs:
           ) + $changes + $luaNotes + @(
             "",
             "Assets:",
-            "- $env:ASSET_BASE.zip: complete package with executable, default config, bundled themes, docs and Lua protocol examples",
+            "- $env:ASSET_BASE.zip: complete package with executable, default config, user theme directory, docs and Lua protocol examples",
             "- SHA256 checksum"
           )
           Set-Content -Path $notesPath -Value $notesLines -Encoding UTF8
