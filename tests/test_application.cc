@@ -444,6 +444,25 @@ bool hasHostLogMessage(const protoscope::dock::LogDockState& logState,
     return false;
 }
 
+bool hasTransportRxLogForEndpoint(const protoscope::dock::LogDockState& logState, const std::string& endpoint)
+{
+    const auto endpointField = " endpoint=" + endpoint;
+    for (const auto& row : logState.rows) {
+        if (row.endpoint != "transport" || row.message.find("transport rx") == std::string::npos) {
+            continue;
+        }
+        const auto endpointPosition = row.message.find(endpointField);
+        if (endpointPosition == std::string::npos) {
+            continue;
+        }
+        const auto fieldEnd = endpointPosition + endpointField.size();
+        if (fieldEnd == row.message.size() || row.message[fieldEnd] == ' ') {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool hasScriptEvent(const protoscope::dock::ScriptDockState& scriptState, const std::string& name)
 {
     for (const auto& row : scriptState.rows) {
@@ -4500,7 +4519,7 @@ void test_lua_contract_backpressure_stale_connection_rx_is_discarded_without_sid
             "旧连接字节不得计入完整原始录制");
     require(application.docks().receiveState().rows.empty(), "旧连接字节不得生成RX收发记录");
     require(application.docks().scriptState().rows.empty(), "旧连接字节不得进入脚本输出");
-    require(!hasHostLogMessage(application.docks().logState(), staleContext.endpoint, "transport rx"),
+    require(!hasTransportRxLogForEndpoint(application.docks().logState(), staleContext.endpoint),
             "旧连接字节不得写入transport RX trace");
     require(application.stopRawCaptureRecording(error), "旧连接RX测试录制应正常关闭");
     const auto recording = protoscope::plot::readRawCaptureFile(recordingPath.path() / "stale.psraw", error);
@@ -4553,11 +4572,15 @@ void test_lua_contract_backpressure_open_before_stale_rx_is_discarded_but_detach
     }
     require(received == std::vector<std::uint8_t>({0xA1, 0xB2}),
             "Open前迟到的实时RX须丢弃，但合法detached/offline RX仍须投递");
+    require(hasTransportRxLogForEndpoint(application.docks().logState(), newContext.endpoint),
+            "活动连接RX日志应对应已接受的字节所有权");
+    require(hasTransportRxLogForEndpoint(application.docks().logState(), detachedContext.endpoint),
+            "合法detached RX日志应对应已接受的字节所有权");
     require(application.docks().waveState().rawCapture.payload == std::vector<std::uint8_t>({0xA1, 0xB2}),
             "stale实时RX不得污染raw capture，detached合法输入应保留");
     require(countScriptEvents(application.docks().scriptState(), "rx_owner") == 2U,
             "Lua输出应仅归属已Open实时连接和合法detached输入");
-    require(!hasHostLogMessage(application.docks().logState(), staleContext.endpoint, "transport rx"),
+    require(!hasTransportRxLogForEndpoint(application.docks().logState(), staleContext.endpoint),
             "无活动连接时Open前stale RX不得写RX日志");
     require(application.stopRawCaptureRecording(error), "Open前RX录制应正常关闭");
     const auto capture = protoscope::plot::readRawCaptureFile(recordingPath.path() / "capture.psraw", error);
