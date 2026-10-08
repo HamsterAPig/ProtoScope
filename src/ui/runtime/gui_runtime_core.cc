@@ -899,7 +899,8 @@ bool GuiRuntime::initializeImGui()
     themeManager_.applyPending();
     if (!themeError.empty()) application_.setStatusMessage(themeError, false);
     ImGuiIO& io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    // 生产路径启用键盘导航，使工具栏与侧栏按钮可通过 Tab/方向键到达并激活。
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_NavEnableKeyboard;
     io.IniFilename = nullptr;
     ensureChineseFont();
 
@@ -1260,7 +1261,7 @@ void GuiRuntime::drawAppHeader(const float menuBarHeight)
             requestProtocolWorkspaceSwitch(lua.protocolDir, true);
         }
         ImGui::SameLine();
-        if (ImGui::Button("视图")) {
+        if (drawUiButton("视图")) {
             ImGui::OpenPopup("##app_header_view_menu");
         }
         if (ImGui::BeginPopup("##app_header_view_menu")) {

@@ -330,13 +330,7 @@ namespace {
 
     bool drawTransferToolbarDangerButton(const char* label, const char* tooltip, float width = 0.0F)
     {
-        const auto& tokens = defaultUiStyleTokens();
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(tokens.danger.x, tokens.danger.y, tokens.danger.z, 0.18F));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(tokens.danger.x, tokens.danger.y, tokens.danger.z, 0.32F));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(tokens.danger.x, tokens.danger.y, tokens.danger.z, 0.48F));
-        ImGui::PushStyleColor(ImGuiCol_Text, tokens.danger);
-        const bool clicked = ImGui::Button(label, ImVec2(width, transferLogToolbarButtonHeight()));
-        ImGui::PopStyleColor(4);
+        const bool clicked = drawUiButton(label, ImVec2(width, transferLogToolbarButtonHeight()), UiButtonRole::Danger);
         drawIconTooltip(tooltip);
         return clicked;
     }
@@ -424,7 +418,7 @@ void GuiRuntime::drawStatusBar()
                      comm.state == transport::TransportState::Open ? tokens.success : tokens.warning);
             ImGui::TableNextColumn();
             if (config.pendingExternalReload && ImGui::GetContentRegionAvail().x > 100.0F) {
-                if (ImGui::SmallButton("重载") && !reloadConfigFromDisk())
+                if (drawUiSmallButton("重载") && !reloadConfigFromDisk())
                     application_.setStatusMessage("从磁盘重载配置失败", true);
                 ImGui::SameLine();
             }
@@ -500,7 +494,7 @@ void GuiRuntime::drawSerialCommConfig(dock::CommDockState& comm)
         refreshSerialPortOptions(comm);
         serialPortsScanned_ = true;
     }
-    if (ImGui::Button("刷新串口列表")) {
+    if (drawUiButton("刷新串口列表")) {
         refreshSerialPortOptions(comm);
     }
 
@@ -633,15 +627,15 @@ void GuiRuntime::drawCommStatus(const dock::CommDockState& comm)
 
 void GuiRuntime::drawCommActions(dock::ConfigDockState& configState)
 {
-    if (ImGui::Button("连接")) {
+    if (drawUiButton("连接", ImVec2(0, 0), UiButtonRole::Primary)) {
         application_.openTransport();
     }
     ImGui::SameLine();
-    if (ImGui::Button("断开")) {
+    if (drawUiButton("断开")) {
         application_.closeTransport();
     }
     ImGui::SameLine();
-    if (ImGui::Button("保存配置")) {
+    if (drawUiButton("保存配置")) {
         std::string error;
         const auto outputPath = std::filesystem::path(configState.loadedFromPath);
         if (configStore_.save(outputPath, application_.captureConfig(), error)) {
@@ -716,7 +710,7 @@ void GuiRuntime::drawProtocolDock()
     }
     ImGui::SameLine(0.0F, ImGui::GetStyle().ItemSpacing.x);
 #if defined(_WIN32)
-    if (ImGui::Button("浏览...")) {
+    if (drawUiButton("浏览...")) {
         std::string dialogError;
         const auto selectedDir =
             nativeDirectoryDialog(window_, L"选择协议根目录", std::filesystem::path(lua.protocolRootDir), dialogError);
@@ -732,7 +726,7 @@ void GuiRuntime::drawProtocolDock()
     }
 #else
     protoscope::ui::beginDisabled();
-    ImGui::Button("浏览...");
+    drawUiButton("浏览...");
     protoscope::ui::endDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
         ImGui::SetTooltip("当前平台暂不支持原生目录选择，请直接输入路径。");
@@ -746,12 +740,12 @@ void GuiRuntime::drawProtocolDock()
         protocolDirDraft_ = normalizeProtocolDraft(configStore_, lua.protocolRootDir, protocolDirEdit.value);
     }
 
-    if (ImGui::Button("重新扫描协议目录")) {
+    if (drawUiButton("重新扫描协议目录")) {
         refreshProtocolRoot(configStore_, lua, protocolDirDraft_, protocolDirDraftModel_);
         application_.setStatusMessage("协议目录扫描已刷新");
     }
     ImGui::SameLine();
-    if (ImGui::Button("重新加载协议")) {
+    if (drawUiButton("重新加载协议")) {
         const auto decision = decideProtocolWorkspaceSwitch(lua.protocolDir, protocolDirDraft_, true);
         if (decision.reloadProtocolDir.has_value()) {
             requestProtocolWorkspaceSwitch(*decision.reloadProtocolDir, true);
@@ -963,7 +957,7 @@ void GuiRuntime::drawTransferSendSection(float minPayloadHeight, const ImGuiStyl
                     ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
                     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
                 }
-                const bool hexModeToggleRequested = ImGui::Button("HEX##transfer_send_hex", ImVec2(-FLT_MIN, 0.0F));
+                const bool hexModeToggleRequested = drawUiButton("HEX##transfer_send_hex", ImVec2(-FLT_MIN, 0.0F), UiButtonRole::Toolbar, hexModeBeforeClick);
                 if (hexModeBeforeClick) {
                     ImGui::PopStyleColor(2);
                 }
@@ -1022,7 +1016,7 @@ void GuiRuntime::drawTransferSendSection(float minPayloadHeight, const ImGuiStyl
                 const float oldY = ImGui::GetCursorPosY();
                 ImGui::SetCursorPosY(oldY + (payloadHeight - frameHeight) * 0.5F);
 
-                if (ImGui::Button("发送", ImVec2(-FLT_MIN, 0.0F))) {
+                if (drawUiButton("发送", ImVec2(-FLT_MIN, 0.0F), UiButtonRole::Primary)) {
                     if (application_.sendManualPayload(sendState.payload, sendState.hexMode)) {
                         dock::rememberSendHistory(sendState, sendState.payload, historyLimit);
                         saveCurrentProtocolControlState();
@@ -1541,7 +1535,7 @@ bool GuiRuntime::drawDynamicButtonControl(const scripting::ControlSnapshot& cont
                                           std::optional<float> layoutWidth)
 {
     const ImVec2 size(layoutWidth.value_or(0.0F), 0.0F);
-    if (ImGui::Button(imguiLabel.c_str(), size)) {
+    if (drawUiButton(imguiLabel.c_str(), size)) {
         updateDynamicControlValueWithFeedback(control.descriptor, true);
         return true;
     }
@@ -1903,7 +1897,7 @@ bool GuiRuntime::drawTxSequenceControl(const scripting::ControlSnapshot& control
                 if (!canMoveUp) {
                     protoscope::ui::beginDisabled();
                 }
-                if (ImGui::Button("上", ImVec2(30.0F, 0.0F))) {
+                if (drawUiButton("上", ImVec2(30.0F, 0.0F))) {
                     std::swap(next.frames[rowIndex - 1], next.frames[rowIndex]);
                     updated = true;
                 }
@@ -1915,7 +1909,7 @@ bool GuiRuntime::drawTxSequenceControl(const scripting::ControlSnapshot& control
                 if (!canMoveDown) {
                     protoscope::ui::beginDisabled();
                 }
-                if (ImGui::Button("下", ImVec2(30.0F, 0.0F))) {
+                if (drawUiButton("下", ImVec2(30.0F, 0.0F))) {
                     std::swap(next.frames[rowIndex], next.frames[rowIndex + 1]);
                     updated = true;
                 }
@@ -1924,7 +1918,7 @@ bool GuiRuntime::drawTxSequenceControl(const scripting::ControlSnapshot& control
                     protoscope::ui::endDisabled();
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("复制", ImVec2(44.0F, 0.0F))) {
+                if (drawUiButton("复制", ImVec2(44.0F, 0.0F))) {
                     auto copy = frame;
                     copy.id = nextTxSequenceFrameId(next);
                     next.frames.insert(next.frames.begin() + static_cast<std::ptrdiff_t>(rowIndex + 1), std::move(copy));
@@ -1932,7 +1926,7 @@ bool GuiRuntime::drawTxSequenceControl(const scripting::ControlSnapshot& control
                 }
                 drawIconTooltip("复制当前帧");
                 ImGui::SameLine();
-                if (ImGui::Button(PROTOSCOPE_ICON_TRASH, ImVec2(30.0F, 0.0F))) {
+                if (drawUiButton(PROTOSCOPE_ICON_TRASH, ImVec2(30.0F, 0.0F), UiButtonRole::Danger)) {
                     next.frames.erase(next.frames.begin() + static_cast<std::ptrdiff_t>(rowIndex));
                     updated = true;
                     ImGui::PopID();

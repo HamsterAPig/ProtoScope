@@ -217,7 +217,7 @@ namespace {
         drawActiveChannelHeaderSummary(wave, buttonWidth);
         ImGui::SameLine();
         ImGui::SetCursorPosX((std::max)(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - buttonWidth));
-        if (ImGui::SmallButton(wave.legendCollapsed ? "v##wave_channel_legend_collapse"
+        if (drawUiSmallButton(wave.legendCollapsed ? "v##wave_channel_legend_collapse"
                                                     : "^##wave_channel_legend_collapse")) {
             wave.legendCollapsed = !wave.legendCollapsed;
         }
@@ -535,7 +535,7 @@ namespace {
         ImGui::TextDisabled(hasAnalogChannels ? "所有 CH 已隐藏" : "无 CH");
         if (hasAnalogChannels) {
             ImGui::SameLine();
-            if (ImGui::SmallButton("全部恢复") && plot::resetAllChannelViewSettings(wave)) {
+            if (drawUiSmallButton("全部恢复") && plot::resetAllChannelViewSettings(wave)) {
                 invalidateWaveDisplayCaches(wave);
             }
             ImGui::SetItemTooltip("恢复所有通道的隐藏状态和显示设置；不清空波形数据。");
@@ -762,14 +762,14 @@ namespace {
             ImGui::SameLine();
         }
         const std::string visibilityButtonLabel = waveChannelItemLabel(visible ? "隐藏" : "显示", channelIndex);
-        if (ImGui::SmallButton(visibilityButtonLabel.c_str())) {
+        if (drawUiSmallButton(visibilityButtonLabel.c_str())) {
             setChannelHidden(wave, channelIndex, visible);
         }
         ImGui::SetItemTooltip(visible ? "隐藏该通道；波形数据仍保留。" : "恢复显示该通道。");
         recordLastItem(blankHitTest);
         ImGui::SameLine();
         const std::string resetButtonLabel = waveChannelItemLabel("恢复", channelIndex);
-        if (ImGui::SmallButton(resetButtonLabel.c_str())) {
+        if (drawUiSmallButton(resetButtonLabel.c_str())) {
             if (plot::resetOneChannelViewSettings(wave, channelIndex)) {
                 invalidateWaveDisplayCaches(wave);
             }
@@ -891,14 +891,14 @@ namespace {
         bool collapseRequested = false;
         ImGui::TextUnformatted("通道图例");
         ImGui::SameLine();
-        if (ImGui::SmallButton("全部恢复")) {
+        if (drawUiSmallButton("全部恢复")) {
             if (plot::resetAllChannelViewSettings(wave)) {
                 invalidateWaveDisplayCaches(wave);
             }
         }
         ImGui::SetItemTooltip("恢复所有通道的隐藏状态和显示设置；不清空波形数据。");
         ImGui::SameLine();
-        if (ImGui::SmallButton("收起")) {
+        if (drawUiSmallButton("收起")) {
             collapseLegendOverlay(wave.legendOverlay);
             collapseRequested = true;
         }

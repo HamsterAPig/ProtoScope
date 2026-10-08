@@ -123,14 +123,14 @@ namespace {
             ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", error.c_str());
         }
         ImGui::Spacing();
-        if (ImGui::Button(confirmLabel, ImVec2(90.0F, 0.0F))) {
+        if (drawUiButton(confirmLabel, ImVec2(90.0F, 0.0F), UiButtonRole::Primary)) {
             onConfirm(path);
             if (!open) {
                 ImGui::CloseCurrentPopup();
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
+        if (drawUiButton("取消", ImVec2(90.0F, 0.0F))) {
             open = false;
             opened = false;
             error.clear();
@@ -169,12 +169,12 @@ void GuiRuntime::drawAboutDialog()
     ImGui::Text("邮箱: %s", build::kAuthorEmail);
     ImGui::Spacing();
 
-    if (ImGui::Button("复制项目地址")) {
+    if (drawUiButton("复制项目地址")) {
         ImGui::SetClipboardText(build::kProjectUrl);
         application_.setStatusMessage("项目地址已复制", false);
     }
     ImGui::SameLine();
-    if (ImGui::Button("打开项目地址")) {
+    if (drawUiButton("打开项目地址")) {
 #if defined(_WIN32)
         ShellExecuteA(nullptr, "open", build::kProjectUrl, nullptr, nullptr, SW_SHOWNORMAL);
 #else
@@ -182,7 +182,7 @@ void GuiRuntime::drawAboutDialog()
 #endif
     }
     ImGui::SameLine();
-    if (ImGui::Button("关闭")) {
+    if (drawUiButton("关闭")) {
         ImGui::CloseCurrentPopup();
     }
 
@@ -236,7 +236,7 @@ void GuiRuntime::drawShortcutHelpDialog()
     drawSection("波形 Dock", ShortcutScope::WaveDock);
 
     ImGui::Spacing();
-    if (ImGui::Button("关闭")) {
+    if (drawUiButton("关闭")) {
         ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
@@ -287,13 +287,13 @@ void GuiRuntime::drawAlgorithmHelpDialog()
 
         protoscope::ui::beginDisabled(algorithmHelpMatches_.empty());
         ImGui::TableSetColumnIndex(1);
-        if (ImGui::Button("上一个", ImVec2(-1.0F, 0.0F))) {
+        if (drawUiButton("上一个", ImVec2(-1.0F, 0.0F))) {
             algorithmHelpCurrentMatchOrdinal_ =
                 previousAlgorithmHelpMatchOrdinal(algorithmHelpMatches_, algorithmHelpCurrentMatchOrdinal_);
             algorithmHelpScrollToCurrent_ = algorithmHelpCurrentMatchOrdinal_ != kNoAlgorithmHelpMatch;
         }
         ImGui::TableSetColumnIndex(2);
-        if (ImGui::Button("下一个", ImVec2(-1.0F, 0.0F))) {
+        if (drawUiButton("下一个", ImVec2(-1.0F, 0.0F))) {
             algorithmHelpCurrentMatchOrdinal_ =
                 nextAlgorithmHelpMatchOrdinal(algorithmHelpMatches_, algorithmHelpCurrentMatchOrdinal_);
             algorithmHelpScrollToCurrent_ = algorithmHelpCurrentMatchOrdinal_ != kNoAlgorithmHelpMatch;
@@ -306,7 +306,7 @@ void GuiRuntime::drawAlgorithmHelpDialog()
         ImGui::Text("匹配 %zu / %zu", displayOrdinal, algorithmHelpMatches_.size());
 
         ImGui::TableSetColumnIndex(4);
-        if (ImGui::Button("关闭", ImVec2(-1.0F, 0.0F))) {
+        if (drawUiButton("关闭", ImVec2(-1.0F, 0.0F))) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndTable();
@@ -393,13 +393,13 @@ void GuiRuntime::drawUpdateCheckDialog()
     }
 
     ImGui::Spacing();
-    if (!updateCheckInProgress_ && ImGui::Button("重新检查")) {
+    if (!updateCheckInProgress_ && drawUiButton("重新检查")) {
         startUpdateCheck();
     }
     if (!updateCheckInProgress_) {
         ImGui::SameLine();
     }
-    if (ImGui::Button("打开项目地址")) {
+    if (drawUiButton("打开项目地址")) {
 #if defined(_WIN32)
         ShellExecuteA(nullptr, "open", build::kProjectUrl, nullptr, nullptr, SW_SHOWNORMAL);
 #else
@@ -407,7 +407,7 @@ void GuiRuntime::drawUpdateCheckDialog()
 #endif
     }
     ImGui::SameLine();
-    if (ImGui::Button("关闭")) {
+    if (drawUiButton("关闭")) {
         ImGui::CloseCurrentPopup();
     }
 
@@ -476,15 +476,15 @@ void GuiRuntime::drawDialogs()
     };
 
     if (dialog.kind == scripting::DialogKind::Confirm) {
-        if (ImGui::Button("确认", ImVec2(90.0F, 0.0F))) {
+        if (drawUiButton("确认", ImVec2(90.0F, 0.0F), UiButtonRole::Primary)) {
             respond("confirmed", true);
         }
         ImGui::SameLine();
-        if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
+        if (drawUiButton("取消", ImVec2(90.0F, 0.0F))) {
             respond("canceled", false);
         }
     } else {
-        if (ImGui::Button("关闭", ImVec2(90.0F, 0.0F))) {
+        if (drawUiButton("关闭", ImVec2(90.0F, 0.0F))) {
             respond("closed", std::nullopt);
         }
     }
@@ -691,7 +691,7 @@ void GuiRuntime::drawUnifiedDataDialog()
                     ImGui::Combo("重放节奏", &importReplayPacing_, "按原始时间轴\0快速分批解析\0");
                 }
             }
-            if (ImGui::Button("确认替换并导入")) {
+            if (drawUiButton("确认替换并导入", ImVec2(0, 0), UiButtonRole::Danger)) {
                 const auto processing = importProcessingMode_ == 1
                                             ? app::Application::OfflineReplayProcessing::CurrentProtocol
                                             : importProcessingMode_ == 2
@@ -712,7 +712,7 @@ void GuiRuntime::drawUnifiedDataDialog()
             if (status.complete) ImGui::TextUnformatted(status.canceled ? "已取消" :
                 status.error.empty() ? "任务完成" : "任务失败");
         }
-        if (status.active && ImGui::Button("取消任务")) application_.cancelDataTransfer();
+        if (status.active && drawUiButton("取消任务")) application_.cancelDataTransfer();
         if (!status.error.empty()) ImGui::TextWrapped("%s", status.error.c_str());
     } else if (unifiedExportMode_) {
         if (ImGui::Combo("内容", &dataExportDraft_.content, "波形数据\0收发原始记录\0逐帧分析结果\0完整现场\0")) {
@@ -741,7 +741,7 @@ void GuiRuntime::drawUnifiedDataDialog()
                 ImGui::InputScalar("结束时间 (ms)", ImGuiDataType_U64, &dataRecordEndMs_);
             }
         }
-        if (ImGui::Button("选择文件并导出")) submitUnifiedDataExport();
+        if (drawUiButton("选择文件并导出", ImVec2(0, 0), UiButtonRole::Primary)) submitUnifiedDataExport();
     }
     if (unifiedExportMode_ && status.complete && !status.active) {
         ImGui::TextUnformatted(status.canceled ? "导出已取消" : status.error.empty() ? "导出完成" : "导出失败");
@@ -1674,14 +1674,14 @@ void GuiRuntime::drawElfStaticAddressDialog()
             ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", elfStaticAddressError_.c_str());
         }
         ImGui::Spacing();
-        if (ImGui::Button("打开", ImVec2(90.0F, 0.0F))) {
+        if (drawUiButton("打开", ImVec2(90.0F, 0.0F), UiButtonRole::Primary)) {
             loadElfStaticAddressFromPath(elfStaticAddressPath_);
             if (!elfStaticAddressDialogOpen_) {
                 ImGui::CloseCurrentPopup();
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
+        if (drawUiButton("取消", ImVec2(90.0F, 0.0F))) {
             elfStaticAddressDialogOpen_ = false;
             elfStaticAddressDialogOpened_ = false;
             elfStaticAddressError_.clear();
@@ -1768,13 +1768,13 @@ void GuiRuntime::drawLogExportFileDialog()
             ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", logExportError_.c_str());
         }
         ImGui::Spacing();
-        if (ImGui::Button("导出", ImVec2(90.0F, 0.0F))) {
+        if (drawUiButton("导出", ImVec2(90.0F, 0.0F), UiButtonRole::Primary)) {
             if (exportLogTargetToPath(logExportTarget_, logExportPath_)) {
                 ImGui::CloseCurrentPopup();
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
+        if (drawUiButton("取消", ImVec2(90.0F, 0.0F))) {
             logExportDialogOpen_ = false;
             logExportDialogOpened_ = false;
             logExportError_.clear();
@@ -1809,13 +1809,13 @@ void GuiRuntime::drawRequestTraceExportFileDialog()
             ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", requestTraceExportError_.c_str());
         }
         ImGui::Spacing();
-        if (ImGui::Button("导出", ImVec2(90.0F, 0.0F))) {
+        if (drawUiButton("导出", ImVec2(90.0F, 0.0F), UiButtonRole::Primary)) {
             if (exportRequestTraceToPath(requestTraceExportPath_)) {
                 ImGui::CloseCurrentPopup();
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
+        if (drawUiButton("取消", ImVec2(90.0F, 0.0F))) {
             requestTraceExportDialogOpen_ = false;
             requestTraceExportDialogOpened_ = false;
             requestTraceExportError_.clear();

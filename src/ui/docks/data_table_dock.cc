@@ -58,7 +58,7 @@ data::Value filterValue(data::FieldType type,const char* text,bool boolean)
 }
 bool iconButton(const char* label,const char* tooltip)
 {
-    const bool clicked=ImGui::Button(label,ImVec2(ImGui::GetFrameHeight(),ImGui::GetFrameHeight()));
+    const bool clicked=drawUiButton(label,ImVec2(ImGui::GetFrameHeight(),ImGui::GetFrameHeight()),UiButtonRole::Toolbar);
     ImGui::SetItemTooltip("%s",tooltip);
     return clicked;
 }

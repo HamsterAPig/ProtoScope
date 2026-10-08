@@ -183,6 +183,9 @@ int main(int argc,char** argv)
         app::Application application;
         config::ConfigStore configs;
         ui::GuiRuntime runtime(application,configs);
+        for (const auto theme : {config::GuiTheme::ProfessionalDark, config::GuiTheme::ProfessionalLight,
+                                 config::GuiTheme::DebugHighContrast}) {
+        ui::applyUiTheme(theme);
         for (const int width:{1000,360}) {
             io.DisplaySize=ImVec2(static_cast<float>(width),900);
             for (int frame=0;frame<6;++frame) {
@@ -196,10 +199,12 @@ int main(int argc,char** argv)
                 if (withGl) {
                     glViewport(0,0,width,900);glClearColor(0.05F,0.05F,0.05F,1);glClear(GL_COLOR_BUFFER_BIT);
                     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());glFinish();
-                    if (frame==5) capture(argv[2],width,900);
+                    if (frame==5) capture(std::filesystem::path(argv[2])/config::guiThemeId(theme),width,900);
                 }
             }
         }
+        }
+        ui::applyUiTheme(config::GuiTheme::ProfessionalDark);
         // 真实 ImGui 输入帧覆盖按下、宿主更新、释放及多行普通回车，不依赖 UI 测试插件。
         std::map<std::string,ImRect> rectangles;
         auto frame = [&] {

@@ -459,17 +459,46 @@ void endToolbarGroup()
     ImGui::PopID();
 }
 
+bool drawUiButton(const char* label, const ImVec2& size, UiButtonRole role, bool active)
+{
+    const bool high = activeDefinition.base == "debug_high_contrast";
+    const auto& tokens = activeDefinition.ui;
+    const auto identity = role == UiButtonRole::Danger ? tokens.danger : tokens.accent;
+    // 高对比按继承基底保留原生边界；普通主题只在按钮作用域去框，不污染后续输入。
+    const bool disabled = (GImGui->CurrentItemFlags & ImGuiItemFlags_Disabled) != 0;
+    const auto normal = disabled ? ImGui::GetStyleColorVec4(ImGuiCol_Button)
+        : role == UiButtonRole::Toolbar && !active ? ImVec4(0, 0, 0, 0)
+        : role == UiButtonRole::Primary || active || role == UiButtonRole::Danger
+            ? surfaceTint(activeDefinition, identity, .16F)
+            : ImGui::GetStyleColorVec4(ImGuiCol_Button);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, high ? ImGui::GetStyle().FrameBorderSize : 0.F);
+    ImGui::PushStyleColor(ImGuiCol_Button, high
+        ? ImGui::GetStyleColorVec4(active ? ImGuiCol_HeaderActive : ImGuiCol_Button) : normal);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, high || role == UiButtonRole::Secondary
+        ? ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered) : surfaceTint(activeDefinition, identity, .18F));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, high || role == UiButtonRole::Secondary
+        ? ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive) : surfaceTint(activeDefinition, identity, .22F));
+    const bool clicked = ImGui::ButtonEx(label, size,
+        ImGui::GetStyle().FramePadding.y == 0.F ? ImGuiButtonFlags_AlignTextBaseLine : ImGuiButtonFlags_None);
+    // 当前 ImGui 原生先绘焦点再绘填充；再次绘制确保自绘侧栏等焦点不被表面遮挡。
+    ImGui::RenderNavCursor(GImGui->LastItemData.Rect, GImGui->LastItemData.ID);
+    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar();
+    return clicked;
+}
+
+bool drawUiSmallButton(const char* label, bool active)
+{
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, 0.F));
+    const bool clicked = drawUiButton(label, ImVec2(0, 0), UiButtonRole::Toolbar, active);
+    ImGui::PopStyleVar();
+    return clicked;
+}
+
 bool drawToolbarSectionButton(const char* label, const char* tooltip, bool active, const ImVec2& size)
 {
-    if (active) {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_HeaderHovered));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
-    }
-    const bool clicked = ImGui::Button(label, size.x == 0.0F && size.y == 0.0F ? ImVec2(-1.0F, 0.0F) : size);
-    if (active) {
-        ImGui::PopStyleColor(3);
-    }
+    const bool clicked = drawUiButton(label, size.x == 0.0F && size.y == 0.0F ? ImVec2(-1.0F, 0.0F) : size,
+                                      UiButtonRole::Toolbar, active);
     if (tooltip != nullptr && tooltip[0] != '\0') {
         ImGui::SetItemTooltip("%s", tooltip);
     }
@@ -487,7 +516,7 @@ void drawHeaderBadge(const char* label, const ImVec4& color, bool filled)
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, background);
     ImGui::PushStyleColor(ImGuiCol_Border, border);
     ImGui::PushStyleColor(ImGuiCol_Text, textColor);
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0F);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, activeDefinition.base == "debug_high_contrast" ? 1.F : 0.F);
     ImGui::Button(label, ImVec2(0.0F, 0.0F));
     ImGui::PopStyleVar();
     ImGui::PopStyleColor(5);
@@ -501,7 +530,7 @@ bool drawDangerIconButton(const char* label, const char* tooltip)
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, surfaceTint(activeDefinition, tokens.danger, .24F));
     ImGui::PushStyleColor(ImGuiCol_Text, tokens.textStrong);
     ImGui::PushStyleColor(ImGuiCol_Border, tokens.danger);
-    const bool clicked = ImGui::Button(label);
+    const bool clicked = drawUiButton(label, ImVec2(0, 0), UiButtonRole::Danger);
     ImGui::PopStyleColor(5);
     if (tooltip != nullptr && tooltip[0] != '\0') {
         ImGui::SetItemTooltip("%s", tooltip);
@@ -511,12 +540,7 @@ bool drawDangerIconButton(const char* label, const char* tooltip)
 
 bool drawGhostIconButton(const char* label, const char* tooltip)
 {
-    const auto& tokens = defaultUiStyleTokens();
-    ImGui::PushStyleColor(ImGuiCol_Button, tokens.panelBackground);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, surfaceTint(activeDefinition, tokens.accent, .10F));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, surfaceTint(activeDefinition, tokens.accent, .18F));
-    const bool clicked = ImGui::Button(label);
-    ImGui::PopStyleColor(3);
+    const bool clicked = drawUiButton(label, ImVec2(0, 0), UiButtonRole::Toolbar);
     if (tooltip != nullptr && tooltip[0] != '\0') {
         ImGui::SetItemTooltip("%s", tooltip);
     }

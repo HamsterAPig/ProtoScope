@@ -8,6 +8,7 @@
 #include <cmath>
 
 #include <implot.h>
+#include <imgui_internal.h>
 
 namespace {
 
@@ -214,9 +215,44 @@ void test_ui_theme_high_contrast_tokens_and_grid_contrast()
                                            "全部控件状态正文阈值");
                 protoscope::tests::require(compositedContrast(d.ui.textMuted, colors[slot]) >= (high ? 7 : 4.5),
                                            "全部控件状态辅助文字阈值");
-                protoscope::tests::require(compositedContrast(colors[ImGuiCol_Border], colors[slot]) >= 3,
-                                           "必要控件边界阈值");
             }
+            // 文字覆盖所有表面；边界仅在输入/组合框/复选框等真实必要角色上验收。
+            for (auto slot : {ImGuiCol_FrameBg, ImGuiCol_FrameBgHovered, ImGuiCol_FrameBgActive,
+                              ImGuiCol_CheckboxSelectedBg})
+                protoscope::tests::require(compositedContrast(colors[ImGuiCol_Border], colors[slot]) >= 3,
+                                           "必要输入边界阈值");
+            ImGui::SetNextWindowPos(ImVec2(0, 0));
+            ImGui::SetNextWindowSize(ImVec2(600, 650));
+            ImGui::Begin("按钮角色恢复检查");
+            ImGui::SetCursorPos(ImVec2(12, 32));
+            const auto borderSize = ImGui::GetStyle().FrameBorderSize;
+            const auto borderColor = colors[ImGuiCol_Border];
+            int roleIndex = 0;
+            for (auto role : {protoscope::ui::UiButtonRole::Secondary, protoscope::ui::UiButtonRole::Primary,
+                              protoscope::ui::UiButtonRole::Toolbar, protoscope::ui::UiButtonRole::Danger}) {
+                ImGui::PushID(roleIndex++);
+                protoscope::ui::drawUiButton("角色按钮", ImVec2(80, 30), role);
+                ImGui::PopID();
+                protoscope::tests::require(nearlyEqual(ImGui::GetStyle().FrameBorderSize, borderSize),
+                                           "按钮退出必须恢复输入边界尺寸");
+                requireColor(ImGui::GetStyleColorVec4(ImGuiCol_Border), borderColor, "按钮退出恢复边界色");
+                requireColor(ImGui::GetStyleColorVec4(ImGuiCol_Button), d.ui.panelBackgroundAlt, "按钮退出恢复填充");
+            }
+            protoscope::ui::drawToolbarSectionButton("开关", nullptr, true, ImVec2(80, 30));
+            protoscope::ui::drawGhostIconButton("选项", nullptr);
+            // 通过 ImGui 的导航激活路径而非鼠标点击验证按钮仍能被键盘激活。
+            const auto keyboardId = ImGui::GetCurrentWindow()->GetID("键盘按钮");
+            GImGui->NavActivateId = GImGui->NavActivateDownId = keyboardId;
+            protoscope::tests::require(protoscope::ui::drawUiButton("键盘按钮", ImVec2(80, 30),
+                                       protoscope::ui::UiButtonRole::Toolbar), "键盘导航必须能激活去框按钮");
+            GImGui->NavActivateId = GImGui->NavActivateDownId = 0;
+            ImGui::ClearActiveID();
+            protoscope::tests::require(nearlyEqual(ImGui::GetStyle().FrameBorderSize, borderSize), "工具栏和 ghost 恢复样式栈");
+            char inputValue[8]{};
+            ImGui::InputText("按钮后的输入", inputValue, sizeof(inputValue));
+            bool checked = true;
+            ImGui::Checkbox("按钮后的复选框", &checked);
+            ImGui::End();
             for (auto slot : {ImGuiCol_InputTextCursor, ImGuiCol_CheckMark, ImGuiCol_SliderGrab,
                              ImGuiCol_NavCursor, ImGuiCol_TabSelectedOverline, ImGuiCol_TabDimmedSelectedOverline,
                              ImGuiCol_DragDropTarget, ImGuiCol_UnsavedMarker})

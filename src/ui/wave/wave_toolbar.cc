@@ -1324,7 +1324,7 @@ void drawWaveOverviewSection(plot::WaveViewState& view)
     float minimum = float(effective.minAlpha), maximum = float(effective.maxAlpha);
     if (ImGui::SliderFloat("最低不透明度", &minimum, 0.F, maximum, "%.2f")) selection.minAlpha = minimum;
     if (ImGui::SliderFloat("最高不透明度", &maximum, minimum, 1.F, "%.2f")) selection.maxAlpha = maximum;
-    if (ImGui::Button("恢复主题默认")) selection = {};
+    if (drawUiButton("恢复主题默认")) selection = {};
 }
 
 void drawWaveToolbar(app::Application& application,
