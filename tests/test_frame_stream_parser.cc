@@ -375,6 +375,31 @@ void test_frame_stream_parser_prefers_longer_same_header_candidate()
     require(value.has_value() && *value == 0x7F, "long schema 字段应从完整帧中解析");
 }
 
+void test_lua_contract_schema_count_division_rejects_int64_min_over_minus_one()
+{
+    using namespace protoscope::scripting;
+
+    StreamFrameDefinition frame;
+    frame.name = "division_overflow";
+    frame.header = {0xAA, 0x55};
+    frame.size = 4;
+    StreamFieldDefinition values;
+    values.name = "values";
+    values.type = StreamValueType::U8;
+    values.offset = 2;
+    values.count.expression = countBinary(StreamCountExpressionOp::Div,
+                                          countConst((std::numeric_limits<std::int64_t>::min)()),
+                                          -1);
+    frame.fields = {values};
+
+    FrameStreamParser parser(StreamBufferDefinition{.capacity = 16, .dropOldest = true}, {frame});
+    const auto batch = parser.pushBytes({0xAA, 0x55, 0x00, 0x01});
+    require(batch.frames.empty(), "INT64_MIN / -1 不应产出帧");
+    require(!batch.errors.empty(), "INT64_MIN / -1 必须转为可恢复 count 错误");
+    require(batch.errors.front().code == StreamParseErrorCode::CountResolveFailed,
+            "INT64_MIN / -1 应归类为 count 解析失败");
+}
+
 void test_frame_stream_parser_count_expression_arithmetic()
 {
     using namespace protoscope::scripting;
@@ -568,6 +593,22 @@ void test_frame_stream_parser_runtime_profile_errors()
         "重复 channel_map 应被拒绝");
     require(parser.setRuntimeProfile("dynamic_profile", StreamRuntimeProfile{.length = 6, .channelMap = {0, 2}}, error),
             "非连续 channel_map (如 {0,2}) 应被接受");
+    require(!parser.setRuntimeProfile("dynamic_profile", StreamRuntimeProfile{
+                                             .length = 6,
+                                             .channelMap = {(std::numeric_limits<std::size_t>::max)()}},
+                                         error),
+            "size_t 最大 channel_map 下标必须拒绝，不能让后续下标加一溢出");
+    if constexpr (sizeof(std::size_t) >= sizeof(std::int64_t)) {
+        const auto maxLuaTarget = static_cast<std::size_t>((std::numeric_limits<std::int64_t>::max)() - 1);
+        require(parser.setRuntimeProfile("dynamic_profile", StreamRuntimeProfile{
+                                                .length = 6,
+                                                .channelMap = {maxLuaTarget},
+                                            },
+                                         error),
+                "最大可映射到 Lua int64 的 channel_map 下标应安全接受，而非按其值分配去重数组");
+    }
+    require(parser.setRuntimeProfile("dynamic_profile", StreamRuntimeProfile{.length = 6, .channelMap = {0, 2}}, error),
+            "拒绝极大 channel_map 后既有 profile 仍可正常更新");
 }
 
 void test_frame_stream_parser_rejects_unsafe_count_bounds()

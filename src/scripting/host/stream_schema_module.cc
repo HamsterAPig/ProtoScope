@@ -173,6 +173,8 @@ std::shared_ptr<StreamCountExpression> makeFieldCountExpression(std::string fiel
 }
 
 std::shared_ptr<StreamCountExpression> parseStreamCountExpressionObject(const sol::object& object, std::string& error);
+bool parseOptionalInteger(const sol::table& table, const char* key, std::optional<std::int64_t>& value,
+                          const std::string& path, std::string& error);
 
 std::shared_ptr<StreamCountExpression> parseStreamCountOperand(const sol::table& table, std::string& error)
 {
@@ -198,7 +200,7 @@ std::shared_ptr<StreamCountExpression> parseConstantCountExpressionTable(const s
 {
     const auto value = luaIntegerValue(table["value"]);
     if (!value.has_value()) {
-        error = "const count 表达式需要整数 value";
+        error = "const count 表达式需要有限的 int64 整数 value";
         return nullptr;
     }
     return makeConstantCountExpression(*value);
@@ -239,14 +241,31 @@ std::optional<ArithmeticCountArgument> parseArithmeticCountArgument(const sol::t
 {
     ArithmeticCountArgument argument;
     if (op == "sub") {
-        argument.value = luaIntegerValue(table["value"]);
-        if (!argument.value.has_value()) {
-            argument.value = luaIntegerValue(table["by"]);
+        const sol::object valueObject = table["value"];
+        if (valueObject.valid() && valueObject.get_type() != sol::type::lua_nil) {
+            argument.value = luaIntegerValue(valueObject);
+            if (!argument.value.has_value()) {
+                error = "sub count value 必须是有限的 int64 整数";
+                return std::nullopt;
+            }
+        } else {
+            const sol::object byObject = table["by"];
+            if (byObject.valid() && byObject.get_type() != sol::type::lua_nil) {
+                argument.value = luaIntegerValue(byObject);
+                if (!argument.value.has_value()) {
+                    error = "sub count by 必须是有限的 int64 整数";
+                    return std::nullopt;
+                }
+            }
         }
     } else {
         argument.value = luaIntegerValue(table["by"]);
         const sol::object byObject = table["by"];
         if (!argument.value.has_value() && byObject.valid() && byObject.get_type() != sol::type::lua_nil) {
+            if (byObject.get_type() == sol::type::number) {
+                error = op + std::string(" count 参数必须是有限的 int64 整数");
+                return std::nullopt;
+            }
             argument.expression = parseStreamCountExpressionObject(byObject, error);
             if (!argument.expression) {
                 return std::nullopt;
@@ -296,11 +315,19 @@ std::shared_ptr<StreamCountExpression> parseBitCountExpressionTable(const sol::t
     return expression;
 }
 
-std::shared_ptr<StreamCountExpression> parseRemainingCountExpressionTable(const sol::table& table)
+std::shared_ptr<StreamCountExpression> parseRemainingCountExpressionTable(const sol::table& table, std::string& error)
 {
+    std::optional<std::int64_t> unit;
+    if (!parseOptionalInteger(table, "unit", unit, "count.remaining.unit", error)) {
+        return nullptr;
+    }
+    if (unit.has_value() && *unit < 0) {
+        error = "remaining.unit 不能为负数";
+        return nullptr;
+    }
     auto expression = std::make_shared<StreamCountExpression>();
     expression->op = StreamCountExpressionOp::Remaining;
-    expression->argument = luaIntegerValue(table["unit"]).value_or(0);
+    expression->argument = unit.value_or(0);
     expression->excludeCrc = luaBoolField(table, "exclude_crc").value_or(true);
     return expression;
 }
@@ -308,7 +335,10 @@ std::shared_ptr<StreamCountExpression> parseRemainingCountExpressionTable(const 
 std::shared_ptr<StreamCountExpression> parseIfFlagCountExpressionTable(const sol::table& table, std::string& error)
 {
     const auto fieldName = luaStringField(table, "field");
-    const auto mask = luaIntegerValue(table["mask"]);
+    std::optional<std::int64_t> mask;
+    if (!parseOptionalInteger(table, "mask", mask, "if_flag.mask", error)) {
+        return nullptr;
+    }
     if (!fieldName.has_value() || !mask.has_value()) {
         error = "if_flag count 表达式需要 field 和 mask";
         return nullptr;
@@ -338,7 +368,11 @@ bool parseCaseCountEntries(const sol::table& casesTable, StreamCountExpression& 
     for (const auto& item : casesTable) {
         const auto key = luaIntegerValue(item.first);
         if (!key.has_value()) {
-            error = "case.cases 的 key 必须是整数";
+            error = "case.cases 的 key 必须是有限的 int64 整数";
+            return false;
+        }
+        if (item.first.get_type() != sol::type::number) {
+            error = "case.cases 的 key 必须是数字整数";
             return false;
         }
         auto caseExpression = parseStreamCountExpressionObject(item.second, error);
@@ -402,7 +436,7 @@ std::shared_ptr<StreamCountExpression> parseStreamCountExpressionTable(const sol
         return parseBitCountExpressionTable(table, error);
     }
     if (*op == "remaining") {
-        return parseRemainingCountExpressionTable(table);
+        return parseRemainingCountExpressionTable(table, error);
     }
     if (*op == "if_flag") {
         return parseIfFlagCountExpressionTable(table, error);
@@ -424,6 +458,10 @@ std::shared_ptr<StreamCountExpression> parseStreamCountExpressionObject(const so
     if (const auto value = luaIntegerValue(object); value.has_value()) {
         return makeConstantCountExpression(*value);
     }
+    if (object.get_type() == sol::type::number) {
+        error = "count 表达式数字必须是有限的 int64 整数";
+        return nullptr;
+    }
     if (object.is<std::string>()) {
         return makeFieldCountExpression(object.as<std::string>());
     }
@@ -433,6 +471,22 @@ std::shared_ptr<StreamCountExpression> parseStreamCountExpressionObject(const so
 
     error = "count 表达式仅支持整数、字段名或 table";
     return nullptr;
+}
+
+bool parseOptionalInteger(const sol::table& table, const char* key, std::optional<std::int64_t>& value,
+                          const std::string& path, std::string& error)
+{
+    const sol::object object = table[key];
+    if (!object.valid() || object.get_type() == sol::type::lua_nil) {
+        value.reset();
+        return true;
+    }
+    value = luaIntegerValue(object);
+    if (!value.has_value()) {
+        error = path + " 必须是有限的整数且位于 int64 范围内";
+        return false;
+    }
+    return true;
 }
 
 bool parseStreamBufferDefinition(const sol::table& schemaTable,
@@ -446,16 +500,26 @@ bool parseStreamBufferDefinition(const sol::table& schemaTable,
             return false;
         }
         const auto bufferTable = bufferObject.as<sol::table>();
-        if (const auto capacity = luaIntegerValue(bufferTable["capacity"]); capacity.has_value()) {
-            if (*capacity <= 0) {
+        std::optional<std::int64_t> capacity;
+        if (!parseOptionalInteger(bufferTable, "capacity", capacity, "stream.buffer.capacity", error)) {
+            return false;
+        }
+        if (capacity.has_value()) {
+            if (*capacity <= 0 || static_cast<std::uint64_t>(*capacity) >
+                                     static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
                 error = "stream.buffer.capacity 必须大于 0";
                 return false;
             }
             bufferDefinition.capacity = static_cast<std::size_t>(*capacity);
             bufferDefinition.maxCapacity = (std::max)(bufferDefinition.maxCapacity, bufferDefinition.capacity);
         }
-        if (const auto maxCapacity = luaIntegerValue(bufferTable["max_capacity"]); maxCapacity.has_value()) {
-            if (*maxCapacity <= 0) {
+        std::optional<std::int64_t> maxCapacity;
+        if (!parseOptionalInteger(bufferTable, "max_capacity", maxCapacity, "stream.buffer.max_capacity", error)) {
+            return false;
+        }
+        if (maxCapacity.has_value()) {
+            if (*maxCapacity <= 0 || static_cast<std::uint64_t>(*maxCapacity) >
+                                         static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
                 error = "stream.buffer.max_capacity 必须大于 0";
                 return false;
             }
@@ -557,9 +621,13 @@ bool parseStreamFrameHeader(const sol::table& frameTable, StreamFrameDefinition&
 
 bool parseStreamLengthOffset(const sol::table& lenTable, StreamLengthDefinition& lenDefinition, std::string& error)
 {
-    const auto offset = luaIntegerValue(lenTable["offset"]);
-    if (!offset.has_value() || *offset <= 0) {
-        error = "frame.len.offset 必须是从 1 开始的正整数";
+    std::optional<std::int64_t> offset;
+    if (!parseOptionalInteger(lenTable, "offset", offset, "frame.len.offset", error)) {
+        return false;
+    }
+    if (!offset.has_value() || *offset <= 0 || static_cast<std::uint64_t>(*offset - 1) >
+                                                     static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
+        error = "frame.len.offset 必须是从 1 开始且可表示的正整数";
         return false;
     }
     lenDefinition.offset = static_cast<std::size_t>(*offset - 1);
@@ -591,8 +659,13 @@ bool parseStreamLengthMode(const sol::table& lenTable, StreamLengthDefinition& l
         return false;
     }
     lenDefinition.means = *means;
-    if (const auto extra = luaIntegerValue(lenTable["extra"]); extra.has_value()) {
-        if (*extra < 0) {
+    std::optional<std::int64_t> extra;
+    if (!parseOptionalInteger(lenTable, "extra", extra, "frame.len.extra", error)) {
+        return false;
+    }
+    if (extra.has_value()) {
+        if (*extra < 0 || static_cast<std::uint64_t>(*extra) >
+                              static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
             error = "frame.len.extra 不能为负数";
             return false;
         }
@@ -617,7 +690,10 @@ bool parseStreamFrameLengthDefinition(const sol::object& lenObject,
 
 bool parseStreamFrameSizeMode(const sol::table& frameTable, StreamFrameDefinition& frame, std::string& error)
 {
-    const auto fixedSize = luaIntegerValue(frameTable["size"]);
+    std::optional<std::int64_t> fixedSize;
+    if (!parseOptionalInteger(frameTable, "size", fixedSize, "frame.size", error)) {
+        return false;
+    }
     const sol::object lenObject = frameTable["len"];
     const bool hasLen = lenObject.valid() && lenObject.get_type() != sol::type::lua_nil;
     const bool runtimeProfile = luaBoolField(frameTable, "runtime_profile").value_or(false);
@@ -629,8 +705,9 @@ bool parseStreamFrameSizeMode(const sol::table& frameTable, StreamFrameDefinitio
     }
     frame.runtimeProfile = runtimeProfile;
     if (fixedSize.has_value()) {
-        if (*fixedSize <= 0) {
-            error = "frame.size 必须大于 0";
+        if (*fixedSize <= 0 || static_cast<std::uint64_t>(*fixedSize) >
+                                   static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
+            error = "frame.size 必须是平台可表示的正整数";
             return false;
         }
         frame.size = static_cast<std::size_t>(*fixedSize);
@@ -696,6 +773,11 @@ bool parseStreamFieldCountInteger(const std::int64_t count,
         error = countPath + " 不能为负数";
         return false;
     }
+    if (static_cast<std::uint64_t>(count) >
+        static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
+        error = countPath + " 超出平台可表示范围";
+        return false;
+    }
     field.count.fixed = static_cast<std::size_t>(count);
     return true;
 }
@@ -744,6 +826,10 @@ bool parseStreamFieldCount(const sol::object& countObject,
     }
 
     const auto countPath = streamFieldCountPath(frameIndex, fieldIndex);
+    if (countObject.get_type() == sol::type::number && !luaIntegerValue(countObject).has_value()) {
+        error = countPath + " 必须是有限且位于 int64 范围内的整数";
+        return false;
+    }
     if (const auto count = luaIntegerValue(countObject); count.has_value()) {
         return parseStreamFieldCountInteger(*count, countPath, field, error);
     }
@@ -787,12 +873,16 @@ bool parseStreamFieldType(const sol::table& fieldTable, StreamFieldDefinition& f
 
 bool parseStreamFieldOffset(const sol::table& fieldTable, StreamFieldDefinition& field, std::string& error)
 {
-    const auto offset = luaIntegerValue(fieldTable["offset"]);
+    std::optional<std::int64_t> offset;
+    if (!parseOptionalInteger(fieldTable, "offset", offset, "field.offset", error)) {
+        return false;
+    }
     if (!offset.has_value()) {
         return true;
     }
-    if (*offset <= 0) {
-        error = "field.offset 必须是从 1 开始的正整数";
+    if (*offset <= 0 || static_cast<std::uint64_t>(*offset - 1) >
+                            static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
+        error = "field.offset 必须是从 1 开始且可表示的正整数";
         return false;
     }
     field.offset = static_cast<std::size_t>(*offset - 1);
@@ -828,6 +918,7 @@ std::optional<StreamFieldDefinition> parseStreamFieldDefinition(const sol::objec
 bool parseStreamFrameFields(const sol::table& frameTable,
                             const std::size_t frameIndex,
                             StreamFrameDefinition& frame,
+                            bool includeFieldAliases,
                             std::string& error)
 {
     if (const sol::object fieldsObject = frameTable["fields"];
@@ -838,9 +929,20 @@ bool parseStreamFrameFields(const sol::table& frameTable,
         }
         const auto fieldsTable = fieldsObject.as<sol::table>();
         frame.fields.reserve(fieldsTable.size());
+        std::unordered_set<std::string> fieldNames;
+        static const std::unordered_set<std::string> reservedCompatNames{
+            "name", "fields", "raw", "crc_ok", "channel_map"};
         for (std::size_t fieldIndex = 1; fieldIndex <= fieldsTable.size(); ++fieldIndex) {
             auto field = parseStreamFieldDefinition(fieldsTable[fieldIndex], frameIndex, fieldIndex - 1, error);
             if (!field.has_value()) {
+                return false;
+            }
+            if (!fieldNames.insert(field->name).second) {
+                error = "frame.fields 名称不能重复: " + field->name;
+                return false;
+            }
+            if (includeFieldAliases && reservedCompatNames.contains(field->name)) {
+                error = "compat 模式 frame.fields 名称与元数据保留字段冲突: " + field->name;
                 return false;
             }
             frame.fields.push_back(std::move(*field));
@@ -869,17 +971,6 @@ bool registerStreamFrameCallback(const sol::table& frameTable,
         return false;
     }
     return true;
-}
-
-std::optional<std::uint32_t> streamSchemaU32Value(const sol::object& object, const char* fieldPath, std::string& error)
-{
-    const auto value = luaIntegerValue(object);
-    if (!value.has_value() || *value < 0 ||
-        *value > static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max())) {
-        error = std::string(fieldPath) + " 必须是 0..4294967295 范围内的整数";
-        return std::nullopt;
-    }
-    return static_cast<std::uint32_t>(*value);
 }
 
 std::string streamTargetControlId(const sol::table& targetTable)
@@ -938,12 +1029,18 @@ bool parseStreamValueTargets(const sol::table& frameTable,
             return false;
         }
 
-        const sol::object startIdObject = targetTable["start_id"];
-        if (startIdObject.valid() && startIdObject.get_type() != sol::type::lua_nil) {
-            target.startId = streamSchemaU32Value(startIdObject, "frame.value_targets.controls[].start_id", error);
-            if (!target.startId.has_value()) {
+        std::optional<std::int64_t> startIdValue;
+        if (!parseOptionalInteger(targetTable, "start_id", startIdValue,
+                                  "frame.value_targets.controls[].start_id", error)) {
+            return false;
+        }
+        if (startIdValue.has_value()) {
+            if (*startIdValue < 0 ||
+                *startIdValue > static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max())) {
+                error = "frame.value_targets.controls[].start_id 必须是 0..4294967295 范围内的整数";
                 return false;
             }
+            target.startId = static_cast<std::uint32_t>(*startIdValue);
         }
         if (!target.startId.has_value() && !target.startField.has_value()) {
             error = "frame.value_targets.controls[] 必须提供 start_field 或 start_id";
@@ -985,7 +1082,7 @@ std::optional<StreamFrameDefinition> parseStreamFrameDefinition(
 
     if (!parseStreamFrameHeader(frameTable, frame, error) || !parseStreamFrameSizeMode(frameTable, frame, error) ||
         !parseStreamFrameCrcDefinition(frameTable, frame, error) ||
-        !parseStreamFrameFields(frameTable, frameIndex, frame, error) ||
+        !parseStreamFrameFields(frameTable, frameIndex, frame, loaded.includeFieldAliases, error) ||
         !parseStreamValueTargets(frameTable, frame, loaded, error) ||
         !registerStreamFrameCallback(frameTable, frame, loaded, callbacks, error)) {
         return std::nullopt;

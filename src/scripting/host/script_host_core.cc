@@ -3045,13 +3045,31 @@ std::optional<std::int64_t> luaIntegerValue(const sol::object& object)
     if (!object.valid() || object.get_type() == sol::type::lua_nil) {
         return std::nullopt;
     }
-    if (object.is<int>()) {
-        return object.as<int>();
+    if (object.get_type() != sol::type::number) {
+        return std::nullopt;
     }
-    if (object.is<double>()) {
-        return static_cast<std::int64_t>(object.as<double>());
+    auto* state = object.lua_state();
+    const int top = lua_gettop(state);
+    sol::stack::push(state, object);
+    if (lua_isinteger(state, -1) != 0) {
+        const auto value = lua_tointeger(state, -1);
+        lua_settop(state, top);
+        if constexpr (sizeof(lua_Integer) > sizeof(std::int64_t)) {
+            if (value < static_cast<lua_Integer>((std::numeric_limits<std::int64_t>::min)()) ||
+                value > static_cast<lua_Integer>((std::numeric_limits<std::int64_t>::max)())) {
+                return std::nullopt;
+            }
+        }
+        return static_cast<std::int64_t>(value);
     }
-    return std::nullopt;
+    const double value = lua_tonumber(state, -1);
+    lua_settop(state, top);
+    // double 中 INT64_MAX 会舍入到 2^63；用半开区间避免越界浮点转整数。
+    constexpr double int64Limit = 9223372036854775808.0;
+    if (!std::isfinite(value) || std::floor(value) != value || value < -int64Limit || value >= int64Limit) {
+        return std::nullopt;
+    }
+    return static_cast<std::int64_t>(value);
 }
 
 PlotChannelDescriptor makePlotChannelDescriptor(const sol::table& channelTable, std::size_t index)
@@ -3545,8 +3563,9 @@ bool ScriptHost::setStreamRuntimeProfile(const sol::object& profileObject, std::
         error = "stream profile.frame 不能为空";
         return false;
     }
-    if (!lengthValue.has_value() || *lengthValue <= 0) {
-        error = "stream profile.length 必须是正整数";
+    if (!lengthValue.has_value() || *lengthValue <= 0 || static_cast<std::uint64_t>(*lengthValue) >
+                                                           static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
+        error = "stream profile.length 必须是平台可表示的正整数";
         return false;
     }
 
@@ -3562,11 +3581,17 @@ bool ScriptHost::setStreamRuntimeProfile(const sol::object& profileObject, std::
         profile.channelMap.reserve(channelMapTable.size());
         for (std::size_t index = 1; index <= channelMapTable.size(); ++index) {
             const auto value = luaIntegerValue(channelMapTable[index]);
-            if (!value.has_value() || *value <= 0) {
-                error = "stream profile.channel_map 必须是从 1 开始的正整数数组";
+            if (!value.has_value() || *value <= 0 || static_cast<std::uint64_t>(*value) >
+                                                           static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
+                error = "stream profile.channel_map 必须是平台可表示的正整数数组";
                 return false;
             }
-            profile.channelMap.push_back(static_cast<std::size_t>(*value - 1));
+            const auto target = static_cast<std::size_t>(*value - 1);
+            if (target == (std::numeric_limits<std::size_t>::max)()) {
+                error = "stream profile.channel_map 索引超出平台范围";
+                return false;
+            }
+            profile.channelMap.push_back(target);
         }
     }
 

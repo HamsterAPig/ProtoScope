@@ -7,6 +7,7 @@
 #include <bit>
 #include <limits>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace protoscope::scripting {
 
@@ -210,6 +211,10 @@ namespace {
         }
         if (*argument == 0) {
             error = "div.by 不能为 0";
+            return std::nullopt;
+        }
+        if (*value == (std::numeric_limits<std::int64_t>::min)() && *argument == -1) {
+            error = "div count 表达式溢出";
             return std::nullopt;
         }
         return *value / *argument;
@@ -609,16 +614,29 @@ bool FrameStreamParser::setRuntimeProfile(const std::string& frameName,
         return false;
     }
     if (!profile.channelMap.empty()) {
-        // 以实际出现的最大物理通道号确定去重数组大小，
-        // 避免误判如 {1, 2}（物理通道 2/3）为越界。
+        // 校验输出回 Lua 时的一基通道索引仍可由 int64 表示；
+        // 用稀疏集合去重，避免按最大通道号分配超大连续数组。
         const auto maxTarget = *std::max_element(profile.channelMap.begin(), profile.channelMap.end());
-        std::vector<bool> used(maxTarget + 1, false);
+        if (maxTarget == (std::numeric_limits<std::size_t>::max)()) {
+            error = "runtime profile channel_map 最大目标超出索引范围";
+            return false;
+        }
+        if constexpr (sizeof(std::size_t) >= sizeof(std::int64_t)) {
+            if (maxTarget > static_cast<std::size_t>((std::numeric_limits<std::int64_t>::max)() - 1)) {
+                error = "runtime profile channel_map 最大目标超出 Lua 整数范围";
+                return false;
+            }
+        } else if (maxTarget >= static_cast<std::size_t>((std::numeric_limits<std::int64_t>::max)())) {
+            error = "runtime profile channel_map 最大目标超出 Lua 整数范围";
+            return false;
+        }
+        std::unordered_set<std::size_t> usedTargets;
+        usedTargets.reserve(profile.channelMap.size());
         for (const auto target : profile.channelMap) {
-            if (used[target]) {
+            if (!usedTargets.insert(target).second) {
                 error = "runtime profile channel_map 存在重复目标";
                 return false;
             }
-            used[target] = true;
         }
     }
     runtimeProfiles_.insert_or_assign(frameName, std::move(profile));

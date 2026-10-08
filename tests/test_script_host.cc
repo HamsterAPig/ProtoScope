@@ -1956,6 +1956,26 @@ function on_timer(ctx, name) proto.emit("timer", name) end
     require(host.drainEvents().empty(), "失败候选顶层定时器不得泄漏");
 }
 
+void test_lua_contract_schema_rejects_unrepresentable_runtime_profile_channel_map()
+{
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("runtime_profile_stream").generic_string()),
+            "runtime_profile_stream 协议应加载");
+
+    sol::state lua;
+    lua.open_libraries(sol::lib::base, sol::lib::table);
+    auto profile = lua.create_table();
+    profile["frame"] = "dynamic_profile";
+    profile["length"] = 8;
+    auto map = lua.create_table();
+    map[1] = 9223372036854775808.0;
+    profile["channel_map"] = map;
+
+    std::string error;
+    require(!host.setStreamRuntimeProfile(sol::make_object(lua, profile), error),
+            "导致目标索引超出Lua int64可逆表示范围的最大物理通道必须拒绝");
+}
+
 void test_script_stream_runtime_profile_set_and_clear()
 {
     protoscope::scripting::ScriptHost host;
@@ -2275,6 +2295,281 @@ void test_script_stream_schema_rejects_count_function()
     require(host.lastError().find("不再支持 function") != std::string::npos, "错误应明确旧 function 写法已废弃");
     require(host.lastError().find("count = { op = \"div\", field = \"byte_count\", by = 2 }") != std::string::npos,
             "错误应给出 count 表达式迁移示例");
+}
+
+void test_lua_contract_schema_rejects_duplicate_fields_and_reserved_compat_aliases()
+{
+    std::vector<std::string> failures;
+    const auto rejectsSchema = [&failures](const std::string& protocolName, const std::string& schema,
+                                           const char* behavior) {
+        const ScopedTempPath protocolDir(makeUniqueTempDir(protocolName));
+        writeMainLua(protocolDir.path(), schema.c_str());
+        protoscope::scripting::ScriptHost host;
+        if (host.loadProtocolDirectory(protocolDir.path().generic_string())) {
+            failures.emplace_back(behavior);
+        }
+    };
+
+    rejectsSchema(
+        "protoscope-schema-duplicate-fields",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 3, fields = {"
+        "{name = 'value', type = 'u8', offset = 2}, {name = 'value', type = 'u8', offset = 3}"
+        "}, on_frame = function() end }} } end\n",
+        "重复字段未在加载时拒绝");
+
+    for (const std::string& reservedName : {"name", "fields", "raw", "crc_ok", "channel_map"}) {
+        const auto schema =
+            "function controls() return {} end\n"
+            "function stream() return { field_output = 'compat', frames = {{ name = 'f', header = {0xAA}, size = 2, "
+            "fields = {{name = '" +
+            reservedName + "', type = 'u8', offset = 2}}, on_frame = function() end }} } end\n";
+        rejectsSchema("protoscope-schema-compat-" + reservedName,
+                      schema,
+                      ("compat 字段别名 " + reservedName + " 未被拒绝").c_str());
+    }
+
+    if (!failures.empty()) {
+        std::ostringstream message;
+        message << "schema 拒绝回归失败（" << failures.size() << " 项）：";
+        for (const auto& failure : failures) {
+            message << " " << failure << ";";
+        }
+        const auto failureMessage = message.str();
+        require(false, failureMessage.c_str());
+    }
+}
+
+void test_lua_contract_schema_default_compat_preserves_metadata_accessors()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-schema-compat-metadata"));
+    writeMainLua(protocolDir.path(),
+                 "function controls() return {} end\n"
+                 "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 2, "
+                 "fields = {{name = 'value', type = 'u8', offset = 2}}, on_frame = function(ctx, frame) "
+                 "local ok = frame.name == 'f' and frame.fields.value == 42 and frame.value == 42 "
+                 "and type(frame.raw) == 'table' and frame.raw[1] == 170 and frame.crc_ok == true "
+                 "and type(frame.channel_map) == 'nil'; if not ok then error('compat metadata overwritten') end "
+                 "proto.emit('lua_contract_schema_compat_metadata', 'ok') end }} } end\n");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "普通 compat 字段 schema 应加载");
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), {0xAA, 0x2A}});
+    const auto events = host.drainEvents();
+    require(events.size() == 1 && events.front().name == "lua_contract_schema_compat_metadata" &&
+                events.front().payload == "ok",
+            "compat 正常字段不能覆盖 name/fields/raw/crc_ok/channel_map 元数据访问器");
+}
+
+void test_lua_contract_schema_accepts_legacy_default_compat_aliases()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-schema-default-compat"));
+    writeMainLua(protocolDir.path(),
+                 "function controls() return {} end\n"
+                 "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 2, "
+                 "fields = {{name = 'value', type = 'u8', offset = 2}}, on_frame = function(ctx, frame) "
+                 "proto.emit('lua_contract_schema_default_compat', tostring(frame.value) .. ':' .. "
+                 "tostring(frame.fields.value) .. ':' .. tostring(frame.name) .. ':' .. tostring(frame.raw[1]) .. ':' "
+                 ".. tostring(frame.crc_ok)) end }} } end\n");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "省略 field_output 的合法旧 compat schema 应加载");
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), {0xAA, 0x2A}});
+    bool found = false;
+    for (const auto& event : host.drainEvents()) {
+        if (event.name == "lua_contract_schema_default_compat" && event.payload.find("42:42:f:170:true") != std::string::npos) {
+            found = true;
+        }
+    }
+    require(found, "默认 compat 应继续提供字段别名及不可覆盖的帧元数据");
+}
+
+void test_lua_contract_schema_fields_only_keeps_reserved_business_name_isolated()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-schema-fields-only-metadata"));
+    writeMainLua(protocolDir.path(),
+                 "function controls() return {} end\n"
+                 "function stream() return { field_output = 'fields_only', frames = {{ name = 'f', header = {0xAA}, "
+                 "size = 2, fields = {{name = 'name', type = 'u8', offset = 2}}, on_frame = function(ctx, frame) "
+                 "proto.emit('lua_contract_schema_fields_only', tostring(frame.name) .. ':' .. "
+                 "tostring(frame.fields.name) .. ':' .. tostring(frame.name == 'f')) end }} } end\n");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()),
+            "fields_only 应允许隔离后的业务字段使用元数据名称");
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), {0xAA, 0x2A}});
+    bool found = false;
+    for (const auto& event : host.drainEvents()) {
+        if (event.name == "lua_contract_schema_fields_only" && event.payload.find("f:42:true") != std::string::npos) {
+            found = true;
+        }
+    }
+    require(found, "fields_only 业务字段应保留在 frame.fields 且不覆盖 frame.name");
+}
+
+void test_lua_contract_schema_rejects_fractional_integer_inputs()
+{
+    std::vector<std::string> failures;
+    const auto rejectsSchema = [&failures](const std::string& protocolName, const std::string& schema,
+                                           const char* behavior) {
+        const ScopedTempPath protocolDir(makeUniqueTempDir(protocolName));
+        writeMainLua(protocolDir.path(), schema.c_str());
+        protoscope::scripting::ScriptHost host;
+        if (host.loadProtocolDirectory(protocolDir.path().generic_string())) {
+            failures.emplace_back(behavior);
+        }
+    };
+    const auto verifyAllRejected = [&failures]() {
+        if (failures.empty()) {
+            return;
+        }
+        std::ostringstream message;
+        message << "显式非法整数 schema 值未被拒绝（" << failures.size() << " 项）：";
+        for (const auto& failure : failures) {
+            message << " " << failure << ";";
+        }
+        require(false, message.str().c_str());
+    };
+
+    rejectsSchema(
+        "protoscope-schema-fractional-count",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 4, fields = "
+        "{{name = 'values', type = 'u8', offset = 2, count = 1.5}}, on_frame = function() end }} } end\n",
+        "整数 count 参数显式传入非整数时必须拒绝，不能截断成 1");
+    rejectsSchema(
+        "protoscope-schema-nan-count",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 4, fields = "
+        "{{name = 'values', type = 'u8', offset = 2, count = 0/0}}, on_frame = function() end }} } end\n",
+        "NaN count 必须作为非法数值拒绝，不能被误判为字段名");
+    rejectsSchema(
+        "protoscope-schema-infinite-count",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 4, fields = "
+        "{{name = 'values', type = 'u8', offset = 2, count = math.huge}}, on_frame = function() end }} } end\n",
+        "无穷 count 必须作为非法数值拒绝，不能被误判为字段名");
+    rejectsSchema(
+        "protoscope-schema-out-of-range-count",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 4, fields = "
+        "{{name = 'values', type = 'u8', offset = 2, count = 9223372036854775808.0}}, "
+        "on_frame = function() end }} } end\n",
+        "int64 范围外 count 必须作为非法数值拒绝，不能被误判为字段名");
+    rejectsSchema(
+        "protoscope-schema-fractional-offset",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 2, fields = "
+        "{{name = 'value', type = 'u8', offset = 1.5}}, on_frame = function() end }} } end\n",
+        "整数字段 offset 显式传入非整数时必须拒绝，不能截断");
+    rejectsSchema(
+        "protoscope-schema-fractional-size",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 2.5, on_frame = function() end }} } end\n",
+        "帧 size 显式传入非整数时必须拒绝，不能截断");
+    rejectsSchema(
+        "protoscope-schema-fractional-capacity",
+        "function controls() return {} end\n"
+        "function stream() return { buffer = {capacity = 2.5}, frames = {{ name = 'f', header = {0xAA}, size = 2, "
+        "on_frame = function() end }} } end\n",
+        "buffer.capacity 显式传入非整数时必须拒绝，不能静默使用缺省值");
+    rejectsSchema(
+        "protoscope-schema-fractional-max-capacity",
+        "function controls() return {} end\n"
+        "function stream() return { buffer = {max_capacity = 8.5}, frames = {{ name = 'f', header = {0xAA}, "
+        "size = 2, on_frame = function() end }} } end\n",
+        "buffer.max_capacity 显式传入非整数时必须拒绝，不能静默使用缺省值");
+    rejectsSchema(
+        "protoscope-schema-fractional-length-offset",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, len = {offset = 1.5, type = 'u8'}, "
+        "on_frame = function() end }} } end\n",
+        "frame.len.offset 显式传入非整数时必须拒绝，不能截断");
+    rejectsSchema(
+        "protoscope-schema-fractional-length-extra",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, len = {offset = 1, type = 'u8', "
+        "extra = 1.5}, on_frame = function() end }} } end\n",
+        "frame.len.extra 显式传入非整数时必须拒绝，不能截断");
+    rejectsSchema(
+        "protoscope-schema-fractional-count-expression-operand",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 4, fields = "
+        "{{name = 'values', type = 'u8', offset = 2, count = {op = 'div', field = 'byte_count', by = 1.5}}}, "
+        "on_frame = function() end }} } end\n",
+        "count 表达式除数显式传入非整数时必须拒绝，不能截断");
+    rejectsSchema(
+        "protoscope-schema-nan-size",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 0/0, "
+        "on_frame = function() end }} } end\n",
+        "NaN size 必须安全拒绝");
+    rejectsSchema(
+        "protoscope-schema-infinite-size",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = math.huge, "
+        "on_frame = function() end }} } end\n",
+        "无穷 size 必须安全拒绝");
+    rejectsSchema(
+        "protoscope-schema-out-of-range-size",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 9223372036854775808.0, "
+        "on_frame = function() end }} } end\n",
+        "int64 范围外 size 必须安全拒绝");
+    rejectsSchema(
+        "protoscope-schema-nan-buffer-capacity",
+        "function controls() return {} end\n"
+        "function stream() return { buffer = {capacity = 0/0}, frames = {{ name = 'f', header = {0xAA}, size = 2, "
+        "on_frame = function() end }} } end\n",
+        "NaN capacity 必须安全拒绝");
+    rejectsSchema(
+        "protoscope-schema-fractional-count-expression-constant",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 4, fields = "
+        "{{name = 'values', type = 'u8', offset = 2, count = {op = 'const', value = 1.5}}}, "
+        "on_frame = function() end }} } end\n",
+        "count const 的非整数 value 必须拒绝");
+    rejectsSchema(
+        "protoscope-schema-fractional-if-flag-mask",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 4, fields = "
+        "{{name = 'values', type = 'u8', offset = 2, count = {op = 'if_flag', field = 'flags', mask = 1.5, "
+        "then = 1, else = 0}}}, on_frame = function() end }} } end\n",
+        "if_flag.mask 显式非整数必须拒绝");
+    rejectsSchema(
+        "protoscope-schema-fractional-case-key",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 4, fields = "
+        "{{name = 'values', type = 'u8', offset = 2, count = {op = 'case', field = 'kind', "
+        "cases = {[1.5] = 1}, default = 0}}}, on_frame = function() end }} } end\n",
+        "case.cases 的非整数数字 key 必须拒绝");
+    rejectsSchema(
+        "protoscope-schema-invalid-case-key-type",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 4, fields = "
+        "{{name = 'values', type = 'u8', offset = 2, count = {op = 'case', field = 'kind', "
+        "cases = {['1'] = 1}, default = 0}}}, on_frame = function() end }} } end\n",
+        "case.cases 的非数字 key 必须拒绝");
+    rejectsSchema(
+        "protoscope-schema-invalid-value-target-start-id",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 2, value_targets = "
+        "{controls = {{id = 'regs', start_id = 1.5, values_field = 'value'}}}, on_frame = function() end }} } end\n",
+        "value_targets.start_id 显式非整数必须拒绝");
+    rejectsSchema(
+        "protoscope-schema-invalid-value-target-start-id-type",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 2, value_targets = "
+        "{controls = {{id = 'regs', start_id = '1', values_field = 'value'}}}, on_frame = function() end }} } end\n",
+        "value_targets.start_id 显式非整数类型必须拒绝");
+    rejectsSchema(
+        "protoscope-schema-invalid-sub-value",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 4, fields = "
+        "{{name = 'values', type = 'u8', offset = 2, count = {op = 'sub', field = 'n', value = 'bad', by = 1}}}, "
+        "on_frame = function() end }} } end\n",
+        "sub.value 显式非法类型必须拒绝，不能回退到 by");
+    verifyAllRejected();
 }
 
 void test_script_stream_schema_accepts_count_expression_table()
