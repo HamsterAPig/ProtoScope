@@ -333,6 +333,12 @@ void verifyControls(const std::filesystem::path& directory, bool baseline)
                 const auto i=((height-1-y)*width+x)*3;
                 const plot::OverviewColor bg{pixels[i]/255.,pixels[i+1]/255.,pixels[i+2]/255.,1};
                 check(plot::overviewContrast(ui::cursorOverviewColor(border),bg)>=3,"control border/background contrast");
+                if (theme == config::GuiTheme::ProfessionalDark) {
+                    check(plot::overviewLuminance(ui::cursorOverviewColor(border)) <
+                          plot::overviewLuminance(ui::cursorOverviewColor(t.textMuted)) * .75,
+                          "professional dark border regressed to bright text color");
+                    check(std::abs(border.x-border.z)<.04F,"professional dark control border is not neutral grey");
+                }
             }
             std::cout<<name<<" per-control pixels verified\n";
         }
