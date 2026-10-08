@@ -3525,6 +3525,11 @@ std::vector<StreamFrameDefinition> ScriptHost::streamFrameDefinitions() const
 
 bool ScriptHost::setStreamRuntimeProfile(const sol::object& profileObject, std::string& error)
 {
+    // 候选顶层及 stream/ui 声明共用现有加载标记；提交前不能访问仍存活的旧 parser。
+    if (!scriptLoaded_) {
+        error = "脚本加载期间不能设置 stream profile，请在成功加载后的运行期回调中设置";
+        return false;
+    }
     if (!runtime_ || !runtime_->stream) {
         error = "当前协议未启用 stream()";
         return false;
@@ -3580,6 +3585,11 @@ bool ScriptHost::setStreamRuntimeProfile(const sol::object& profileObject, std::
 
 bool ScriptHost::clearStreamRuntimeProfile(const sol::object& frameNameObject, std::string& error)
 {
+    // 不清空 profile 事件队列：其中可能还有旧运行时尚未消费的有效事件。
+    if (!scriptLoaded_) {
+        error = "脚本加载期间不能清除 stream profile，请在成功加载后的运行期回调中清除";
+        return false;
+    }
     if (!runtime_ || !runtime_->stream) {
         error = "当前协议未启用 stream()";
         return false;

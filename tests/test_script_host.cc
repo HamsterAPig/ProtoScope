@@ -1700,6 +1700,167 @@ void test_script_stream_schema_reports_overflow_and_crc_error()
     require(foundCrc, "CRC 校验失败时应回调 stream.on_error");
 }
 
+namespace {
+
+void requireLuaContractReloadFailure(const char* operation, bool declarationFailure)
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-reload-profile"));
+    const auto oldScript = readTextFile(fixtureProtocolDir("runtime_profile_stream") / "main.lua") + R"lua(
+function ui()
+    return {{id = "safe", title = "Safe", controls = {
+        {type = "input_text", id = "old_control", label = "旧控件", default = "old"}
+    }}}
+end
+function on_control(ctx, id, value) proto.emit("old_callback", id) end
+function on_open(ctx) proto.emit("old_pending", "preserved") end
+)lua";
+    writeMainLua(protocolDir.path(), oldScript.c_str());
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "旧 profile 协议应加载");
+    const auto generation = host.runtimeGeneration();
+    require(host.setControlValue("old_control", std::string("kept")), "旧控件值应可设置");
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{sampleCtx()});
+    // 保留旧 profile 事件待消费：失败候选不能追加事件，也不能通过清空队列掩盖泄漏。
+    sol::state lua;
+    lua.open_libraries(sol::lib::base, sol::lib::table);
+    auto profile = lua.create_table();
+    profile["frame"] = "dynamic_profile";
+    profile["length"] = 8;
+    auto map = lua.create_table();
+    map[1] = 2;
+    map[2] = 1;
+    profile["channel_map"] = map;
+    std::string error;
+    require(host.setStreamRuntimeProfile(sol::make_object(lua, profile), error), "旧 profile 应设置");
+    // 留下半帧，证明失败重载不清理旧 parser 当前缓冲。
+    std::vector<std::uint8_t> raw{0xFF, 0x26, 0, 17, 0, 34};
+    const auto crc = protoscope::protocol_utils::crc16Modbus(raw);
+    raw.push_back(static_cast<std::uint8_t>(crc >> 8U));
+    raw.push_back(static_cast<std::uint8_t>(crc & 0xFFU));
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{
+        sampleCtx(), std::vector<std::uint8_t>(raw.begin(), raw.begin() + 3)});
+    std::string candidate;
+    if (declarationFailure) {
+        candidate = "function stream()\n" + std::string(operation) + "\nerror('candidate declaration failed')\nend\n";
+    } else {
+        candidate = std::string(operation) + "\nerror('candidate top level failed')\n";
+    }
+    writeMainLua(protocolDir.path(), candidate.c_str());
+    require(!host.loadProtocolDirectory(protocolDir.path().generic_string()), "候选脚本应确定性加载失败");
+    require(host.runtimeGeneration() == generation, "失败候选不得更改旧代次");
+    const auto controls = host.controlStatesSnapshot();
+    require(controls.size() == 1 && controls[0].descriptor.id == "old_control" &&
+                std::get<std::string>(controls[0].value) == "kept", "旧控件及值应保留");
+    const auto profileEvents = host.drainStreamRuntimeProfileEvents();
+    require(profileEvents.size() == 1 && !profileEvents[0].cleared &&
+                profileEvents[0].frameName == "dynamic_profile" && profileEvents[0].length == 8 &&
+                profileEvents[0].channelMap == std::vector<std::size_t>{1, 0},
+            "旧待消费 profile 事件应完整保留且候选不能泄漏任何事件");
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{
+        sampleCtx(), std::vector<std::uint8_t>(raw.begin() + 3, raw.end())});
+    host.onControl(sampleCtx(), "old_control", std::string("next"), generation);
+    const auto events = host.drainEvents();
+    bool pending = false;
+    bool parsed = false;
+    bool callback = false;
+    for (const auto& event : events) {
+        pending = pending || (event.name == "old_pending" && event.payload == "preserved");
+        parsed = parsed || (event.name == "runtime_profile_frame" && event.payload == "dynamic_profile|map=2");
+        callback = callback || event.name == "old_callback";
+    }
+    require(pending && parsed && callback, "失败重载后旧宿主事件队列、半帧/profile 及回调应继续工作");
+}
+
+} // namespace
+
+void test_lua_contract_reload_failed_candidate_profiles()
+{
+    for (const bool declaration : {false, true}) {
+        requireLuaContractReloadFailure(
+            "proto.stream.set_profile({frame='dynamic_profile', length=6, channel_map={1}})", declaration);
+        requireLuaContractReloadFailure("proto.stream.clear_profile('dynamic_profile')", declaration);
+        requireLuaContractReloadFailure("proto.stream.clear_profile()", declaration);
+    }
+}
+
+void test_lua_contract_reload_loading_api_rejected_and_runtime_restored()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-reload-api"));
+    const auto schema = readTextFile(fixtureProtocolDir("runtime_profile_stream") / "main.lua");
+    protoscope::scripting::ScriptHost host;
+    writeMainLua(protocolDir.path(), schema.c_str());
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "基线协议应加载");
+    const auto generation = host.runtimeGeneration();
+    const auto candidate = R"lua(
+local function reject_loading_profile()
+    local ok, err = proto.stream.set_profile({frame="dynamic_profile", length=8})
+    assert(ok == false and type(err) == "string" and #err > 0, "loading set_profile must return false,error")
+    local cleared, clear_error = proto.stream.clear_profile()
+    assert(cleared == false and type(clear_error) == "string" and #clear_error > 0,
+           "loading clear_profile must return false,error")
+end
+reject_loading_profile()
+)lua" + schema + R"lua(
+local original_stream = stream
+function stream()
+    reject_loading_profile()
+    return original_stream()
+end
+function ui()
+    reject_loading_profile()
+    return {}
+end
+function on_open(ctx)
+    local ok, err = proto.stream.set_profile({frame="dynamic_profile", length=8})
+    assert(ok, err)
+    proto.emit("new_runtime", "ready")
+end
+)lua";
+    writeMainLua(protocolDir.path(), candidate.c_str());
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()),
+            "顶层/stream/ui 加载期 profile API 应拒绝但不妨碍候选成功提交");
+    require(host.runtimeGeneration() == generation + 1, "成功重载仅推进一个代次");
+    require(host.drainStreamRuntimeProfileEvents().empty(), "成功提交前也不得产生候选 profile 事件");
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{sampleCtx()});
+    const auto profiles = host.drainStreamRuntimeProfileEvents();
+    require(profiles.size() == 1 && !profiles[0].cleared && profiles[0].length == 8,
+            "成功提交后运行期 profile API 应恢复正常");
+    bool ready = false;
+    for (const auto& event : host.drainEvents()) {
+        ready = ready || (event.name == "new_runtime" && event.payload == "ready");
+    }
+    require(ready, "成功重载应使用新回调而非旧回调");
+}
+
+void test_lua_contract_reload_top_level_snapshot_apis_remain_available()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-reload-snapshot-apis"));
+    const char* script = R"lua(
+proto.plot.setup({channels = {{label = "candidate"}}})
+proto.status.set("candidate status")
+proto.set_timer("candidate timer", 0)
+function on_timer(ctx, name) proto.emit("timer", name) end
+)lua";
+    protoscope::scripting::ScriptHost host;
+    writeMainLua(protocolDir.path(), script);
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "顶层快照 API 不应被 profile 隔离禁用");
+    require(host.drainPlotSetups().size() == 1, "成功加载应保留顶层 plot.setup");
+    const auto status = host.drainStatusUpdates();
+    require(status.size() == 1 && status[0].text == "candidate status", "成功加载应保留顶层状态");
+    host.tick(nowMs() + 1000);
+    const auto events = host.drainEvents();
+    require(events.size() == 1 && events[0].name == "timer" && events[0].payload == "candidate timer",
+            "成功加载应保留顶层定时器");
+    const auto generation = host.runtimeGeneration();
+    const auto failing = std::string(script) + "\nerror('snapshot candidate failed')\n";
+    writeMainLua(protocolDir.path(), failing.c_str());
+    require(!host.loadProtocolDirectory(protocolDir.path().generic_string()), "失败候选应恢复快照");
+    require(host.runtimeGeneration() == generation && host.drainPlotSetups().empty() &&
+                host.drainStatusUpdates().empty(), "失败候选不得泄漏 plot/status 或代次变化");
+    host.tick(nowMs() + 1000);
+    require(host.drainEvents().empty(), "失败候选顶层定时器不得泄漏");
+}
+
 void test_script_stream_runtime_profile_set_and_clear()
 {
     protoscope::scripting::ScriptHost host;
