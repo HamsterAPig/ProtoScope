@@ -102,6 +102,7 @@ void test_script_read_version_split_flow();
 void test_lua_contract_reload_top_level_snapshot_apis_remain_available();
 void test_lua_contract_reload_failed_candidate_profiles();
 void test_lua_contract_reload_loading_api_rejected_and_runtime_restored();
+void test_lua_contract_order_crc_between_acks();
 void test_lua_contract_order_budget_fault_and_snapshot();
 void test_lua_contract_order_parser_event_indexes();
 void test_lua_contract_order_callback_errors_keep_priority();

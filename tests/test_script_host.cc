@@ -1279,6 +1279,71 @@ void test_script_read_version_split_flow()
     require(foundFrame, "分包收到 OK 后仍应产出 frame");
 }
 
+void test_lua_contract_order_crc_between_acks()
+{
+    const auto run = [](bool useBatch, bool includeError) {
+        const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-order-crc-regression"));
+        std::string script = R"lua(
+local state = "waiting"
+local function ack(ctx, frame)
+    proto.emit("order", "F:" .. frame.fields.value .. ":" .. state)
+    state = "ack"
+end
+function stream()
+    return {
+        buffer = {capacity = 256},
+        frames = {{name = "ack", header = {0xAA, 0x55},
+            len = {offset = 3, type = "u8", means = "payload", extra = 5},
+            crc = {type = "crc16_modbus", order = "lo_hi"},
+            fields = {{name = "value", type = "u8", offset = 4}}, on_frame = ack}},
+        on_error = function(ctx, err)
+            if err.code == "crc_mismatch" then
+                proto.emit("order", "E:" .. state)
+                state = "error"
+            end
+        end,
+)lua";
+        if (useBatch) {
+            script += R"lua(        on_batch = function(ctx, frames)
+            proto.emit("order", "B:" .. #frames)
+            for _, frame in ipairs(frames) do ack(ctx, frame) end
+        end,
+)lua";
+        }
+        script += "    }\nend\n";
+        writeMainLua(protocolDir.path(), script.c_str());
+
+        auto bytes = makeStreamFixtureFrame(17);
+        if (includeError) {
+            auto broken = makeStreamFixtureFrame(51);
+            broken.back() ^= 0xFFU;
+            appendBytes(bytes, broken);
+        }
+        appendBytes(bytes, makeStreamFixtureFrame(34));
+
+        protoscope::scripting::ScriptHost host;
+        require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "顺序回归协议应成功加载");
+        host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), bytes});
+
+        std::vector<std::string> events;
+        for (const auto& event : host.drainEvents()) {
+            if (event.name == "order") {
+                events.push_back(event.payload);
+            }
+        }
+        return events;
+    };
+
+    require(run(false, true) == std::vector<std::string>{"F:17:waiting", "E:ack", "F:34:error"},
+            "CRC错误应位于前后ACK之间，后续ACK不得提前应用前帧value/state");
+    require(run(true, true) ==
+                std::vector<std::string>{"B:1", "F:17:waiting", "E:ack", "B:1", "F:34:error"},
+            "on_batch必须只覆盖错误边界内连续成功帧，错误前后的ACK不得合批");
+    require(run(true, false) ==
+                std::vector<std::string>{"B:2", "F:17:waiting", "F:34:ack"},
+            "无错误连续ACK应保持一次on_batch，且不得重复回调on_frame");
+}
+
 namespace {
 
 // 固定 profile、无容量丢弃的单一 schema：只比较业务事件，不要求不同分块的批次数相同。

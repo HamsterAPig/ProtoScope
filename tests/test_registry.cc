@@ -116,6 +116,7 @@ static const TestCase kAllTests[] = {
     {"lua_contract_reload_failed_candidate_profiles", &test_lua_contract_reload_failed_candidate_profiles},
     {"lua_contract_reload_loading_api_rejected_and_runtime_restored",
      &test_lua_contract_reload_loading_api_rejected_and_runtime_restored},
+    {"lua_contract_order_crc_between_acks", &test_lua_contract_order_crc_between_acks},
     {"lua_contract_order_budget_fault_and_snapshot", &test_lua_contract_order_budget_fault_and_snapshot},
     {"lua_contract_order_parser_event_indexes", &test_lua_contract_order_parser_event_indexes},
     {"lua_contract_order_callback_errors_keep_priority", &test_lua_contract_order_callback_errors_keep_priority},
