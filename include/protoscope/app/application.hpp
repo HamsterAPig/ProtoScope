@@ -177,6 +177,9 @@ public:
         std::function<std::unique_ptr<transport::ITransport>(transport::TransportKind)> factory);
 
 private:
+    // 仅测试协调背压观察/取消，不暴露业务侧 worker 访问入口。
+    friend struct ApplicationBackpressureTestAccess;
+
     enum class WaveResetViewportTrigger {
         PlotSetupReset,
         ManualClear,
@@ -301,6 +304,7 @@ private:
     bool processTransportCloseEvent(const transport::TransportCloseEvent& event);
     bool processTransportErrorEvent(const transport::TransportErrorEvent& event);
     bool processTransportBytesEvent(const transport::TransportBytesEvent& event);
+    std::size_t tryProcessLiveRxBytes(const transport::TransportBytesEvent& event, std::size_t maxBytes);
     bool processTransportTxEvent(const transport::TransportTxEvent& event);
     bool processPendingRxBytes(std::size_t maxBytes);
     void enqueuePendingRxBytes(transport::TransportBytesEvent event);

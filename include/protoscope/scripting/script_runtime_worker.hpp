@@ -93,6 +93,9 @@ public:
     void postTransportClose(transport::TransportCloseEvent event);
     void postTransportError(transport::TransportErrorEvent event);
     void postTransportBytes(transport::TransportBytesEvent event, bool mergeAdjacent = true);
+    // 非阻塞接收 event 的有限前缀；返回已接收字节数，0表示背压/停止且调用方仍拥有全部字节。
+    [[nodiscard]] std::size_t tryPostTransportBytes(const transport::TransportBytesEvent& event, std::size_t maxBytes,
+                                                    bool mergeAdjacent = false);
     void postControl(transport::ConnectionContext context, std::string id, ControlValue value,
                      std::optional<std::uint64_t> generation = {});
     void postTick(std::uint64_t currentMs);

@@ -1447,8 +1447,9 @@ void Application::prepareProtocolRuntimeReload()
     }
     try {
         // 核心流程：取消旧 request 可能触发旧脚本 on_tx；替换宿主前丢弃旧输出，
-        // 避免旧回调追加的新请求、状态或弹窗污染新协议运行态。
-        static_cast<void>(scriptWorker_.drainOutputs());
+        // 避免旧回调追加的新请求、状态或弹窗污染新协议运行态；清理期间主动drain，
+        // 以解除输出满时worker发布者与reload控制命令的互等。
+        static_cast<void>(scriptWorker_.clearPendingRealtimeOutputs());
     } catch (const std::exception& ex) {
         loggingFacade_.warn("protocol", std::string("协议重载前清理旧脚本输出失败: ") + ex.what());
     } catch (...) {
@@ -1498,7 +1499,10 @@ bool Application::pumpOnce()
     if (dataImportActive_) return pumpDataImport();
     bool changed = false;
     const bool hadPendingScriptPlotAppends = !pendingScriptPlotAppends_.empty();
+    // 先让transport pump非阻塞投递RX；若worker达到高水位则保留输入，
+    // 随后flush输出腾出worker槽位，下一轮再投递保留字节。
     changed = handleTransportEvents() || changed;
+    changed = flushScriptOutputs() || changed;
     std::string replayError;
     const bool replayChanged = pumpRawCaptureReplay(replayError);
     changed = replayChanged || changed;
@@ -1570,6 +1574,7 @@ void Application::openTransport()
     pendingTransportEvents_.clear();
     pendingRxByteChunks_.clear();
     const auto kind = dockStore_.commState().kind;
+    activeConnection_.reset();
     transport_ = createTransport(kind);
     if (!transport_) {
         dockStore_.commState().lastError = "创建 transport 失败";
@@ -2076,7 +2081,9 @@ void Application::updateControlValue(const std::string& id, const scripting::Con
         context.readyForIo = false;
     }
     scriptWorker_.postControl(context, id, value, generation);
-    scriptWorker_.waitIdle();
+    if (!runtimeConfig_.scripting.workerEnabled) {
+        scriptWorker_.waitIdle();
+    }
     flushScriptOutputs();
     syncDockState();
 }
@@ -4310,10 +4317,11 @@ bool Application::handleTransportEvents()
     pullTransportEventsFromTransport();
 
     const auto startedAt = std::chrono::steady_clock::now();
+    bool changed = false;
     std::size_t processed = 0;
     std::size_t processedRxBytes = 0;
     const auto maxRxBytes = rxBytesPerPump();
-    const bool changed = drainTransportEventQueues(startedAt, maxRxBytes, processed, processedRxBytes);
+    changed = drainTransportEventQueues(startedAt, maxRxBytes, processed, processedRxBytes) || changed;
     auto& comm = dockStore_.commState();
     comm.lastPumpEvents = processed;
     comm.lastPumpTransportMs = elapsedMilliseconds(startedAt, std::chrono::steady_clock::now());
@@ -4335,9 +4343,7 @@ void Application::resetTransportPumpMetrics()
 
 void Application::pullTransportEventsFromTransport()
 {
-    if (!transport_) {
-        return;
-    }
+    if (!transport_) return;
     auto events = transport_->takeEvents();
     pendingTransportEvents_.insert(
         pendingTransportEvents_.end(), std::make_move_iterator(events.begin()), std::make_move_iterator(events.end()));
@@ -4352,17 +4358,14 @@ bool Application::drainTransportEventQueues(const std::chrono::steady_clock::tim
     while (processedEvents < kTransportEventsPerPump) {
         if (!pendingRxByteChunks_.empty()) {
             const auto remainingRxBudget = maxRxBytes > processedRxBytes ? maxRxBytes - processedRxBytes : 0U;
-            if (remainingRxBudget == 0U) {
-                break;
-            }
+            if (remainingRxBudget == 0U) break;
             const auto before = pendingRxByteCount();
             changed = processPendingRxBytes(remainingRxBudget) || changed;
             const auto after = pendingRxByteCount();
             processedRxBytes += before >= after ? before - after : 0U;
+            if (before == after) break;
             ++processedEvents;
-            if (std::chrono::steady_clock::now() - startedAt >= kTransportEventBudget) {
-                break;
-            }
+            if (std::chrono::steady_clock::now() - startedAt >= kTransportEventBudget) break;
             continue;
         }
 
@@ -4370,10 +4373,37 @@ bool Application::drainTransportEventQueues(const std::chrono::steady_clock::tim
             break;
         }
 
+        if (auto* bytes = std::get_if<transport::TransportBytesEvent>(&pendingTransportEvents_.front());
+            bytes != nullptr) {
+            if (runtimeConfig_.scripting.workerEnabled && bytes->context.readyForIo) {
+                if (!activeConnection_.has_value() ||
+                    activeConnection_->connectionId != bytes->context.connectionId) {
+                    pendingTransportEvents_.pop_front();
+                    ++processedEvents;
+                    if (std::chrono::steady_clock::now() - startedAt >= kTransportEventBudget) break;
+                    continue;
+                }
+                const auto accepted = tryProcessLiveRxBytes(*bytes, maxRxBytes - processedRxBytes);
+                if (accepted == 0U) break;
+                processedRxBytes += accepted;
+                if (accepted == bytes->bytes.size()) pendingTransportEvents_.pop_front();
+                else bytes->bytes.erase(bytes->bytes.begin(),
+                                        bytes->bytes.begin() + static_cast<std::ptrdiff_t>(accepted));
+                ++processedEvents;
+                if (std::chrono::steady_clock::now() - startedAt >= kTransportEventBudget) break;
+                continue;
+            }
+            auto pending = std::move(*bytes);
+            pendingTransportEvents_.pop_front();
+            if (!pending.bytes.empty()) enqueuePendingRxBytes(std::move(pending));
+            continue;
+        }
         auto event = std::move(pendingTransportEvents_.front());
         pendingTransportEvents_.pop_front();
-
         changed = processTransportEvent(event) || changed;
+        if (!std::holds_alternative<transport::TransportBytesEvent>(event)) {
+            changed = flushScriptOutputs() || changed;
+        }
         ++processedEvents;
         if (processedEvents >= kTransportEventsPerPump) {
             break;
@@ -4401,12 +4431,15 @@ bool Application::processPendingRxBytes(const std::size_t maxBytes)
                                       pending.bytes.begin() + static_cast<std::ptrdiff_t>(pending.offset + chunkSize)),
     };
 
-    // 核心流程：大 RX 事件拆成小块喂给脚本和 UI，避免单次 pump 长时间占住主线程。
-    const bool changed = processTransportEvent(chunk);
-    pending.offset += chunkSize;
-    if (pending.offset >= pending.bytes.size()) {
-        pendingRxByteChunks_.pop_front();
-    }
+    // 脚本 worker 的容量检查与接收原子完成；拒绝时pending offset不前进，录制/日志也不重复。
+    const bool asyncWorker = runtimeConfig_.scripting.workerEnabled;
+    const auto acceptedBytes = asyncWorker && pending.context.readyForIo
+                                   ? tryProcessLiveRxBytes(chunk, chunkSize)
+                                   : chunkSize;
+    if (acceptedBytes == 0U) return false;
+    const bool changed = asyncWorker && pending.context.readyForIo ? true : processTransportEvent(chunk);
+    pending.offset += acceptedBytes;
+    if (pending.offset >= pending.bytes.size()) pendingRxByteChunks_.pop_front();
     return changed;
 }
 
@@ -4533,7 +4566,9 @@ std::size_t Application::pendingRxByteCount() const
 
 bool Application::hasPendingRequestDrainWork() const
 {
-    return !pendingTransportEvents_.empty() || !pendingRxByteChunks_.empty() || scriptWorker_.pendingRxBytes() > 0U;
+    const auto snapshot = scriptWorker_.snapshot();
+    return !pendingTransportEvents_.empty() || !pendingRxByteChunks_.empty() || scriptWorker_.pendingRxBytes() > 0U ||
+           snapshot.inputQueueSize > 0U || snapshot.outputQueueSize > 0U || !scriptWorker_.idle();
 }
 
 bool Application::drainRequestTimeoutBacklog()
@@ -4542,15 +4577,9 @@ bool Application::drainRequestTimeoutBacklog()
         return false;
     }
 
-    // 核心流程：request 已过脚本超时时间时，先把本地已到达的 RX/backlog 交给 parser。
-    // 停止边界的 ACK 可能已经在 transport 或 worker 队列里，只是尚未产出 request_done。
-    bool changed = handleTransportEvents();
-    scriptWorker_.waitIdle();
-    if (runtimeConfig_.scripting.drainRequestOutputsUnbounded) {
-        changed = flushScriptOutputsUnbounded() || changed;
-    } else {
-        changed = flushScriptOutputs() || changed;
-    }
+    // 核心流程：超时边界有未处理RX时先非阻塞推进transport，不因worker反向等待UI drain。
+    // 下一轮pump继续处理保留输入；只有完全无backlog时才允许下面判定超时。
+    static_cast<void>(handleTransportEvents());
     return true;
 }
 
@@ -4595,7 +4624,6 @@ bool Application::processTransportOpenEvent(const transport::TransportOpenEvent&
     if (event.context.readyForIo) {
         activeConnection_ = event.context;
         scriptWorker_.postTransportOpen(event);
-        scriptWorker_.waitIdle();
     }
     loggingFacade_.host(config::LogLevel::Info,
                         "OPEN",
@@ -4610,7 +4638,6 @@ bool Application::processTransportCloseEvent(const transport::TransportCloseEven
 {
     if (event.context.readyForIo) {
         scriptWorker_.postTransportClose(event);
-        scriptWorker_.waitIdle();
     }
     loggingFacade_.host(
         config::LogLevel::Info,
@@ -4634,7 +4661,6 @@ bool Application::processTransportErrorEvent(const transport::TransportErrorEven
 {
     if (event.context.readyForIo) {
         scriptWorker_.postTransportError(event);
-        scriptWorker_.waitIdle();
     }
     loggingFacade_.host(
         config::LogLevel::Error,
@@ -4646,16 +4672,52 @@ bool Application::processTransportErrorEvent(const transport::TransportErrorEven
     return true;
 }
 
+std::size_t Application::tryProcessLiveRxBytes(const transport::TransportBytesEvent& event,
+                                               const std::size_t maxBytes)
+{
+    if (event.bytes.empty() || maxBytes == 0U) return 0U;
+    const auto receiveLimit = (std::min)(event.bytes.size(), maxBytes);
+    if (event.context.readyForIo &&
+        (!activeConnection_.has_value() || activeConnection_->connectionId != event.context.connectionId)) {
+        // 实时RX必须属于已处理Open事件确认的活动代次；Open前迟到/已断连数据不得取得归属。
+        return receiveLimit;
+    }
+    std::size_t accepted = 0U;
+    if (!runtimeConfig_.scripting.workerEnabled) {
+        // 同步兼容模式仍采用旧 post 入口，保持按pump预算分块和处理完成后返回的契约。
+        accepted = receiveLimit;
+    } else {
+        accepted = scriptWorker_.tryPostTransportBytes(event, receiveLimit, false);
+        if (accepted == 0U) return 0U;
+    }
+    transport::TransportBytesEvent acceptedEvent{
+        .context = event.context,
+        .bytes = std::vector<std::uint8_t>(event.bytes.begin(),
+                                           event.bytes.begin() + static_cast<std::ptrdiff_t>(accepted))};
+    if (!runtimeConfig_.scripting.workerEnabled) {
+        scriptWorker_.postTransportBytes(acceptedEvent, false);
+    }
+    replayReceiveHistory_ = false;
+    appendLiveRawCapture(acceptedEvent);
+    loggingFacade_.trace("transport",
+                         "transport rx" + transportContextFields("transport_rx", acceptedEvent.context) +
+                             " bytes=" + std::to_string(acceptedEvent.bytes.size()) +
+                             payloadPreviewSuffix(loggingFacade_.currentConfig(), acceptedEvent.bytes));
+    if (acceptedEvent.context.readyForIo) activeConnection_ = acceptedEvent.context;
+    appendTransferRow(dock::ReceiveRow{.timestampMs = acceptedEvent.context.timestampMs,
+                                       .direction = "RX",
+                                       .endpoint = acceptedEvent.context.endpoint,
+                                       .bytes = std::move(acceptedEvent.bytes),
+                                       .message = {}});
+    return accepted;
+}
+
 bool Application::processTransportBytesEvent(const transport::TransportBytesEvent& event)
 {
-    if (event.bytes.empty()) {
-        return false;
-    }
-    // 核心流程：只消费当前活动连接的字节事件，旧连接的迟到回包直接忽略，
-    // 避免双窗口接管场景下脚本状态与 UI 日志被过期连接污染。
-    if (activeConnection_.has_value() && event.context.readyForIo &&
-        activeConnection_->connectionId != event.context.connectionId) {
-        return false;
+    if (event.bytes.empty()) return false;
+    if (event.context.readyForIo) {
+        const auto accepted = tryProcessLiveRxBytes(event, event.bytes.size());
+        return accepted == event.bytes.size();
     }
     replayReceiveHistory_ = false;
     appendLiveRawCapture(event);
@@ -4664,16 +4726,11 @@ bool Application::processTransportBytesEvent(const transport::TransportBytesEven
                          "transport rx" + transportContextFields("transport_rx", event.context) +
                              " bytes=" + std::to_string(event.bytes.size()) +
                              payloadPreviewSuffix(loggingFacade_.currentConfig(), event.bytes));
-    if (event.context.readyForIo) {
-        activeConnection_ = event.context;
-    }
-    appendTransferRow(dock::ReceiveRow{
-        .timestampMs = event.context.timestampMs,
-        .direction = "RX",
-        .endpoint = event.context.endpoint,
-        .bytes = event.bytes,
-        .message = {},
-    });
+    appendTransferRow(dock::ReceiveRow{.timestampMs = event.context.timestampMs,
+                                       .direction = "RX",
+                                       .endpoint = event.context.endpoint,
+                                       .bytes = event.bytes,
+                                       .message = {}});
     return true;
 }
 
@@ -4710,7 +4767,6 @@ bool Application::processTransportTxEvent(const transport::TransportTxEvent& eve
                 .guardState = guardStateForEvent(activeWrite.request, scripting::TxEventState::Sent),
                 .error = error,
             });
-        scriptWorker_.waitIdle();
         dockStore_.appendRequestTraceRow(
             makeRequestTraceRow(activeWrite.request, dock::RequestTraceState::Sent, error, event.finishedAtMs));
         loggingFacade_.trace(
@@ -4791,7 +4847,6 @@ bool Application::applyScriptTxOutputs(const scripting::ScriptRuntimeOutputBatch
                                       .guarded = true,
                                       .guardState = std::string("reset"),
                                   });
-        scriptWorker_.waitIdle();
         changed = true;
     }
 
@@ -5079,17 +5134,11 @@ bool Application::processRequestTimeouts()
         return false;
     }
 
-    if (drainRequestTimeoutBacklog()) {
+    if (drainRequestTimeoutBacklog()) return true;
+    // 不阻塞主循环等待worker；若ACK已经处理，下一次pump先drain输出并再检查活动请求。
+    if (scriptWorker_.pendingRxBytes() > 0U || scriptWorker_.snapshot().inputQueueSize > 0U ||
+        scriptWorker_.snapshot().outputQueueSize > 0U) {
         return true;
-    }
-
-    scriptWorker_.waitIdle();
-    // 核心流程：request 已到超时边界时不能再受 UI 帧预算限制；
-    // 已经到达的 ACK/request_done 必须先完整落到主线程，再决定是否真正超时。
-    if (runtimeConfig_.scripting.drainRequestOutputsUnbounded) {
-        flushScriptOutputsUnbounded();
-    } else {
-        flushScriptOutputs();
     }
     if (!activeHalfDuplexRequest_.has_value()) {
         return true;
@@ -5318,7 +5367,6 @@ void Application::finishTxRequest(const scripting::TxRequest& request,
             .guardState = guardStateForEvent(request, state),
             .error = std::move(error),
         });
-    scriptWorker_.waitIdle();
 }
 
 void Application::cancelAllTxRequests(const std::string& reason)

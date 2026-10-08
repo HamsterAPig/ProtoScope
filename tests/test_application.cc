@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <future>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -25,6 +26,14 @@
 #include <vector>
 
 #include <elf_static_view/project.hpp>
+
+namespace protoscope::app {
+
+struct ApplicationBackpressureTestAccess {
+    static scripting::ScriptRuntimeWorker& worker(Application& application) { return application.scriptWorker_; }
+};
+
+} // namespace protoscope::app
 
 namespace {
 
@@ -4347,6 +4356,621 @@ void test_application_switching_to_parsed_view_can_replay_old_raw_history()
 
     require(application.docks().receiveState().frameRows.empty(),
             "开启旧历史回放后，旧半帧应继续占住 parser，复现 raw->schema 切换卡住场景");
+}
+
+void test_lua_contract_backpressure_stale_connection_rx_is_discarded_without_side_effects()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-stale-connection-rx"));
+    {
+        std::ofstream script(protocolDir.path() / "main.lua");
+        script << "function controls() return {} end\n"
+                  "function on_bytes(ctx, bytes) proto.emit('stale_rx', tostring(bytes[1])) end\n";
+    }
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](auto) {
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+    require(application.initialize(), "旧连接RX测试应用应初始化");
+    auto config = application.captureConfig();
+    config.logging.level = protoscope::config::LogLevel::Trace;
+    require(application.applyConfig(config), "应启用RX trace日志");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "旧连接RX测试协议应加载");
+    application.openTransport();
+    application.pumpOnce();
+    const ScopedTempPath recordingPath(makeUniqueTempDir("protoscope-stale-connection-recording"));
+    std::string error;
+    require(application.startRawCaptureRecording(recordingPath.path() / "stale.psraw", error),
+            "旧连接RX测试应启动完整原始录制");
+    const auto rawPayloadBefore = application.docks().waveState().rawCapture.payload;
+    const auto rawEventCountBefore = application.docks().waveState().rawCapture.events.size();
+    const auto recordingBytesBefore = application.rawCaptureRecordingBytes();
+
+    const protoscope::transport::ConnectionContext staleContext{
+        .endpoint = "queued://stale", .connectionId = 99, .timestampMs = 901, .readyForIo = true};
+    transportState->pendingEvents.push_back(
+        protoscope::transport::TransportBytesEvent{staleContext, {0xDE, 0xAD}});
+    application.pumpOnce();
+    auto& worker = protoscope::app::ApplicationBackpressureTestAccess::worker(application);
+    worker.waitIdle();
+    application.pumpOnce();
+
+    require(application.docks().waveState().rawCapture.payload == rawPayloadBefore,
+            "旧连接字节不得进入实时原始缓存");
+    require(application.docks().waveState().rawCapture.events.size() == rawEventCountBefore,
+            "旧连接字节不得生成原始录制事件");
+    require(application.isRawCaptureRecording() &&
+                application.rawCaptureRecordingBytes() == recordingBytesBefore,
+            "旧连接字节不得计入完整原始录制");
+    require(application.docks().receiveState().rows.empty(), "旧连接字节不得生成RX收发记录");
+    require(application.docks().scriptState().rows.empty(), "旧连接字节不得进入脚本输出");
+    require(!hasHostLogMessage(application.docks().logState(), staleContext.endpoint, "transport rx"),
+            "旧连接字节不得写入transport RX trace");
+    require(application.stopRawCaptureRecording(error), "旧连接RX测试录制应正常关闭");
+    const auto recording = protoscope::plot::readRawCaptureFile(recordingPath.path() / "stale.psraw", error);
+    require(recording.has_value() && recording->payload.empty(), "旧连接字节不得写入完整原始录制文件");
+    application.shutdown();
+}
+
+void test_lua_contract_backpressure_open_before_stale_rx_is_discarded_but_detached_rx_is_kept()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-open-before-stale-rx"));
+    writeTextFile(protocolDir.path() / "main.lua",
+                  "function controls() return {} end\n"
+                  "function on_bytes(ctx, bytes) proto.emit('rx_owner', tostring(bytes[1])) end\n");
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](auto) {
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+    require(application.initialize(), "Open前RX测试应用应初始化");
+    auto config = application.captureConfig();
+    config.logging.level = protoscope::config::LogLevel::Trace;
+    require(application.applyConfig(config), "应启用RX trace日志");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "Open前RX测试协议应加载");
+    application.openTransport();
+    // 运输层保证事件队列内的顺序，但Application尚未pump，模拟旧连接RX先于新代次Open到达的排队序列。
+    transportState->pendingEvents.clear();
+    const protoscope::transport::ConnectionContext newContext{
+        .endpoint = "queued://new", .connectionId = 70, .timestampMs = 910, .readyForIo = true};
+    const protoscope::transport::ConnectionContext staleContext{
+        .endpoint = "queued://old", .connectionId = 69, .timestampMs = 909, .readyForIo = true};
+    const protoscope::transport::ConnectionContext detachedContext{
+        .endpoint = "offline://import", .connectionId = 0, .timestampMs = 911, .readyForIo = false};
+    transportState->pendingEvents.emplace_back(protoscope::transport::TransportBytesEvent{staleContext, {0xDE}});
+    transportState->pendingEvents.emplace_back(protoscope::transport::TransportOpenEvent{newContext});
+    transportState->pendingEvents.emplace_back(protoscope::transport::TransportBytesEvent{newContext, {0xA1}});
+    transportState->pendingEvents.emplace_back(protoscope::transport::TransportBytesEvent{detachedContext, {0xB2}});
+
+    const ScopedTempPath recordingPath(makeUniqueTempDir("protoscope-open-before-stale-recording"));
+    std::string error;
+    require(application.startRawCaptureRecording(recordingPath.path() / "capture.psraw", error),
+            "Open前RX测试应启动完整原始录制");
+    application.pumpOnce();
+    auto& worker = protoscope::app::ApplicationBackpressureTestAccess::worker(application);
+    worker.waitIdle();
+    application.pumpOnce();
+
+    std::vector<std::uint8_t> received;
+    for (const auto& row : application.docks().receiveState().rows) {
+        if (row.direction == "RX") received.insert(received.end(), row.bytes.begin(), row.bytes.end());
+    }
+    require(received == std::vector<std::uint8_t>({0xA1, 0xB2}),
+            "Open前迟到的实时RX须丢弃，但合法detached/offline RX仍须投递");
+    require(application.docks().waveState().rawCapture.payload == std::vector<std::uint8_t>({0xA1, 0xB2}),
+            "stale实时RX不得污染raw capture，detached合法输入应保留");
+    require(countScriptEvents(application.docks().scriptState(), "rx_owner") == 2U,
+            "Lua输出应仅归属已Open实时连接和合法detached输入");
+    require(!hasHostLogMessage(application.docks().logState(), staleContext.endpoint, "transport rx"),
+            "无活动连接时Open前stale RX不得写RX日志");
+    require(application.stopRawCaptureRecording(error), "Open前RX录制应正常关闭");
+    const auto capture = protoscope::plot::readRawCaptureFile(recordingPath.path() / "capture.psraw", error);
+    require(capture.has_value() && capture->payload == std::vector<std::uint8_t>({0xA1, 0xB2}),
+            "完整原始录制必须与接受的RX所有权一致");
+    application.shutdown();
+}
+
+void test_lua_contract_backpressure_pump_returns_when_both_queues_saturated()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-pump-backpressure"));
+    {
+        std::ofstream script(protocolDir.path() / "main.lua");
+        script << "function on_bytes(ctx, bytes) proto.emit('pressure', tostring(bytes[1])) end\n";
+    }
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    protoscope::app::Application application;
+    auto& worker = protoscope::app::ApplicationBackpressureTestAccess::worker(application);
+    // pump 独占 Application；控制线程只能通过 worker 自身的锁观察和取消。
+    // 析构顺序保证任何断言/超时都先 stop、join，再 shutdown，不并发操作应用状态。
+    struct PumpGuard {
+        protoscope::app::Application& application;
+        protoscope::scripting::ScriptRuntimeWorker& worker;
+        std::thread thread;
+        ~PumpGuard() {
+            worker.stop();
+            if (thread.joinable()) thread.join();
+            application.shutdown();
+        }
+    } guard{application, worker, {}};
+    application.setTransportFactoryForTest([transportState](auto) {
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+    require(application.initialize(), "背压应用应初始化");
+    auto appConfig = application.captureConfig();
+    appConfig.gui.realtimeBacklog.rxChunkBytesPerPump = 2U;
+    appConfig.scripting.workerEnabled = true;
+    require(application.applyConfig(appConfig), "小RX pump预算及异步worker配置应可应用");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "背压协议应加载");
+    application.openTransport();
+    application.pumpOnce();
+    worker.configure({.enabled = true, .rxQueueLimitBytes = 4U, .outputQueueLimit = 1U,
+                      .batchBytes = 1U, .backpressureEnabled = true,
+                      .backpressureHighWatermark = 0.5, .backpressureLowWatermark = 0.25});
+    worker.waitIdle();
+    // 初始化完成后再设置小预算，避免把脚本加载输出混入饱和条件。
+    (void) worker.drainOutputs();
+    const protoscope::transport::ConnectionContext ctx{
+        .endpoint = "queued://wave", .connectionId = 7, .timestampMs = 300, .readyForIo = true};
+    const auto observe = [](auto&& predicate) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!predicate()) {
+            if (std::chrono::steady_clock::now() >= deadline) return false;
+            std::this_thread::yield();
+        }
+        return true;
+    };
+    worker.postTransportBytes({ctx, {1}}, false);
+    require(observe([&] { return worker.inputIdle() && worker.snapshot().outputQueueSize == 1U; }),
+            "首批输出应占满硬上界");
+    worker.postTransportBytes({ctx, {2}}, false);
+    require(observe([&] { return worker.pendingRxBytes() == 0U && !worker.inputIdle(); }),
+            "第二批已取出输入但因满输出无法完成发布");
+    worker.postTransportBytes({ctx, {3}}, false);
+    require(worker.pendingRxBytes() == 1U && worker.snapshot().outputQueueSize == 1U,
+            "受控前置条件：发布者阻塞，第三批保留在输入队列");
+    require(worker.tryPostTransportBytes({ctx, {4}}, 1U, false) == 1U && worker.pendingRxBytes() == 2U,
+            "受控前置条件：worker输入达到高水位，后续RX将被拒绝");
+    transportState->pendingEvents.push_back(protoscope::transport::TransportBytesEvent{ctx, {5, 6, 7}});
+    std::promise<void> finished;
+    auto future = finished.get_future();
+    guard.thread = std::thread([&] {
+        try {
+            application.pumpOnce();
+            finished.set_value();
+        } catch (...) {
+            finished.set_exception(std::current_exception());
+        }
+    });
+    // 没有外部drain；旧pump把RX加入已高水位队列后等待低水位，worker却等待输出drain。
+    // 超时只用于有界失败，不用于制造饱和；饱和已由上面的锁保护观察确定。
+    const bool returned = future.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    if (!returned) worker.stop(); // 取消仍可能阻塞在有界输出发布处的worker，再有限收尾pump线程。
+    if (returned) future.get();
+    guard.thread.join();
+    require(returned, "输入高水位且输出满时 pump 必须自行返回并继续 drain，不能等待控制线程 stop");
+
+    const auto drainDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    auto receivedBytes = [&] {
+        std::size_t count = 0U;
+        for (const auto& row : application.docks().receiveState().rows) {
+            if (row.direction == "RX" && row.endpoint == ctx.endpoint) count += row.bytes.size();
+        }
+        return count;
+    };
+    while ((receivedBytes() < 3U || !worker.inputIdle() || worker.pendingRxBytes() > 0U ||
+            worker.snapshot().outputQueueSize > 0U) &&
+           std::chrono::steady_clock::now() < drainDeadline) {
+        application.pumpOnce();
+        std::this_thread::yield();
+    }
+    require(receivedBytes() == 3U, "后续pump应在低水位恢复后继续投递保留的RX");
+    require(worker.pendingRxBytes() == 0U, "后续pump应使worker输入队列恢复到低水位以下");
+    require(receivedBytes() == 3U, "RX背压恢复过程中每个原始字节只能被Application接收一次");
+    worker.stop();
+    // stop用于结束worker；当前实现每轮只记录已原子接收的字节，拒绝时不提交offset。
+    const auto& rows = application.docks().receiveState().rows;
+    std::vector<std::uint8_t> received;
+    for (const auto& row : rows) {
+        if (row.direction == "RX" && row.endpoint == ctx.endpoint) {
+            received.insert(received.end(), row.bytes.begin(), row.bytes.end());
+        }
+    }
+    require(received == std::vector<std::uint8_t>({5, 6, 7}), "RX拒绝后重试不得丢失、重排或重复记录字节");
+    const auto& rawBytes = application.docks().waveState().rawCapture.payload;
+    require(rawBytes.size() == received.size() && received == std::vector<std::uint8_t>({5, 6, 7}) &&
+                std::equal(received.begin(), received.end(), rawBytes.begin()),
+            "拒绝重试不得重复追加原始录制字节");
+}
+
+void test_lua_contract_backpressure_responsive_disconnect_releases_worker_capacity()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-disconnect-backpressure"));
+    {
+        std::ofstream script(protocolDir.path() / "main.lua");
+        script << "function on_bytes(ctx, bytes) proto.emit('pressure', tostring(bytes[1])) end\n";
+    }
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    protoscope::app::Application application;
+    auto& worker = protoscope::app::ApplicationBackpressureTestAccess::worker(application);
+    struct WorkerGuard { protoscope::scripting::ScriptRuntimeWorker& worker; ~WorkerGuard() { worker.stop(); } } guard{worker};
+    application.setTransportFactoryForTest([transportState](auto) {
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+    require(application.initialize(), "断连背压应用应初始化");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "断连协议应加载");
+    auto config = application.captureConfig();
+    config.scripting.workerEnabled = true;
+    config.gui.realtimeBacklog.mode = "responsive";
+    config.gui.realtimeBacklog.discardBacklogOnDisconnect = true;
+    require(application.applyConfig(config), "断连背压配置应应用");
+    application.openTransport();
+    application.pumpOnce();
+    worker.configure({.enabled = true, .rxQueueLimitBytes = 4U, .outputQueueLimit = 1U,
+                      .batchBytes = 1U, .backpressureEnabled = true,
+                      .backpressureHighWatermark = 0.5, .backpressureLowWatermark = 0.25});
+    worker.waitIdle();
+    (void)worker.drainOutputs();
+    const protoscope::transport::ConnectionContext context{
+        .endpoint = "queued://wave", .connectionId = 7, .timestampMs = 800, .readyForIo = true};
+    worker.postTransportBytes({context, {0xC1}}, false);
+    require(waitUntil([&] { return worker.inputIdle() && worker.snapshot().outputQueueSize == 1U; }),
+            "输出队列应满");
+    worker.postTransportBytes({context, {0xC2}}, false);
+    require(waitUntil([&] { return worker.pendingRxBytes() == 0U && !worker.inputIdle(); }),
+            "worker应等待输出空间");
+    worker.postTransportBytes({context, {0xC3}}, false);
+    const auto highWaterDrainDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (worker.pendingRxBytes() != 1U && std::chrono::steady_clock::now() < highWaterDrainDeadline) {
+        std::this_thread::yield();
+    }
+    require(worker.pendingRxBytes() == 1U, "第三批RX应到达等待输出发布的worker");
+    require(worker.tryPostTransportBytes({context, {0xC4}}, 1U, false) == 1U && worker.pendingRxBytes() == 2U,
+            "断连前非阻塞投递应把worker输入填到高水位");
+    transportState->pendingEvents.push_back(protoscope::transport::TransportBytesEvent{context, {0xD1, 0xD2, 0xD3}});
+    application.pumpOnce();
+    require(application.docks().commState().rxInputQueueBytes > 0U,
+            "断连前拒绝的RX应保留在主线程队列");
+    require(application.docks().commState().rxInputQueueBytes == 3U,
+            "worker达到高水位后拒绝的三字节RX事件须原样保留");
+    // 在输出发布者仍受硬上限阻塞且RX backlog已被拒绝时触发断连，
+    // 用独立控制线程仅观察完成；超时则由控制线程drain输出再join，避免失败用例遗留死锁线程。
+    std::promise<void> closeFinished;
+    auto closeFuture = closeFinished.get_future();
+    std::thread closeThread([&] {
+        try {
+            application.closeTransport();
+            closeFinished.set_value();
+        } catch (...) {
+            closeFinished.set_exception(std::current_exception());
+        }
+    });
+    const bool closedWithoutDrain = closeFuture.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    if (!closedWithoutDrain) (void)worker.drainOutputs();
+    closeThread.join();
+    if (closedWithoutDrain) closeFuture.get();
+    require(closedWithoutDrain, "responsive断连必须在RX/输出背压并存时清理并返回");
+    require(application.docks().commState().rxInputQueueBytes == 0U,
+            "responsive断连策略应清理连接RX backlog");
+    worker.stop();
+    require(worker.tryPostTransportBytes({context, {0xD3}}, 1U, false) == 0U,
+            "worker停止后必须拒绝新输入，不伪称接收");
+    application.shutdown();
+}
+
+void test_lua_contract_backpressure_complete_disconnect_preserves_pending_rx_fifo()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-complete-disconnect-backpressure"));
+    {
+        std::ofstream script(protocolDir.path() / "main.lua");
+        script << "function on_bytes(ctx, bytes) proto.emit('pressure', tostring(bytes[1])) end\n";
+    }
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    protoscope::app::Application application;
+    auto& worker = protoscope::app::ApplicationBackpressureTestAccess::worker(application);
+    struct WorkerGuard { protoscope::scripting::ScriptRuntimeWorker& worker; ~WorkerGuard() { worker.stop(); } } guard{worker};
+    application.setTransportFactoryForTest([transportState](auto) {
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+    require(application.initialize(), "complete断连背压应用应初始化");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "complete断连协议应加载");
+    auto config = application.captureConfig();
+    config.scripting.workerEnabled = true;
+    config.gui.realtimeBacklog.mode = "complete";
+    require(application.applyConfig(config), "complete backlog配置应应用");
+    application.openTransport();
+    application.pumpOnce();
+    worker.configure({.enabled = true, .rxQueueLimitBytes = 4U, .outputQueueLimit = 1U,
+                      .batchBytes = 1U, .backpressureEnabled = true,
+                      .backpressureHighWatermark = 0.5, .backpressureLowWatermark = 0.25});
+    worker.waitIdle();
+    (void)worker.drainOutputs();
+    const protoscope::transport::ConnectionContext context{
+        .endpoint = "queued://wave", .connectionId = 7, .timestampMs = 810, .readyForIo = true};
+    worker.postTransportBytes({context, {0xE1}}, false);
+    require(waitUntil([&] { return worker.inputIdle() && worker.snapshot().outputQueueSize == 1U; }),
+            "complete断连测试应占满输出队列");
+    worker.postTransportBytes({context, {0xE2}}, false);
+    require(waitUntil([&] { return worker.pendingRxBytes() == 0U && !worker.inputIdle(); }),
+            "complete断连测试worker应阻塞于发布");
+    worker.postTransportBytes({context, {0xE3}}, false);
+    const auto highWaterDrainDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (worker.pendingRxBytes() != 1U && std::chrono::steady_clock::now() < highWaterDrainDeadline) {
+        std::this_thread::yield();
+    }
+    require(worker.pendingRxBytes() == 1U, "第三批RX应到达等待输出发布的worker");
+    require(worker.tryPostTransportBytes({context, {0xE4}}, 1U, false) == 1U && worker.pendingRxBytes() == 2U,
+            "complete断连前非阻塞投递应把worker输入填到高水位");
+    transportState->pendingEvents.push_back(protoscope::transport::TransportBytesEvent{context, {0xF1, 0xF2, 0xF3}});
+    application.pumpOnce();
+    require(application.docks().commState().rxInputQueueBytes > 0U,
+            "complete断连前主线程应保留被拒绝的RX");
+    require(application.docks().commState().rxInputQueueBytes == 3U,
+            "worker达到高水位后拒绝的三字节RX事件必须完整留在complete backlog");
+    std::promise<void> closeFinished;
+    auto closeFuture = closeFinished.get_future();
+    std::thread closeThread([&] {
+        try {
+            application.closeTransport();
+            closeFinished.set_value();
+        } catch (...) {
+            closeFinished.set_exception(std::current_exception());
+        }
+    });
+    const bool closedWithoutDrain = closeFuture.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    if (!closedWithoutDrain) (void)worker.drainOutputs();
+    closeThread.join();
+    if (closedWithoutDrain) closeFuture.get();
+    require(closedWithoutDrain, "complete断连不应等待输出空间，且应保留RX backlog");
+    require(application.docks().commState().rxInputQueueBytes > 0U,
+            "complete断连策略必须保留尚未投递的RX backlog");
+    const auto workerDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while ((!worker.inputIdle() || worker.pendingRxBytes() > 0U) &&
+           std::chrono::steady_clock::now() < workerDeadline) {
+        (void)worker.drainOutputs();
+        std::this_thread::yield();
+    }
+    require(worker.inputIdle() && worker.pendingRxBytes() == 0U,
+            "complete断连测试应先drain worker以恢复有限RX容量");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (application.docks().commState().pendingRxBytes > 0U &&
+           std::chrono::steady_clock::now() < deadline) {
+        application.pumpOnce();
+        std::this_thread::yield();
+    }
+    require(application.docks().commState().pendingRxBytes == 0U,
+            "complete断连后继续drain必须完成保留RX");
+    worker.stop();
+    application.shutdown();
+}
+
+void test_lua_contract_backpressure_close_follows_nonbyte_event_without_blocking()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-close-event-backpressure"));
+    {
+        std::ofstream script(protocolDir.path() / "main.lua");
+        script << "function on_bytes(ctx, bytes) proto.emit('pressure', tostring(bytes[1])) end\n";
+    }
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    protoscope::app::Application application;
+    auto& worker = protoscope::app::ApplicationBackpressureTestAccess::worker(application);
+    struct WorkerGuard {
+        protoscope::scripting::ScriptRuntimeWorker& worker;
+        ~WorkerGuard() { worker.stop(); }
+    } guard{worker};
+    application.setTransportFactoryForTest([transportState](auto) {
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+    require(application.initialize(), "Close背压应用应初始化");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "Close背压协议应加载");
+    auto config = application.captureConfig();
+    config.scripting.workerEnabled = true;
+    config.gui.realtimeBacklog.mode = "complete";
+    require(application.applyConfig(config), "Close背压配置应启用异步worker");
+    application.openTransport();
+    application.pumpOnce();
+    worker.configure({.enabled = true, .rxQueueLimitBytes = 8U, .outputQueueLimit = 1U,
+                      .batchBytes = 1U, .backpressureEnabled = true,
+                      .backpressureHighWatermark = 0.5, .backpressureLowWatermark = 0.25});
+    worker.waitIdle();
+    (void)worker.drainOutputs();
+
+    const protoscope::transport::ConnectionContext context{
+        .endpoint = "queued://wave", .connectionId = 7, .timestampMs = 820, .readyForIo = true};
+    // 先让一批真实Application RX进入worker并记入收发行，随后由它产生的输出占满硬上限。
+    // 这使Close回归同时验证合法RX所有权，而不是在没有RX来源时断言凭空出现字节。
+    transportState->pendingEvents.push_back(
+        protoscope::transport::TransportBytesEvent{context, {0x21, 0x22, 0x23}});
+    application.pumpOnce();
+    require(waitUntil([&] { return worker.inputIdle() && worker.snapshot().outputQueueSize == 1U; }),
+            "Close背压测试的真实RX应产生并占满输出队列");
+    worker.postTransportBytes({context, {0x12}}, false);
+    require(waitUntil([&] { return worker.pendingRxBytes() == 0U && !worker.inputIdle(); }),
+            "Close背压测试worker应卡在输出发布");
+    worker.postTransportBytes({context, {0x13}}, false);
+    const auto highWaterDrainDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (worker.pendingRxBytes() != 1U && std::chrono::steady_clock::now() < highWaterDrainDeadline) {
+        std::this_thread::yield();
+    }
+    require(worker.pendingRxBytes() == 1U, "第三批RX应到达等待输出发布的worker");
+    require(worker.tryPostTransportBytes({context, {0x14, 0x15, 0x16}}, 3U, false) == 3U &&
+                worker.pendingRxBytes() == 4U,
+            "Close背压测试应在输出满时将worker RX填到高水位");
+
+    const auto& initiallyReceivedRows = application.docks().receiveState().rows;
+    std::vector<std::uint8_t> initiallyReceived;
+    for (const auto& row : initiallyReceivedRows) {
+        if (row.direction == "RX" && row.endpoint == context.endpoint) {
+            initiallyReceived.insert(initiallyReceived.end(), row.bytes.begin(), row.bytes.end());
+        }
+    }
+    require(initiallyReceived == std::vector<std::uint8_t>({0x21, 0x22, 0x23}),
+            "进入饱和前的真实Application RX应按序且恰好记录一次");
+
+    transportState->pendingEvents.push_back(protoscope::transport::TransportTxEvent{
+        .requestId = 0xFFFFFFFFU,
+        .kind = protoscope::transport::TransportTxKind::Send,
+        .state = protoscope::transport::TransportTxState::Sent,
+        .error = {},
+        .bytes = 0U,
+        .queuedAtMs = 820U,
+        .finishedAtMs = 821U,
+    });
+    transportState->pendingEvents.push_back(protoscope::transport::TransportCloseEvent{context, "受控关闭"});
+    std::promise<void> pumpFinished;
+    auto pumpFuture = pumpFinished.get_future();
+    std::thread pumpThread([&] {
+        try {
+            application.pumpOnce();
+            pumpFinished.set_value();
+        } catch (...) {
+            pumpFinished.set_exception(std::current_exception());
+        }
+    });
+    const bool pumpReturned = pumpFuture.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    if (!pumpReturned) worker.stop(); // 有界失败路径用worker停止信号取消发布等待，再确保pump线程可join。
+    pumpThread.join();
+    if (pumpReturned) pumpFuture.get();
+    require(pumpReturned, "非字节事件后的flush不得等待worker输出发布者");
+    require(hasHostLogMessage(application.docks().logState(), context.endpoint, "transport close"),
+            "背压输出满时紧随TX事件的Close必须在同轮处理");
+    std::vector<std::uint8_t> receivedBeforeDrain;
+    for (const auto& row : application.docks().receiveState().rows) {
+        if (row.direction == "RX" && row.endpoint == context.endpoint) {
+            receivedBeforeDrain.insert(receivedBeforeDrain.end(), row.bytes.begin(), row.bytes.end());
+        }
+    }
+    require(receivedBeforeDrain == std::vector<std::uint8_t>({0x21, 0x22, 0x23}),
+            "已被Application接受的RX在Close事件处理期间仍应保留且不重复");
+    require(worker.snapshot().outputQueueSize <= 1U,
+            "Close处理不得突破worker输出队列硬上限");
+
+    const auto workerDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while ((!worker.inputIdle() || worker.pendingRxBytes() > 0U) &&
+           std::chrono::steady_clock::now() < workerDeadline) {
+        (void)worker.drainOutputs();
+        std::this_thread::yield();
+    }
+    require(worker.inputIdle() && worker.pendingRxBytes() == 0U,
+            "Close事件后worker输出应可drain并恢复输入容量");
+    application.pumpOnce();
+    require(application.docks().commState().rxInputQueueBytes == 0U,
+            "Close后的complete backlog仍须可按序重新投递");
+    std::vector<std::uint8_t> receivedAfterDrain;
+    for (const auto& row : application.docks().receiveState().rows) {
+        if (row.direction == "RX" && row.endpoint == context.endpoint) {
+            receivedAfterDrain.insert(receivedAfterDrain.end(), row.bytes.begin(), row.bytes.end());
+        }
+    }
+    require(receivedAfterDrain == std::vector<std::uint8_t>({0x21, 0x22, 0x23}),
+            "Close后保留的三字节RX须按序且恰好一次投递");
+    worker.stop();
+    application.shutdown();
+}
+
+void test_lua_contract_backpressure_reload_preserves_pending_rx_fifo()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-reload-backpressure"));
+    {
+        std::ofstream script(protocolDir.path() / "main.lua");
+        script << "function on_bytes(ctx, bytes) proto.emit('pressure', tostring(bytes[1])) end\n";
+    }
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    protoscope::app::Application application;
+    auto& worker = protoscope::app::ApplicationBackpressureTestAccess::worker(application);
+    struct WorkerGuard {
+        protoscope::scripting::ScriptRuntimeWorker& worker;
+        ~WorkerGuard() { worker.stop(); }
+    } guard{worker};
+    application.setTransportFactoryForTest([transportState](auto) {
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+    require(application.initialize(), "重载背压应用应初始化");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "旧协议应加载");
+    auto config = application.captureConfig();
+    config.scripting.workerEnabled = true;
+    require(application.applyConfig(config), "重载背压测试必须显式启用脚本worker");
+    application.openTransport();
+    application.pumpOnce();
+    worker.configure({.enabled = true, .rxQueueLimitBytes = 4U, .outputQueueLimit = 1U,
+                      .batchBytes = 1U, .backpressureEnabled = true,
+                      .backpressureHighWatermark = 0.5, .backpressureLowWatermark = 0.25});
+    worker.waitIdle();
+    (void)worker.drainOutputs();
+    const protoscope::transport::ConnectionContext context{
+        .endpoint = "queued://wave", .connectionId = 7, .timestampMs = 700, .readyForIo = true};
+    worker.postTransportBytes({context, {0xA1}}, false);
+    require(waitUntil([&] { return worker.inputIdle() && worker.snapshot().outputQueueSize == 1U; }),
+            "首批Lua输出应占满队列");
+    worker.postTransportBytes({context, {0xA2}}, false);
+    require(waitUntil([&] { return worker.pendingRxBytes() == 0U && !worker.inputIdle(); }),
+            "worker应确定阻塞于输出发布");
+    const auto thirdBytesDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (worker.pendingRxBytes() != 0U && std::chrono::steady_clock::now() < thirdBytesDeadline) {
+        std::this_thread::yield();
+    }
+    require(worker.pendingRxBytes() == 0U, "第二批RX已被worker取出，等待发布输出");
+    worker.postTransportBytes({context, {0xA3}}, false);
+    const auto highWaterDrainDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (worker.pendingRxBytes() != 1U && std::chrono::steady_clock::now() < highWaterDrainDeadline) {
+        std::this_thread::yield();
+    }
+    require(worker.pendingRxBytes() == 1U, "第三批RX应到达等待输出发布的worker");
+    require(worker.tryPostTransportBytes({context, {0xA4}}, 1U, false) == 1U && worker.pendingRxBytes() == 2U,
+            "重载前非阻塞投递应把worker输入填到高水位");
+    transportState->pendingEvents.push_back(protoscope::transport::TransportBytesEvent{context, {0xB1, 0xB2, 0xB3}});
+    application.pumpOnce();
+    require(application.docks().commState().rxInputQueueBytes > 0U,
+            "已拒绝的transport RX必须留在Application FIFO等待重试");
+    require(application.docks().commState().rxInputQueueBytes == 3U,
+            "worker达到高水位时拒绝三字节事件，必须原样留在FIFO等待重试");
+    std::size_t acceptedPrefixRows = 0U;
+    for (const auto& row : application.docks().receiveState().rows) {
+        if (row.direction != "RX" || row.endpoint != context.endpoint) continue;
+        require(std::find(row.bytes.begin(), row.bytes.end(), 0xB2) == row.bytes.end() &&
+                    std::find(row.bytes.begin(), row.bytes.end(), 0xB3) == row.bytes.end(),
+                "背压拒绝的transport RX不得提前写收发日志");
+        if (std::find(row.bytes.begin(), row.bytes.end(), 0xB1) != row.bytes.end()) ++acceptedPrefixRows;
+    }
+    require(acceptedPrefixRows <= 1U, "同一RX事件已接受前缀只能记录一次");
+    const auto unblockDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while ((!worker.inputIdle() || worker.pendingRxBytes() > 0U) &&
+           std::chrono::steady_clock::now() < unblockDeadline) {
+        (void)worker.drainOutputs();
+        std::this_thread::yield();
+    }
+    std::promise<bool> reloadFinished;
+    auto reloadFuture = reloadFinished.get_future();
+    std::thread reloadThread([&] {
+        try {
+            reloadFinished.set_value(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true));
+        } catch (...) {
+            reloadFinished.set_exception(std::current_exception());
+        }
+    });
+    const bool reloadReturnedWithoutDrain = reloadFuture.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    if (!reloadReturnedWithoutDrain) (void)worker.drainOutputs();
+    reloadThread.join();
+    const bool reloaded = reloadReturnedWithoutDrain ? reloadFuture.get() : false;
+    require(reloadReturnedWithoutDrain && reloaded,
+            "输出饱和期间协议重载必须自行清理、返回且保留Application未投递RX");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (application.docks().commState().rxInputQueueBytes > 0U &&
+           std::chrono::steady_clock::now() < deadline) {
+        application.pumpOnce();
+        std::this_thread::yield();
+    }
+    require(application.docks().commState().rxInputQueueBytes == 0U,
+            "重载后后续pump应完成未接受RX的投递");
+    std::vector<std::uint8_t> received;
+    for (const auto& row : application.docks().receiveState().rows) {
+        if (row.direction == "RX" && row.endpoint == context.endpoint) {
+            received.insert(received.end(), row.bytes.begin(), row.bytes.end());
+        }
+    }
+    require(received == std::vector<std::uint8_t>({0xB1, 0xB2, 0xB3}),
+            "重载期间保留的RX必须按序且仅记录一次");
+    worker.stop();
+    application.shutdown();
 }
 
 void test_application_rx_events_are_processed_with_budget()
