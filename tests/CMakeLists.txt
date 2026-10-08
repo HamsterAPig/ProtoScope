@@ -259,6 +259,16 @@ target_link_libraries(protoscope_record_coordinator_tests PRIVATE protoscope_sto
 add_test(NAME protoscope_record_coordinator_tests COMMAND protoscope_record_coordinator_tests)
 set_tests_properties(protoscope_record_coordinator_tests PROPERTIES TIMEOUT 60)
 
+if(WIN32 AND MINGW)
+    # 全部测试注册后统一优先使用当前编译器的运行库及线程 DLL，避免串用其他工具链版本。
+    get_filename_component(protoscope_mingw_runtime_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    # CMake 3.21 使用 ENVIRONMENT；转义 PATH 分号，避免被拆成多个环境变量。
+    string(REPLACE ";" "\\;" protoscope_mingw_test_path "${protoscope_mingw_runtime_dir};$ENV{PATH}")
+    get_property(protoscope_registered_tests DIRECTORY PROPERTY TESTS)
+    set_property(TEST ${protoscope_registered_tests} APPEND PROPERTY ENVIRONMENT
+        "PATH=${protoscope_mingw_test_path}")
+endif()
+
 if(MSVC)
     # 必须放在所有目标定义之后，统一使用 UTF-8，避免遗漏目标受系统代码页影响。
     get_property(protoscope_test_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
