@@ -68,9 +68,10 @@ gui:
     chinese_glyph_range: simplified_common
 ```
 
-- `theme`：主题字符串 ID，内置 `professional_dark`（默认，深墨蓝灰分层与蓝青强调）、
+- `theme`：主题字符串 ID，内置 `professional_dark`（默认，中性炭灰分层与低饱和灰青强调）、
   `debug_high_contrast`（近黑底、明亮信号与清晰焦点）和 `professional_light`（冷白底、白面板与蓝强调）。
-  可选择配置文件旁 `themes` 目录中的 YAML 用户主题。启动加载失败时显示专业深色，
+  配置文件旁 `themes` 目录仍支持 YAML 用户主题；不再随附额外主题，不删除已有运行副本。
+  启动加载失败时显示专业深色，
   但保留原 ID；缺失字段默认 `professional_dark`。详见 [主题管理与模板](theme-management.md)。
 - 运行中可通过 `设置 -> 主题` 即时切换，无需重启，也不会重载当前协议。
   切换会把配置标记为待保存；启用自动保存时自动写回，否则使用
@@ -227,7 +228,7 @@ gui:
 - `log_history.*`：收发原始行、逐帧行、宿主日志和脚本日志保留上限。
 - `raw_capture.live_limit_bytes`：实时原始缓存上限。
 - `raw_capture.recording_queue_limit_bytes`：完整录制队列上限。
-- `transfer_log.replay_raw_history_on_schema_switch`：切换 schema 后是否重放原始历史。
+- `transfer_log.replay_raw_history_on_schema_switch`：保留读写兼容的旧键；当前不影响界面行为（切换原始/逐帧视图不再重建逐帧行）。
 - `realtime_backlog.mode`：实时追赶模式，默认 `responsive`。
 - `realtime_backlog.*_per_pump`：每轮 UI 追赶预算，缺省受 `performance.scale` 控制。默认偏向平滑刷新，`rx_chunk_bytes_per_pump` 为 `4096`，`plot_appends_per_pump` 为 `128`。
 - `realtime_backlog.raw_first_backlog_warn_bytes`：原始 backlog 首次告警阈值。
@@ -350,7 +351,7 @@ logging:
   file_path: logs/protoscope.log
 ```
 
-- `level`：`debug`、`info`、`warn`、`error`。
+- `level`：`trace`、`debug`、`info`、`warn`（`warning` 等价）、`error`。
 - `file_path`：可选日志文件路径；为空时不写入该字段。
 
 ## communication
@@ -386,8 +387,8 @@ communication:
 - `serial.port_name`：串口名。
 - `serial.baud_rate`：波特率。
 - `serial.data_bits`：数据位。
-- `serial.parity`：`none`、`even`、`odd`、`mark`、`space`。
-- `serial.stop_bits`：`one`、`onepointfive`、`two`。
+- `serial.parity`：`none`、`odd`、`even`；其余取值按 `none` 处理。
+- `serial.stop_bits`：`one`、`one_point_five`、`two`；其余取值按 `one` 处理。
 - `serial.flow_control`：`none`、`hardware`、`software`。
 - `udp_peer.bind_address` / `bind_port`：UDP 本地绑定地址和端口。
 - `udp_peer.remote_host` / `remote_port`：UDP 远端地址和端口。

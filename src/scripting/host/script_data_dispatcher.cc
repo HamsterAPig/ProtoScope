@@ -9,6 +9,10 @@ void ScriptHost::setStorageConfig(storage::Config config)
 {
     storageConfig_=config;
 }
+void ScriptHost::setOfflineRestricted(const bool restricted)
+{
+    offlineRestricted_ = restricted;
+}
 
 void ScriptHost::pollStorageCompletions()
 {

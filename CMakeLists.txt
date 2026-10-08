@@ -34,6 +34,19 @@ include(cmake/VersionInfo.cmake)
 include(cmake/Format.cmake)
 
 add_subdirectory(src)
+
+if(TARGET ProtoScope)
+    add_custom_target(protoscope_runtime_config ALL
+        COMMAND "${CMAKE_COMMAND}"
+            "-DPROTOSCOPE_RUNTIME_DIR=$<TARGET_FILE_DIR:ProtoScope>"
+            "-DPROTOSCOPE_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+            -P "${PROJECT_SOURCE_DIR}/cmake/CopyRuntimeConfig.cmake"
+        DEPENDS ProtoScope
+        COMMENT "缺失时初始化 ProtoScope 配置与主题"
+        VERBATIM
+    )
+endif()
+
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()

@@ -278,13 +278,13 @@ struct ScriptRuntimeWorker::Impl {
     ScriptRuntimeSnapshot snapshot{};
     std::size_t pendingRxBytes{0};
     bool rxBackpressureWarningActive{false};
-    bool outputQueueWarningActive{false};
     bool stopping{false};
     bool executing{false};
     std::atomic_bool failed{false};
     std::shared_ptr<std::atomic_bool> stopSignal{std::make_shared<std::atomic_bool>(false)};
     std::thread thread;
     std::condition_variable rxBackpressureChanged;
+    std::condition_variable outputBackpressureChanged;
 
     Impl()
     {
@@ -318,6 +318,7 @@ struct ScriptRuntimeWorker::Impl {
         if (shouldNotify) {
             signalCommandAvailable();
             rxBackpressureChanged.notify_all();
+            outputBackpressureChanged.notify_all();
         }
         if (thread.joinable()) {
             thread.join();
@@ -435,6 +436,7 @@ struct ScriptRuntimeWorker::Impl {
             outputs.pop_front();
         }
         snapshot.outputQueueSize = outputs.size();
+        outputBackpressureChanged.notify_all();
         return drained;
     }
 
@@ -446,8 +448,8 @@ struct ScriptRuntimeWorker::Impl {
         }
         auto batch = std::move(outputs.front());
         outputs.pop_front();
-        outputQueueWarningActive = config.outputQueueLimit > 0U && outputs.size() > config.outputQueueLimit;
         snapshot.outputQueueSize = outputs.size();
+        outputBackpressureChanged.notify_all();
         return batch;
     }
 
@@ -459,12 +461,16 @@ struct ScriptRuntimeWorker::Impl {
 
     void publishOutputs(ScriptRuntimeOutputBatch batch)
     {
-        if (!hasOutputs(batch)) {
-            return;
+        if (!hasOutputs(batch)) return;
+        std::unique_lock lock(mutex);
+        if (config.outputQueueLimit > 0U) {
+            // 输出队列达到硬上界后阻塞 worker，直到 UI drain 或取消；不再继续增长内存。
+            outputBackpressureChanged.wait(lock, [this]() {
+                return stopping || outputs.size() < config.outputQueueLimit;
+            });
+            if (stopping) return;
         }
-        std::lock_guard lock(mutex);
         outputs.push_back(std::move(batch));
-        pushOutputQueueWarningIfNeededLocked();
         snapshot.outputQueueSize = outputs.size();
     }
 
@@ -501,6 +507,7 @@ struct ScriptRuntimeWorker::Impl {
 
     void pushRxBackpressureWarningLocked(std::size_t pendingBytes, std::size_t highWaterBytes)
     {
+        if (config.outputQueueLimit > 0U && outputs.size() >= config.outputQueueLimit) return;
         ScriptRuntimeOutputBatch batch;
         batch.logs.push_back(ScriptLog{
             .level = "warn",
@@ -509,24 +516,7 @@ struct ScriptRuntimeWorker::Impl {
             .timestampMs = 0,
         });
         outputs.push_back(std::move(batch));
-        pushOutputQueueWarningIfNeededLocked();
         snapshot.outputQueueSize = outputs.size();
-    }
-
-    void pushOutputQueueWarningIfNeededLocked()
-    {
-        if (config.outputQueueLimit == 0U || outputs.size() <= config.outputQueueLimit || outputQueueWarningActive) {
-            return;
-        }
-        outputQueueWarningActive = true;
-        ScriptRuntimeOutputBatch batch;
-        batch.logs.push_back(ScriptLog{
-            .level = "warn",
-            .message = "脚本 worker 输出队列超过告警阈值，UI 将继续分帧 drain: " + std::to_string(outputs.size()) +
-                       "/" + std::to_string(config.outputQueueLimit),
-            .timestampMs = 0,
-        });
-        outputs.push_back(std::move(batch));
     }
 
     void waitUntilRxQueueBelowLowWatermark()
@@ -632,6 +622,7 @@ struct ScriptRuntimeWorker::Impl {
                 counts.plotAppends += batch.plotAppends.size();
             }
             outputs.clear();
+            outputBackpressureChanged.notify_all();
         }
         return counts;
     }
@@ -659,6 +650,7 @@ struct ScriptRuntimeWorker::Impl {
         host.setExecutionConfig(command.config.execution);
         host.setStorageRoot(command.config.storageRoot);
         host.setStorageConfig(command.config.storageConfig);
+        host.setOfflineRestricted(command.config.offlineRestricted);
         std::lock_guard lock(mutex);
         config = command.config;
         return {};
@@ -882,6 +874,12 @@ bool ScriptRuntimeWorker::idle() const
     return !impl_->executing && impl_->commands.empty() && impl_->outputs.empty();
 }
 
+bool ScriptRuntimeWorker::inputIdle() const
+{
+    std::lock_guard lock(impl_->mutex);
+    return !impl_->executing && impl_->commands.empty() && impl_->pendingRxBytes == 0U;
+}
+
 std::future<bool> ScriptRuntimeWorker::resetStreamReplayStateAsync()
 {
     auto promise = std::make_shared<std::promise<bool>>();
@@ -911,9 +909,15 @@ void ScriptRuntimeWorker::setFileIoConfig(FileIoConfig config)
 
 ScriptRuntimeLoadResult ScriptRuntimeWorker::loadProtocolDirectory(const std::string& directory)
 {
+    return loadProtocolDirectoryAsync(directory).get();
+}
+
+std::future<ScriptRuntimeLoadResult> ScriptRuntimeWorker::loadProtocolDirectoryAsync(std::string directory)
+{
     auto promise = std::make_shared<std::promise<ScriptRuntimeLoadResult>>();
-    return impl_->runSync<ScriptRuntimeLoadResult>(ReloadProtocolCommand{.directory = directory, .result = promise},
-                                                   promise);
+    auto future = promise->get_future();
+    impl_->pushCommand(ReloadProtocolCommand{.directory = std::move(directory), .result = promise});
+    return future;
 }
 
 bool ScriptRuntimeWorker::setControlValue(const std::string& id, const ControlValue& value)

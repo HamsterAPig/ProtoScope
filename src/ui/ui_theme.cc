@@ -75,22 +75,27 @@ namespace {
     {
         static const UiThemeDefinition definition = [] {
             UiThemeDefinition d;
-            d.ui.accent = rgb8(64, 183, 224);
-            d.ui.accentMuted = rgb8(64, 183, 224, .20F);
-            d.ui.success = rgb8(67, 202, 146);
-            d.ui.warning = rgb8(242, 192, 86);
-            d.ui.danger = rgb8(250, 127, 137);
-            d.ui.textStrong = rgb8(234, 242, 250);
-            d.ui.appBackground = rgb8(15, 23, 34);
-            d.ui.panelBackground = rgb8(22, 33, 47);
-            d.ui.panelBackgroundAlt = rgb8(30, 44, 60);
-            d.ui.panelBorder = rgb8(58, 77, 96);
-            d.ui.textMuted = rgb8(172, 190, 208);
-            d.ui.genericPlotBackground = d.wave.plotBackground = rgb8(10, 18, 28);
-            d.wave.gridMajor = rgb8(101, 132, 160, .22F);
-            d.wave.gridMinorTick = rgb8(130, 156, 181, .36F);
-            d.wave.gridCenter = rgb8(149, 179, 204, .40F);
+            // 中性炭灰避免大片蓝黑，正文与身份色保持可读但不再接近发光白。
+            d.ui.accent = rgb8(112, 166, 170);
+            d.ui.accentMuted = rgb8(112, 166, 170, .16F);
+            d.ui.success = rgb8(116, 180, 144);
+            d.ui.warning = rgb8(202, 174, 112);
+            d.ui.danger = rgb8(210, 139, 143);
+            d.ui.textStrong = rgb8(216, 219, 219);
+            d.ui.appBackground = rgb8(24, 25, 26);
+            d.ui.panelBackground = rgb8(30, 32, 33);
+            d.ui.panelBackgroundAlt = rgb8(38, 40, 41);
+            d.ui.panelBorder = rgb8(62, 66, 68);
+            d.ui.textMuted = rgb8(164, 170, 171);
+            d.ui.genericPlotBackground = d.wave.plotBackground = rgb8(20, 22, 23);
+            d.wave.gridMajor = rgb8(112, 118, 120, .16F);
+            d.wave.gridMinorTick = rgb8(124, 130, 132, .24F);
+            d.wave.gridCenter = rgb8(140, 148, 150, .28F);
             finishPreset(d, false);
+            d.wave.channelPalette = {rgb8(116, 190, 149), rgb8(113, 177, 204), rgb8(208, 180, 117), rgb8(174, 148, 202),
+                                     rgb8(210, 142, 151), rgb8(112, 186, 177), rgb8(211, 161, 120), rgb8(143, 167, 207)};
+            d.wave.cursorPalette = {rgb8(208, 183, 128), rgb8(120, 185, 196), rgb8(144, 170, 207), rgb8(209, 148, 161),
+                                    rgb8(134, 186, 151), rgb8(192, 153, 189), rgb8(174, 183, 190)};
             return d;
         }();
         return definition;
@@ -103,6 +108,10 @@ namespace {
             d.theme = config::GuiTheme::DebugHighContrast;
             d.ui.accent = rgb8(46, 184, 250);
             d.ui.accentMuted = rgb8(46, 184, 250, .24F);
+            // 高对比预设仍保留原来的高亮状态色，不继承低眩光版本的降饱和处理。
+            d.ui.success = rgb8(67, 202, 146);
+            d.ui.warning = rgb8(242, 192, 86);
+            d.ui.danger = rgb8(250, 127, 137);
             d.ui.textStrong = rgb8(245, 250, 255);
             d.ui.windowRounding = 4.F;
             d.ui.frameRounding = d.ui.grabRounding = d.ui.tabRounding = 3.F;
@@ -161,8 +170,24 @@ namespace {
     {
         const auto& tokens = definition.ui;
         const auto interaction = [&](float alpha) { return surfaceTint(definition, tokens.accent, alpha); };
-        // 装饰线仍使用低调 panelBorder；必要的输入/按钮边界独立从辅助文字生成。
-        const auto controlBorder = tokens.textMuted;
+        // 专业深色的必要边界从装饰灰派生，不再把辅助文字铺成一圈亮框。
+        // 验收最亮的交互表面并保留量化余量；浅色/高对比沿用已有边界行为。
+        auto controlBorder = tokens.textMuted;
+        if (definition.id == "professional_dark") {
+            controlBorder = tokens.panelBorder;
+            const auto original = controlBorder;
+            const auto selectedBackground = interaction(.22F);
+            // UI 边界不能受 wave.correct_contrast 开关影响。
+            for (int step = 0; step <= 200; ++step) {
+                const float tint = step / 200.F;
+                controlBorder = ImVec4(std::lerp(original.x, 1.F, tint), std::lerp(original.y, 1.F, tint),
+                                       std::lerp(original.z, 1.F, tint), 1.F);
+                bool readable = true;
+                for (const auto background : {tokens.panelBackground, tokens.panelBackgroundAlt, selectedBackground})
+                    readable &= plot::overviewContrast(asColor(controlBorder), asColor(background)) >= 3.2;
+                if (readable) break;
+            }
+        }
         ImGuiStyle& style = ImGui::GetStyle();
         // 每次从同一基准重建样式，防止旧主题颜色或重复缩放残留。
         style = ImGuiStyle{};
@@ -236,7 +261,7 @@ namespace {
         colors[ImGuiCol_InputTextCursor] = tokens.textStrong;
         colors[ImGuiCol_CheckboxSelectedBg] = interaction(.10F);
         colors[ImGuiCol_TabSelectedOverline] = tokens.accent;
-        colors[ImGuiCol_TabDimmedSelectedOverline] = tokens.textMuted;
+        colors[ImGuiCol_TabDimmedSelectedOverline] = controlBorder;
         colors[ImGuiCol_TextLink] = tokens.textStrong;
         colors[ImGuiCol_TreeLines] = tokens.panelBorder;
         colors[ImGuiCol_UnsavedMarker] = tokens.textStrong;
@@ -249,7 +274,7 @@ namespace {
         colors[ImGuiCol_TableRowBgAlt] = tokens.panelBackgroundAlt;
         colors[ImGuiCol_TextSelectedBg] = interaction(.22F);
         colors[ImGuiCol_SliderGrabActive] = tokens.accent;
-        colors[ImGuiCol_ResizeGrip] = tokens.textMuted;
+        colors[ImGuiCol_ResizeGrip] = controlBorder;
         colors[ImGuiCol_ResizeGripHovered] = colors[ImGuiCol_ResizeGripActive] = tokens.accent;
     }
 
@@ -434,17 +459,46 @@ void endToolbarGroup()
     ImGui::PopID();
 }
 
+bool drawUiButton(const char* label, const ImVec2& size, UiButtonRole role, bool active)
+{
+    const bool high = activeDefinition.base == "debug_high_contrast";
+    const auto& tokens = activeDefinition.ui;
+    const auto identity = role == UiButtonRole::Danger ? tokens.danger : tokens.accent;
+    // 高对比按继承基底保留原生边界；普通主题只在按钮作用域去框，不污染后续输入。
+    const bool disabled = (GImGui->CurrentItemFlags & ImGuiItemFlags_Disabled) != 0;
+    const auto normal = disabled ? ImGui::GetStyleColorVec4(ImGuiCol_Button)
+        : role == UiButtonRole::Toolbar && !active ? ImVec4(0, 0, 0, 0)
+        : role == UiButtonRole::Primary || active || role == UiButtonRole::Danger
+            ? surfaceTint(activeDefinition, identity, .16F)
+            : ImGui::GetStyleColorVec4(ImGuiCol_Button);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, high ? ImGui::GetStyle().FrameBorderSize : 0.F);
+    ImGui::PushStyleColor(ImGuiCol_Button, high
+        ? ImGui::GetStyleColorVec4(active ? ImGuiCol_HeaderActive : ImGuiCol_Button) : normal);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, high || role == UiButtonRole::Secondary
+        ? ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered) : surfaceTint(activeDefinition, identity, .18F));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, high || role == UiButtonRole::Secondary
+        ? ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive) : surfaceTint(activeDefinition, identity, .22F));
+    const bool clicked = ImGui::ButtonEx(label, size,
+        ImGui::GetStyle().FramePadding.y == 0.F ? ImGuiButtonFlags_AlignTextBaseLine : ImGuiButtonFlags_None);
+    // 当前 ImGui 原生先绘焦点再绘填充；再次绘制确保自绘侧栏等焦点不被表面遮挡。
+    ImGui::RenderNavCursor(GImGui->LastItemData.Rect, GImGui->LastItemData.ID);
+    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar();
+    return clicked;
+}
+
+bool drawUiSmallButton(const char* label, bool active)
+{
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, 0.F));
+    const bool clicked = drawUiButton(label, ImVec2(0, 0), UiButtonRole::Toolbar, active);
+    ImGui::PopStyleVar();
+    return clicked;
+}
+
 bool drawToolbarSectionButton(const char* label, const char* tooltip, bool active, const ImVec2& size)
 {
-    if (active) {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_HeaderHovered));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
-    }
-    const bool clicked = ImGui::Button(label, size.x == 0.0F && size.y == 0.0F ? ImVec2(-1.0F, 0.0F) : size);
-    if (active) {
-        ImGui::PopStyleColor(3);
-    }
+    const bool clicked = drawUiButton(label, size.x == 0.0F && size.y == 0.0F ? ImVec2(-1.0F, 0.0F) : size,
+                                      UiButtonRole::Toolbar, active);
     if (tooltip != nullptr && tooltip[0] != '\0') {
         ImGui::SetItemTooltip("%s", tooltip);
     }
@@ -462,7 +516,7 @@ void drawHeaderBadge(const char* label, const ImVec4& color, bool filled)
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, background);
     ImGui::PushStyleColor(ImGuiCol_Border, border);
     ImGui::PushStyleColor(ImGuiCol_Text, textColor);
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0F);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, activeDefinition.base == "debug_high_contrast" ? 1.F : 0.F);
     ImGui::Button(label, ImVec2(0.0F, 0.0F));
     ImGui::PopStyleVar();
     ImGui::PopStyleColor(5);
@@ -476,7 +530,7 @@ bool drawDangerIconButton(const char* label, const char* tooltip)
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, surfaceTint(activeDefinition, tokens.danger, .24F));
     ImGui::PushStyleColor(ImGuiCol_Text, tokens.textStrong);
     ImGui::PushStyleColor(ImGuiCol_Border, tokens.danger);
-    const bool clicked = ImGui::Button(label);
+    const bool clicked = drawUiButton(label, ImVec2(0, 0), UiButtonRole::Danger);
     ImGui::PopStyleColor(5);
     if (tooltip != nullptr && tooltip[0] != '\0') {
         ImGui::SetItemTooltip("%s", tooltip);
@@ -486,12 +540,7 @@ bool drawDangerIconButton(const char* label, const char* tooltip)
 
 bool drawGhostIconButton(const char* label, const char* tooltip)
 {
-    const auto& tokens = defaultUiStyleTokens();
-    ImGui::PushStyleColor(ImGuiCol_Button, tokens.panelBackground);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, surfaceTint(activeDefinition, tokens.accent, .10F));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, surfaceTint(activeDefinition, tokens.accent, .18F));
-    const bool clicked = ImGui::Button(label);
-    ImGui::PopStyleColor(3);
+    const bool clicked = drawUiButton(label, ImVec2(0, 0), UiButtonRole::Toolbar);
     if (tooltip != nullptr && tooltip[0] != '\0') {
         ImGui::SetItemTooltip("%s", tooltip);
     }

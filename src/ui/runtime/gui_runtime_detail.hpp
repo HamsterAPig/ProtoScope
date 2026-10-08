@@ -945,7 +945,7 @@ namespace {
 
     [[maybe_unused]] bool drawIconButton(const char* icon, const char* tooltip, const ImVec2& size = ImVec2(0.0F, 0.0F))
     {
-        const bool clicked = ImGui::Button(icon, size);
+        const bool clicked = drawUiButton(icon, size, UiButtonRole::Toolbar);
         drawIconTooltip(tooltip);
         return clicked;
     }
@@ -969,7 +969,7 @@ namespace {
         if (active) {
             ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
         }
-        const bool clicked = ImGui::SmallButton(label);
+        const bool clicked = drawUiSmallButton(label, active);
         if (active) {
             ImGui::PopStyleColor();
         }

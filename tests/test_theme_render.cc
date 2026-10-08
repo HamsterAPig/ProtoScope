@@ -1,4 +1,21 @@
 #include "../src/ui/wave/wave_render_service.hpp"
+#include "protoscope/app/application.hpp"
+#include "protoscope/ui/gui_runtime.hpp"
+
+namespace protoscope::ui {
+// 使用真实业务 Dock，不以控件样板冒充完整界面截图。
+struct GuiRuntimeTestAccess {
+    static void drawBusinessDocks(GuiRuntime& runtime) {
+        runtime.showCommDock_ = runtime.showProtocolDock_ = runtime.showTransferDock_ = true;
+        runtime.showLogDock_ = runtime.showScriptDock_ = true;
+        ImGui::SetNextWindowPos({0,0}); ImGui::SetNextWindowSize({330,400}); runtime.drawCommDock();
+        ImGui::SetNextWindowPos({330,0}); ImGui::SetNextWindowSize({330,400}); runtime.drawProtocolDock();
+        ImGui::SetNextWindowPos({660,0}); ImGui::SetNextWindowSize({340,400}); runtime.drawTransferDock();
+        ImGui::SetNextWindowPos({0,400}); ImGui::SetNextWindowSize({500,320}); runtime.drawLogDock();
+        ImGui::SetNextWindowPos({500,400}); ImGui::SetNextWindowSize({500,320}); runtime.drawScriptDock();
+    }
+};
+}
 
 #include <imgui_impl_opengl3.h>
 #include <GLFW/glfw3.h>
@@ -90,7 +107,10 @@ ui::UiThemeDefinition baselineTokens(config::GuiTheme theme)
 
 void verifyControls(const std::filesystem::path& directory, bool baseline)
 {
-    struct Region { ImRect bounds; ImVec4 text; double threshold; std::string control; ImU32 ink; };
+    struct Region {
+        ImRect bounds; ImVec4 text; double threshold; std::string control; ImU32 ink;
+        const ImDrawList* drawList;
+    };
     const auto actualContrast = [&](const std::vector<unsigned char>& pixels, const Region& region, const std::string& scene,
                                     ImVec2* corePosition = nullptr) {
         const auto r=region.bounds;
@@ -127,7 +147,11 @@ void verifyControls(const std::filesystem::path& directory, bool baseline)
         double maxCoverage=0;
         const auto texel=[&](int x,int y) { return atlas[((std::clamp)(y,0,atlasHeight-1)*atlasWidth+
             (std::clamp)(x,0,atlasWidth-1))*4+3]/255.; };
-        for (const auto* list : ImGui::GetDrawData()->CmdLists) for (const auto& cmd : list->CmdBuffer)
+        // 模态窗口会覆盖宿主控件；只采样目标所在绘制列表，避免把被遮挡的宿主字形当作模态正文。
+        // 字体覆盖率、实际核心颜色与正文对比度仍逐像素严格验收。
+        for (const auto* list : ImGui::GetDrawData()->CmdLists) {
+            if (list != region.drawList) continue;
+            for (const auto& cmd : list->CmdBuffer)
             for (unsigned j=cmd.IdxOffset;j+2<cmd.IdxOffset+cmd.ElemCount;j+=3) {
                 const auto& a=list->VtxBuffer[cmd.VtxOffset+list->IdxBuffer[j]];
                 const auto& b=list->VtxBuffer[cmd.VtxOffset+list->IdxBuffer[j+2]];
@@ -158,6 +182,7 @@ void verifyControls(const std::filesystem::path& directory, bool baseline)
                             std::abs(pixel.b-expected.b)<=2./255) ++renderedCore;
                     }
             }
+        }
         // 同时验证设计正文与实际可读核心；4.5/12 均不因抗锯齿而放宽。
         if (sampledCore<=3 || readableCore!=sampledCore || renderedCore!=sampledCore || minimumContrast<region.threshold ||
             plot::overviewContrast(ui::cursorOverviewColor(region.text),bg)<region.threshold) {
@@ -181,8 +206,8 @@ void verifyControls(const std::filesystem::path& directory, bool baseline)
         ui::applyUiTheme(baseline ? baselineTokens(theme) : ui::uiThemeDefinition(theme));
         const auto& t = ui::activeUiStyleTokens();
         const double threshold = theme == config::GuiTheme::DebugHighContrast ? 12 : 4.5;
-        ImRect button, danger, input, enabledButton, disabledButton;
-        for (int scene=0; scene<8; ++scene) {
+        ImRect button, danger, input, enabledButton, disabledButton, toolbar, ghost;
+        for (int scene=0; scene<12; ++scene) {
             // 截图前 CloseCurrentPopup 会恢复宿主焦点并改变同帧窗口层序，菜单实际被宿主覆盖。
             // 保持被验收弹窗展开，下一场景开始时再清理。
             if (!GImGui->OpenPopupStack.empty()) ImGui::ClosePopupToLevel(0,true);
@@ -203,23 +228,35 @@ void verifyControls(const std::filesystem::path& directory, bool baseline)
                     const auto p=danger.GetCenter(); io.AddMousePosEvent(p.x,p.y);
                     if (scene==7 && frame>0) io.AddMouseButtonEvent(0,true);
                 }
+                if (scene==10 || scene==11) {
+                    const auto p=toolbar.GetCenter(); io.AddMousePosEvent(p.x,p.y);
+                    if (scene==11 && frame>0) io.AddMouseButtonEvent(0,true);
+                }
                 ImGui_ImplOpenGL3_NewFrame(); ImGui::NewFrame();
                 regions.clear();
                 ImGui::SetNextWindowPos({0,0}); ImGui::SetNextWindowSize({width,height});
                 ImGui::Begin("Control state verification", nullptr, ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_MenuBar);
                 const auto record = [&](const std::string& control) {
                     regions.push_back({ImRect(ImGui::GetItemRectMin(),ImGui::GetItemRectMax()),t.textStrong,threshold,control,
-                        ImGui::GetColorU32(ImGuiCol_Text)});
+                        ImGui::GetColorU32(ImGuiCol_Text),ImGui::GetWindowDrawList()});
                 };
                 if (ImGui::BeginMenuBar()) {
                     if (ImGui::BeginMenu("File")) { ImGui::MenuItem("Export"); ImGui::EndMenu(); }
                     ImGui::EndMenuBar();
                 }
-                ImGui::Button("Acquire signal", {220,36}); button=ImRect(ImGui::GetItemRectMin(),ImGui::GetItemRectMax());
+                ui::drawUiButton("Acquire signal", {220,36}, ui::UiButtonRole::Primary); button=ImRect(ImGui::GetItemRectMin(),ImGui::GetItemRectMax());
                 activeButton=ImGui::IsItemActive(); record("Acquire signal");
                 ImGui::SameLine(); ui::drawDangerIconButton("Delete capture", nullptr);
                 danger=ImRect(ImGui::GetItemRectMin(),ImGui::GetItemRectMax()); record("Delete capture");
                 ImGui::SameLine(); ui::drawGhostIconButton("Options", nullptr); record("Options");
+                ghost=ImRect(ImGui::GetItemRectMin(),ImGui::GetItemRectMax());
+                if (scene==9) {
+                    ImGui::SetKeyboardFocusHere();
+                    GImGui->NavCursorVisible=true;
+                }
+                ui::drawToolbarSectionButton("Tools", nullptr, scene==8, {140,32}); record("Tools");
+                toolbar=ImRect(ImGui::GetItemRectMin(),ImGui::GetItemRectMax());
+                if (scene==9) check(ImGui::GetStyle().FrameBorderSize==1.F,"toolbar polluted input border size");
                 ui::drawHeaderBadge("Connected",t.success,true); record("Connected");
                 ImGui::SameLine(); ui::drawHeaderBadge("Warning",t.warning,false); record("Warning");
                 char value[64]="Signal 123";
@@ -246,17 +283,17 @@ void verifyControls(const std::filesystem::path& directory, bool baseline)
                     }
                     ImGui::EndTable();
                 }
-                ImGui::Button("Unavailable##enabled",{220,32});
+                ui::drawUiButton("Unavailable##enabled",{220,32});
                 enabledButton=ImRect(ImGui::GetItemRectMin(),ImGui::GetItemRectMax()); record("Unavailable enabled");
                 ImGui::SameLine();
-                ui::beginDisabled(); ImGui::Button("Unavailable##disabled",{220,32});
+                ui::beginDisabled(); ui::drawUiButton("Unavailable##disabled",{220,32});
                 disabledButton=ImRect(ImGui::GetItemRectMin(),ImGui::GetItemRectMax());
                 const auto alpha=ImGui::GetStyle().Alpha;
                 auto fill=ui::cursorOverviewColor(ImGui::GetStyleColorVec4(ImGuiCol_Button)); fill.a*=alpha;
                 const auto disabledBg=plot::compositeOverviewColor(fill,ui::cursorOverviewColor(t.appBackground));
                 auto text=ui::cursorOverviewColor(ImGui::GetStyleColorVec4(ImGuiCol_Text)); text.a*=alpha;
                 regions.push_back({disabledButton,ui::cursorImVec(plot::compositeOverviewColor(text,disabledBg)),threshold,
-                    "Unavailable disabled",ImGui::GetColorU32(ImGuiCol_Text)});
+                    "Unavailable disabled",ImGui::GetColorU32(ImGuiCol_Text),ImGui::GetWindowDrawList()});
                 check(!ImGui::IsItemActive(),"disabled button became active");
                 ui::endDisabled();
                 if (scene==4) ImGui::OpenPopup("Actions");
@@ -328,16 +365,66 @@ void verifyControls(const std::filesystem::path& directory, bool baseline)
                 }
                 check(different>30,"enabled/disabled buttons visually identical");
                 const auto border=ImGui::GetStyleColorVec4(ImGuiCol_Border);
-                check(matchingPixels(pixels,border,button.Min,button.Max)>10,"control boundary pixels missing");
-                const int x=int(button.Min.x+12), y=int(button.Min.y+4);
+                check(matchingPixels(pixels,border,input.Min,input.Max)>10,"necessary input boundary pixels missing");
+                if (theme != config::GuiTheme::DebugHighContrast) {
+                    // 仅采样边缘带，避免把正文或状态填充误认为常驻边框。
+                    check(matchingPixels(pixels,border,button.Min,ImVec2(button.Max.x,button.Min.y+2))==0,
+                          "ordinary button retained permanent contrast border");
+                    check(matchingPixels(pixels,border,ghost.Min,ImVec2(ghost.Max.x,ghost.Min.y+2))==0,
+                          "ghost retained permanent contrast border");
+                }
+                if (scene==9)
+                    check(matchingPixels(pixels,ImGui::GetStyleColorVec4(ImGuiCol_NavCursor),
+                        ImVec2(toolbar.Min.x-4,toolbar.Min.y-4),ImVec2(toolbar.Max.x+4,toolbar.Max.y+4))>10,
+                          "toolbar keyboard focus pixels missing");
+                const int x=int(input.Min.x+12), y=int(input.Min.y+4);
                 const auto i=((height-1-y)*width+x)*3;
                 const plot::OverviewColor bg{pixels[i]/255.,pixels[i+1]/255.,pixels[i+2]/255.,1};
                 check(plot::overviewContrast(ui::cursorOverviewColor(border),bg)>=3,"control border/background contrast");
+                if (theme == config::GuiTheme::ProfessionalDark) {
+                    check(plot::overviewLuminance(ui::cursorOverviewColor(border)) <
+                          plot::overviewLuminance(ui::cursorOverviewColor(t.textMuted)) * .75,
+                          "professional dark border regressed to bright text color");
+                    check(std::abs(border.x-border.z)<.04F,"professional dark control border is not neutral grey");
+                }
             }
             std::cout<<name<<" per-control pixels verified\n";
         }
     }
     io.AddMouseButtonEvent(0,false); io.AddMousePosEvent(-100,-100);
+}
+
+void verifyBusinessDocks(const std::filesystem::path& directory)
+{
+    app::Application application;
+    config::ConfigStore configs;
+    ui::GuiRuntime runtime(application, configs);
+    for (auto theme : {config::GuiTheme::ProfessionalDark, config::GuiTheme::ProfessionalLight,
+                       config::GuiTheme::DebugHighContrast}) {
+        ui::applyUiTheme(theme);
+        for (int frame=0; frame<4; ++frame) {
+            ImGui_ImplOpenGL3_NewFrame(); ImGui::NewFrame();
+            ui::GuiRuntimeTestAccess::drawBusinessDocks(runtime);
+            ImGui::Render();
+            check(ImGui::GetDrawData()->TotalVtxCount>0,"business dock draw data missing");
+            const auto& t=ui::activeUiStyleTokens();
+            glViewport(0,0,width,height); glClearColor(t.appBackground.x,t.appBackground.y,t.appBackground.z,1);
+            glClear(GL_COLOR_BUFFER_BIT); ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData()); glFinish();
+        }
+        capture(directory,std::string(config::guiThemeId(theme))+"-business-docks");
+        bool visible=true;
+        ui::WaveDockRenderer waveRenderer(application);
+        for (int frame=0; frame<4; ++frame) {
+            ImGui_ImplOpenGL3_NewFrame(); ImGui::NewFrame();
+            ImGui::SetNextWindowPos({0,0}); ImGui::SetNextWindowSize({float(width),float(height)});
+            waveRenderer.draw(visible);
+            ImGui::Render();
+            const auto& t=ui::activeUiStyleTokens();
+            glClearColor(t.appBackground.x,t.appBackground.y,t.appBackground.z,1); glClear(GL_COLOR_BUFFER_BIT);
+            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData()); glFinish();
+        }
+        capture(directory,std::string(config::guiThemeId(theme))+"-wave-dock-rail");
+    }
 }
 
 void verifyReadoutLabels(const std::filesystem::path& directory)
@@ -537,6 +624,7 @@ int main(int argc, char** argv)
         const bool controlsOnly=argc>1 && std::string(argv[1])=="--controls-only";
         if (!controlsOnly) verify(directory);
         if (!controlsOnly) verifyReadoutLabels(directory);
+        if (!controlsOnly) verifyBusinessDocks(directory);
         verifyControls(controlsOnly ? std::filesystem::path{} : directory,false);
         if (!controlsOnly) verifyControls(directory,true);
     }

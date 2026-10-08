@@ -285,6 +285,181 @@ void testIrregularAnalogEdges()
             "analog query must reuse summary index");
 }
 
+void testStableAppendTail()
+{
+    std::vector<WaveSample> samples;
+    samples.reserve(7000);
+    for (std::size_t i = 0; i < 5000; ++i)
+        samples.push_back({static_cast<double>(i), std::sin(static_cast<double>(i) * 0.071) * 20.0 +
+                                                   static_cast<double>(i % 17)});
+
+    WaveSummaryIndex index;
+    ChannelView channel;
+    channel.samples = samples.data();
+    channel.totalSamples = samples.size();
+    channel.summaryIndex = &index;
+    const auto queryTrace = [&](std::size_t budget, WaveQueryCounters* counters = nullptr) {
+        index.synchronize({samples.data(), samples.size()}, 0);
+        channel.samples = samples.data();
+        channel.totalSamples = samples.size();
+        const WaveQueryView query(
+            channel, WaveTimeAxisSource::ScriptTime, 0, WaveDisplayFormula::OffsetThenScale);
+        return query.traceIndices(0.0, 8191.0, budget, counters, true, WaveDownsampleMode::StableEdges);
+    };
+
+    auto previous = queryTrace(80);
+    for (std::size_t appended = 5000; appended < 5030; ++appended) {
+        samples.push_back({static_cast<double>(appended),
+                           std::sin(static_cast<double>(appended) * 0.193) * 100.0 +
+                               static_cast<double>((appended * 37) % 53)});
+        const auto current = queryTrace(80);
+        require(current.size() <= 80 && std::ranges::is_sorted(current) &&
+                    std::adjacent_find(current.begin(), current.end()) == current.end(),
+                "stable append tail keeps strict ordered unique budget");
+        require(std::ranges::find(current, appended - 1) != current.end(),
+                "stable append tail continuously retains previous latest sample");
+        require(std::ranges::find(current, appended) != current.end(),
+                "stable append tail retains latest true sample");
+        const auto oldClosedEnd = std::ranges::lower_bound(previous, std::size_t{4096});
+        const auto newClosedEnd = std::ranges::lower_bound(current, std::size_t{4096});
+        require(std::vector<std::size_t>(previous.begin(), oldClosedEnd) ==
+                    std::vector<std::size_t>(current.begin(), newClosedEnd),
+                "closed buckets must not reorder during point appends");
+        require(std::ranges::find(current, std::size_t{4096}) != current.end(),
+                "open tail keeps fixed bucket anchor");
+        const auto latestBegin = appended > 6 ? appended - 6 : 0;
+        for (auto i = latestBegin; i <= appended; ++i)
+            require(std::ranges::find(current, i) != current.end(),
+                    "open tail keeps at most seven contiguous latest raw samples");
+        previous = current;
+    }
+
+    // 低预算也必须先保留左 guard、固定视口锚点和七个连续真实尾点，不能被整窗摘要替换。
+    for (std::size_t append = 0; append < 3; ++append) {
+        if (append > 0) {
+            const auto index = samples.size();
+            samples.push_back({static_cast<double>(index),
+                               std::cos(static_cast<double>(index) * 0.317) * 130.0});
+        }
+        index.synchronize({samples.data(), samples.size()}, 0);
+        channel.samples = samples.data();
+        channel.totalSamples = samples.size();
+        const WaveQueryView query(
+            channel, WaveTimeAxisSource::ScriptTime, 0, WaveDisplayFormula::OffsetThenScale);
+        const auto [visibleBegin, visibleEnd] = query.range(100.5, 8191.0, false);
+        const auto [guardBegin, guardEnd] = query.range(100.5, 8191.0, true);
+        require(guardBegin + 1 == visibleBegin && guardEnd == visibleEnd,
+                "low-budget append fixture must have a left guard and include global latest");
+        const auto latest = samples.size() - 1;
+        for (const auto budget : {9U, 10U, 17U}) {
+            const auto trace = query.traceIndices(
+                100.5, 8191.0, budget, nullptr, true, WaveDownsampleMode::StableEdges);
+            require(trace.size() <= budget && std::ranges::is_sorted(trace) &&
+                        std::adjacent_find(trace.begin(), trace.end()) == trace.end(),
+                    "low-budget append tail keeps strict ordered unique budget");
+            require(trace.front() == guardBegin &&
+                        std::ranges::find(trace, visibleBegin) != trace.end(),
+                    "low-budget append tail keeps left guard and fixed viewport anchor");
+            for (auto i = latest - 6; i <= latest; ++i)
+                require(std::ranges::find(trace, i) != trace.end(),
+                        "low-budget append tail keeps seven continuous latest raw samples");
+        }
+    }
+
+    for (std::size_t i = samples.size(); i <= 5120; ++i)
+        samples.push_back({static_cast<double>(i), std::cos(static_cast<double>(i) * 0.117) * 70.0});
+    const auto boundary = queryTrace(80);
+    require(std::ranges::find(boundary, std::size_t{5120}) != boundary.end(),
+            "new open bucket starts at the cross-boundary latest sample");
+    samples.push_back({5121.0, -321.0});
+    const auto afterBoundary = queryTrace(80);
+    const auto boundaryClosedEnd = std::ranges::lower_bound(boundary, std::size_t{5120});
+    const auto afterClosedEnd = std::ranges::lower_bound(afterBoundary, std::size_t{5120});
+    require(std::vector<std::size_t>(boundary.begin(), boundaryClosedEnd) ==
+                std::vector<std::size_t>(afterBoundary.begin(), afterClosedEnd),
+            "newly closed bucket remains fixed after crossing boundary");
+
+    for (const auto budget : {17U, 18U, 80U, 300U, 600U, 1200U}) {
+        WaveQueryCounters counters;
+        const auto trace = queryTrace(budget, &counters);
+        require(trace.size() <= budget, "stable append budgets 17 18 80 300 600 1200");
+        require(std::ranges::find(trace, samples.size() - 1) != trace.end(),
+                "all stable append budgets keep latest truth");
+        const auto bucketBound = budget < 18 ? std::size_t{1} : (budget - 2) / 8;
+        require(counters.rawSamples <= WaveSummaryIndex::blockSize * 2 * (bucketBound + 2),
+                "stable append raw access stays bounded by budget, not total sample count");
+        if (budget == 80)
+            require(counters.summaryHits > 0, "stable append closed buckets keep using summary index");
+    }
+}
+
+void testStableRightGuardIsolation()
+{
+    std::vector<WaveSample> samples;
+    samples.reserve(7000);
+    double time = -200.0;
+    for (std::size_t i = 0; i < 6000; ++i) {
+        time += i % 4 == 0 ? 0.5 : 1.25;
+        samples.push_back({time, std::sin(static_cast<double>(i) * 0.037) * 10.0});
+    }
+    ChannelView channel;
+    channel.samples = samples.data();
+    channel.totalSamples = samples.size();
+    const WaveQueryView query(
+        channel, WaveTimeAxisSource::ScriptTime, 0, WaveDisplayFormula::OffsetThenScale);
+    const auto minTime = samples[300].time + 0.1;
+    const auto maxTime = samples[4500].time + 0.1;
+    const auto [visibleBegin, visibleEnd] = query.range(minTime, maxTime, false);
+    const auto [guardBegin, guardEnd] = query.range(minTime, maxTime, true);
+    require(guardBegin + 1 == visibleBegin && guardEnd == visibleEnd + 1,
+            "fixture must contain both viewport guards");
+    const auto before = query.traceIndices(
+        minTime, maxTime, 80, nullptr, true, WaveDownsampleMode::StableEdges);
+    require(before.front() == guardBegin && before.back() == visibleEnd,
+            "stable trace keeps guards only as connection points");
+    samples[visibleEnd].value = 1e100;
+    const auto after = query.traceIndices(
+        minTime, maxTime, 80, nullptr, true, WaveDownsampleMode::StableEdges);
+    require(before == after, "right guard value must not compete in viewport buckets");
+
+    std::vector<WaveSample> equalTimeSamples{{0.0, 1.0}, {1.0, 4.0}, {1.0, -3.0}, {2.0, 8.0}};
+    ChannelView equalTimeChannel;
+    equalTimeChannel.samples = equalTimeSamples.data();
+    equalTimeChannel.totalSamples = equalTimeSamples.size();
+    const WaveQueryView equalTimeQuery(
+        equalTimeChannel, WaveTimeAxisSource::ScriptTime, 0, WaveDisplayFormula::OffsetThenScale);
+    const auto [zeroBegin, zeroEnd] = equalTimeQuery.range(1.0, 1.0, false);
+    const auto [zeroGuardBegin, zeroGuardEnd] = equalTimeQuery.range(1.0, 1.0, true);
+    require(zeroBegin == 1 && zeroEnd == 3 && zeroGuardBegin == 0 && zeroGuardEnd == 4,
+            "zero-span fixture must contain equal-time samples and both guards");
+    const auto zeroBefore = equalTimeQuery.traceIndices(
+        1.0, 1.0, 80, nullptr, true, WaveDownsampleMode::StableEdges);
+    require(zeroBefore.size() <= 80 && zeroBefore.front() == zeroGuardBegin && zeroBefore.back() == zeroEnd,
+            "degenerate width stable trace retains right guard within budget");
+    equalTimeSamples[zeroEnd].value = 1e200;
+    const auto zeroAfter = equalTimeQuery.traceIndices(
+        1.0, 1.0, 80, nullptr, true, WaveDownsampleMode::StableEdges);
+    require(zeroBefore == zeroAfter,
+            "degenerate width right guard value must not change viewport candidates");
+
+    std::vector<WaveSample> clipped(samples.begin() + 200, samples.end());
+    WaveSummaryIndex index;
+    index.synchronize({clipped.data(), clipped.size()}, 200);
+    ChannelView clippedChannel = channel;
+    clippedChannel.samples = clipped.data();
+    clippedChannel.totalSamples = clipped.size();
+    clippedChannel.sampleIndexOffset = 200;
+    clippedChannel.summaryIndex = &index;
+    const WaveQueryView clippedQuery(
+        clippedChannel, WaveTimeAxisSource::ScriptTime, 0, WaveDisplayFormula::OffsetThenScale);
+    WaveQueryCounters counters;
+    const auto clippedTrace = clippedQuery.traceIndices(
+        minTime, maxTime, 80, &counters, true, WaveDownsampleMode::StableEdges);
+    require(clippedTrace.size() <= 80 && clippedTrace.back() < clipped.size(),
+            "trimmed stable trace keeps local indices and budget");
+    require(counters.summaryHits > 0, "trimmed stable trace hits summaries");
+}
+
 void testLegacyUniform()
 {
     std::vector<WaveSample> samples;
@@ -347,6 +522,8 @@ int main()
 {
     try {
         testLegacyUniform();
+        testStableAppendTail();
+        testStableRightGuardIsolation();
         testAnalogEdgeStability();
         testIrregularAnalogEdges();
         testDigitalFidelity();

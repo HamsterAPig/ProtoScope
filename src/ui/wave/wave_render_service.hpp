@@ -63,6 +63,13 @@ inline float wavePhosphorDepositionAlpha(ImVec4 color)
 
 inline ImU32 cursorGuardColor(ImVec4 color)
 {
+    if (activeThemeDefinition().id == "professional_dark") {
+        // 可读身份色用炭灰护线隔开波形；暗手动色仍需要可读灰护线，不能直接隐去。
+        const auto background = activeWaveStyleTokens().plotBackground;
+        const auto guard = plot::overviewContrast(cursorOverviewColor(color), cursorOverviewColor(background)) >= 3
+            ? background : displayColor(activeUiStyleTokens().textMuted, background);
+        return ImGui::ColorConvertFloat4ToU32(guard);
+    }
     return plot::overviewLuminance(cursorOverviewColor(color)) > .35 ? IM_COL32(0, 0, 0, 255) : IM_COL32(255, 255, 255, 255);
 }
 

@@ -86,7 +86,7 @@ PR 合并前必须通过 `Merge CI`：
 - 使用 MSVC Release 构建 `ProtoScope.exe`。
 - 用 `dumpbin /DEPENDENTS` 确认不依赖 MinGW/MSYS 运行时 DLL。
 - 执行完整 CTest。
-- 生成独立 `.exe`、包含 `README.md` / `LICENSE` / 默认配置样例 / docs 目录 / Lua 协议样板的 `.zip` 和 SHA256 校验文件，并在上传前展开 zip 校验必需文件。
+- 生成包含 `ProtoScope.exe`、`README.md` / `LICENSE` / 默认配置与 `config/themes` / docs 目录 / Lua 协议样板的完整 `.zip` 和 SHA256 校验文件，并在上传前展开 zip 校验必需文件；不再发布缺少外部主题资源的裸 `.exe`。
 - 基于上一个正式 `vX.Y.Z` 标签到当前 HEAD 的提交生成发布说明。
 - 创建或更新草稿 GitHub Release；重复运行时也要刷新 release notes。
 
@@ -95,15 +95,16 @@ PR 合并前必须通过 `Merge CI`：
 从 GitHub Actions artifact 或草稿 Release 下载资产后，至少检查：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\ProtoScope-windows-x64-<tag>.exe
+Get-FileHash -Algorithm SHA256 .\ProtoScope-windows-x64-<tag>.zip
 Expand-Archive .\ProtoScope-windows-x64-<tag>.zip -DestinationPath .\release-check
-.\ProtoScope-windows-x64-<tag>.exe --diagnose-renderer-probe --renderer=d3d11
-.\ProtoScope-windows-x64-<tag>.exe --diagnose --renderer=d3d11
+.\release-check\ProtoScope-windows-x64-<tag>\ProtoScope.exe --diagnose-renderer-probe --renderer=d3d11
+.\release-check\ProtoScope-windows-x64-<tag>\ProtoScope.exe --diagnose --renderer=d3d11
 ```
 
 人工打开 GUI 后确认：
 
-- zip 内的发布目录包含 `ProtoScope.exe`、`README.md`、`LICENSE`、`config/protoscope.yaml`、README 引用的核心 `docs/*.md`、顶层 Lua 示例 `main.lua`、`protocols/protoscope_api.lua` 和 `protocols/templates/oscilloscope_control/main.lua`，并且不包含本机 `config/ui/protocol-control-state.yaml`。
+- zip 内的发布目录包含 `ProtoScope.exe`、`README.md`、`LICENSE`、`config/protoscope.yaml`、用户主题目录 `config/themes`、README 引用的核心 `docs/*.md`、顶层 Lua 示例 `main.lua`、`protocols/protoscope_api.lua` 和 `protocols/templates/oscilloscope_control/main.lua`，并且不包含本机 `config/ui/protocol-control-state.yaml`。
+- “设置 → 主题”可见专业深色、专业浅色、仪器深黑（高对比）；用户 YAML 主题仍可发现。逐一切换检查顶部栏、状态栏、工具栏、主波形和 Lua 控件；普通按钮无常驻亮框，输入边界与键盘焦点清晰。
 - 默认协议列表可见，`default_protocol`、`lua_waveform_demo` 和半双工示例可加载。
 - Lua Dock 控件能触发脚本回调。
 - 波形 Dock 的播放/暂停按钮能触发 `on_oscilloscope_toggle()`。

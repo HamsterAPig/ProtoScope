@@ -139,6 +139,10 @@ if(MINGW)
 endif()
 target_compile_features(protoscope_scripting PUBLIC cxx_std_20)
 target_compile_definitions(protoscope_scripting PRIVATE SOL_ALL_SAFETIES_ON=1)
+if(MINGW)
+    # Debug 全量构建会重新生成此大型对象；仅该源文件使用 PE/COFF 大对象格式。
+    set_source_files_properties(scripting/host/script_host_core.cc PROPERTIES COMPILE_OPTIONS "-Wa,-mbig-obj")
+endif()
 
 add_library(protoscope_elf_static_view STATIC
     plugin/elf_static_view_bridge.cc
@@ -248,6 +252,10 @@ target_link_libraries(protoscope_app
         yaml-cpp::yaml-cpp
 )
 target_compile_features(protoscope_app PUBLIC cxx_std_20)
+if(MINGW)
+    # Debug 全量构建会重新生成此大型对象；仅该源文件使用 PE/COFF 大对象格式。
+    set_source_files_properties(app/application.cc PROPERTIES COMPILE_OPTIONS "-Wa,-mbig-obj")
+endif()
 
 add_library(protoscope_update_check STATIC
     ui/update_check.cc

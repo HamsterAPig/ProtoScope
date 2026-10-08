@@ -123,14 +123,14 @@ namespace {
             ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", error.c_str());
         }
         ImGui::Spacing();
-        if (ImGui::Button(confirmLabel, ImVec2(90.0F, 0.0F))) {
+        if (drawUiButton(confirmLabel, ImVec2(90.0F, 0.0F), UiButtonRole::Primary)) {
             onConfirm(path);
             if (!open) {
                 ImGui::CloseCurrentPopup();
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
+        if (drawUiButton("取消", ImVec2(90.0F, 0.0F))) {
             open = false;
             opened = false;
             error.clear();
@@ -169,12 +169,12 @@ void GuiRuntime::drawAboutDialog()
     ImGui::Text("邮箱: %s", build::kAuthorEmail);
     ImGui::Spacing();
 
-    if (ImGui::Button("复制项目地址")) {
+    if (drawUiButton("复制项目地址")) {
         ImGui::SetClipboardText(build::kProjectUrl);
         application_.setStatusMessage("项目地址已复制", false);
     }
     ImGui::SameLine();
-    if (ImGui::Button("打开项目地址")) {
+    if (drawUiButton("打开项目地址")) {
 #if defined(_WIN32)
         ShellExecuteA(nullptr, "open", build::kProjectUrl, nullptr, nullptr, SW_SHOWNORMAL);
 #else
@@ -182,7 +182,7 @@ void GuiRuntime::drawAboutDialog()
 #endif
     }
     ImGui::SameLine();
-    if (ImGui::Button("关闭")) {
+    if (drawUiButton("关闭")) {
         ImGui::CloseCurrentPopup();
     }
 
@@ -236,7 +236,7 @@ void GuiRuntime::drawShortcutHelpDialog()
     drawSection("波形 Dock", ShortcutScope::WaveDock);
 
     ImGui::Spacing();
-    if (ImGui::Button("关闭")) {
+    if (drawUiButton("关闭")) {
         ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
@@ -287,13 +287,13 @@ void GuiRuntime::drawAlgorithmHelpDialog()
 
         protoscope::ui::beginDisabled(algorithmHelpMatches_.empty());
         ImGui::TableSetColumnIndex(1);
-        if (ImGui::Button("上一个", ImVec2(-1.0F, 0.0F))) {
+        if (drawUiButton("上一个", ImVec2(-1.0F, 0.0F))) {
             algorithmHelpCurrentMatchOrdinal_ =
                 previousAlgorithmHelpMatchOrdinal(algorithmHelpMatches_, algorithmHelpCurrentMatchOrdinal_);
             algorithmHelpScrollToCurrent_ = algorithmHelpCurrentMatchOrdinal_ != kNoAlgorithmHelpMatch;
         }
         ImGui::TableSetColumnIndex(2);
-        if (ImGui::Button("下一个", ImVec2(-1.0F, 0.0F))) {
+        if (drawUiButton("下一个", ImVec2(-1.0F, 0.0F))) {
             algorithmHelpCurrentMatchOrdinal_ =
                 nextAlgorithmHelpMatchOrdinal(algorithmHelpMatches_, algorithmHelpCurrentMatchOrdinal_);
             algorithmHelpScrollToCurrent_ = algorithmHelpCurrentMatchOrdinal_ != kNoAlgorithmHelpMatch;
@@ -306,7 +306,7 @@ void GuiRuntime::drawAlgorithmHelpDialog()
         ImGui::Text("匹配 %zu / %zu", displayOrdinal, algorithmHelpMatches_.size());
 
         ImGui::TableSetColumnIndex(4);
-        if (ImGui::Button("关闭", ImVec2(-1.0F, 0.0F))) {
+        if (drawUiButton("关闭", ImVec2(-1.0F, 0.0F))) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndTable();
@@ -393,13 +393,13 @@ void GuiRuntime::drawUpdateCheckDialog()
     }
 
     ImGui::Spacing();
-    if (!updateCheckInProgress_ && ImGui::Button("重新检查")) {
+    if (!updateCheckInProgress_ && drawUiButton("重新检查")) {
         startUpdateCheck();
     }
     if (!updateCheckInProgress_) {
         ImGui::SameLine();
     }
-    if (ImGui::Button("打开项目地址")) {
+    if (drawUiButton("打开项目地址")) {
 #if defined(_WIN32)
         ShellExecuteA(nullptr, "open", build::kProjectUrl, nullptr, nullptr, SW_SHOWNORMAL);
 #else
@@ -407,7 +407,7 @@ void GuiRuntime::drawUpdateCheckDialog()
 #endif
     }
     ImGui::SameLine();
-    if (ImGui::Button("关闭")) {
+    if (drawUiButton("关闭")) {
         ImGui::CloseCurrentPopup();
     }
 
@@ -476,15 +476,15 @@ void GuiRuntime::drawDialogs()
     };
 
     if (dialog.kind == scripting::DialogKind::Confirm) {
-        if (ImGui::Button("确认", ImVec2(90.0F, 0.0F))) {
+        if (drawUiButton("确认", ImVec2(90.0F, 0.0F), UiButtonRole::Primary)) {
             respond("confirmed", true);
         }
         ImGui::SameLine();
-        if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
+        if (drawUiButton("取消", ImVec2(90.0F, 0.0F))) {
             respond("canceled", false);
         }
     } else {
-        if (ImGui::Button("关闭", ImVec2(90.0F, 0.0F))) {
+        if (drawUiButton("关闭", ImVec2(90.0F, 0.0F))) {
             respond("closed", std::nullopt);
         }
     }
@@ -546,7 +546,8 @@ void GuiRuntime::openUnifiedDataImport()
     focusUnifiedDataDialog_ = true;
     unifiedDataError_.clear();
     unifiedExportMode_ = false;
-    importParseWaveform_ = false;
+    importProcessingMode_ = 0;
+    importReplayPacing_ = 1;
     unifiedDataDialogOpen_ = true;
 #if defined(_WIN32)
     const auto path = builtinFileDialog(window_, L"导入数据",
@@ -680,11 +681,27 @@ void GuiRuntime::drawUnifiedDataDialog()
                 ImGui::TextWrapped("波形范围: %s", status.metadata.waveform->rangeDescription.c_str());
             if (status.includesRecords) ImGui::TextWrapped("收发范围: %s", status.metadata.rangeDescription.c_str());
             if (status.includesRecords && !status.metadata.waveform) {
-                protoscope::ui::beginDisabled(!application_.docks().luaState().loaded);
-                ImGui::Checkbox("使用当前协议解析波形", &importParseWaveform_);
-                protoscope::ui::endDisabled();
+                ImGui::TextUnformatted("处理方式（互斥，默认不执行 Lua）");
+                ImGui::RadioButton("仅浏览原始 RX/TX", &importProcessingMode_, 0);
+                ImGui::RadioButton("使用当前磁盘协议重新解析", &importProcessingMode_, 1);
+                if (status.hasPackageProtocol) {
+                    ImGui::RadioButton("使用现场包内协议重新解析（执行外部 Lua）", &importProcessingMode_, 2);
+                }
+                if (importProcessingMode_ != 0) {
+                    ImGui::Combo("重放节奏", &importReplayPacing_, "按原始时间轴\0快速分批解析\0");
+                }
             }
-            if (ImGui::Button("确认替换并导入")) application_.confirmDataImport(importParseWaveform_);
+            if (drawUiButton("确认替换并导入", ImVec2(0, 0), UiButtonRole::Danger)) {
+                const auto processing = importProcessingMode_ == 1
+                                            ? app::Application::OfflineReplayProcessing::CurrentProtocol
+                                            : importProcessingMode_ == 2
+                                                  ? app::Application::OfflineReplayProcessing::PackageProtocol
+                                                  : app::Application::OfflineReplayProcessing::BrowseRaw;
+                const auto pacing = importReplayPacing_ == 0
+                                        ? app::Application::OfflineReplayPacing::OriginalTimeline
+                                        : app::Application::OfflineReplayPacing::FastBatchParse;
+                application_.confirmDataImport(processing, pacing);
+            }
         } else {
             const float progress = status.total ? static_cast<float>(status.submitted) / static_cast<float>(status.total) :
                                    status.complete ? 1.0F : 0.0F;
@@ -695,7 +712,7 @@ void GuiRuntime::drawUnifiedDataDialog()
             if (status.complete) ImGui::TextUnformatted(status.canceled ? "已取消" :
                 status.error.empty() ? "任务完成" : "任务失败");
         }
-        if (status.active && ImGui::Button("取消任务")) application_.cancelDataTransfer();
+        if (status.active && drawUiButton("取消任务")) application_.cancelDataTransfer();
         if (!status.error.empty()) ImGui::TextWrapped("%s", status.error.c_str());
     } else if (unifiedExportMode_) {
         if (ImGui::Combo("内容", &dataExportDraft_.content, "波形数据\0收发原始记录\0逐帧分析结果\0完整现场\0")) {
@@ -724,7 +741,7 @@ void GuiRuntime::drawUnifiedDataDialog()
                 ImGui::InputScalar("结束时间 (ms)", ImGuiDataType_U64, &dataRecordEndMs_);
             }
         }
-        if (ImGui::Button("选择文件并导出")) submitUnifiedDataExport();
+        if (drawUiButton("选择文件并导出", ImVec2(0, 0), UiButtonRole::Primary)) submitUnifiedDataExport();
     }
     if (unifiedExportMode_ && status.complete && !status.active) {
         ImGui::TextUnformatted(status.canceled ? "导出已取消" : status.error.empty() ? "导出完成" : "导出失败");
@@ -1141,38 +1158,19 @@ void GuiRuntime::openElfStaticAddressDialog()
 void GuiRuntime::importRawCaptureFromPath(const std::filesystem::path& path)
 {
     rememberFileDialogPath(path, false);
-    // 核心流程：原生对话框和非 Windows 回退弹窗共用同一条导入链路，避免两套行为分叉。
     rawCaptureImportPath_ = fileDialogPathText(path);
-    std::string error;
-    const auto capture = plot::readRawCaptureFile(path, error);
-    if (!capture.has_value()) {
-        rawCaptureImportError_ = error;
-        application_.setStatusMessage("原始波形导入失败: " + error);
-        return;
-    }
-    std::error_code protocolEntryError;
-    if (!std::filesystem::exists(configStore_.mainLuaPath(capture->protocolDir), protocolEntryError)) {
-        rawCaptureImportError_ = "导入文件引用的协议目录不存在: " + capture->protocolDir;
-        if (protocolEntryError) {
-            rawCaptureImportError_ += " (" + protocolEntryError.message() + ")";
-        }
+    rawCaptureImportError_.clear();
+    unifiedDataPath_ = rawCaptureImportPath_;
+    unifiedExportMode_ = false;
+    unifiedDataDialogOpen_ = true;
+    importProcessingMode_ = 0;
+    importReplayPacing_ = 1;
+    if (!application_.startDataImport(path, rawCaptureImportError_)) {
         application_.setStatusMessage("原始波形导入失败: " + rawCaptureImportError_);
         return;
     }
-
-    const auto& currentLua = application_.docks().luaState();
-    if (currentLua.protocolDir != capture->protocolDir && !switchProtocolWorkspace(capture->protocolDir, false)) {
-        rawCaptureImportError_ = "切换导入协议失败";
-        application_.setStatusMessage("原始波形导入失败: " + rawCaptureImportError_);
-    } else if (!application_.importWaveRawCapture(*capture, error)) {
-        rawCaptureImportError_ = error;
-        application_.setStatusMessage("原始波形导入失败: " + error);
-    } else {
-        application_.setStatusMessage("原始波形导入成功");
-        rawCaptureImportDialogOpen_ = false;
-        rawCaptureImportDialogOpened_ = false;
-        rawCaptureImportError_.clear();
-    }
+    rawCaptureImportDialogOpen_ = false;
+    rawCaptureImportDialogOpened_ = false;
 }
 
 void GuiRuntime::importCsvDataFromPath(const std::filesystem::path& path)
@@ -1204,34 +1202,13 @@ void GuiRuntime::importCsvDataFromPath(const std::filesystem::path& path)
         return;
     }
 
-    const auto capture = plot::readRawCaptureCsvFile(path, error);
-    if (!capture.has_value()) {
-        csvDataImportError_ = error;
-        application_.setStatusMessage("CSV 数据导入失败: " + error);
-        return;
-    }
-    std::error_code protocolEntryError;
-    if (!capture->protocolDir.empty() &&
-        !std::filesystem::exists(configStore_.mainLuaPath(capture->protocolDir), protocolEntryError)) {
-        csvDataImportError_ = "导入文件引用的协议目录不存在: " + capture->protocolDir;
-        if (protocolEntryError) {
-            csvDataImportError_ += " (" + protocolEntryError.message() + ")";
-        }
+    unifiedDataPath_ = csvDataImportPath_;
+    unifiedExportMode_ = false;
+    unifiedDataDialogOpen_ = true;
+    importProcessingMode_ = 0;
+    importReplayPacing_ = 1;
+    if (!application_.startDataImport(path, csvDataImportError_)) {
         application_.setStatusMessage("CSV 数据导入失败: " + csvDataImportError_);
-        return;
-    }
-
-    const auto& currentLua = application_.docks().luaState();
-    if (!capture->protocolDir.empty() && currentLua.protocolDir != capture->protocolDir &&
-        !switchProtocolWorkspace(capture->protocolDir, false)) {
-        csvDataImportError_ = "切换导入协议失败";
-        application_.setStatusMessage("CSV 数据导入失败: " + csvDataImportError_);
-    } else if (!application_.importWaveRawCapture(*capture, error)) {
-        csvDataImportError_ = error;
-        application_.setStatusMessage("CSV 数据导入失败: " + error);
-    } else {
-        application_.setStatusMessage("原始事件 CSV 导入成功");
-        csvDataImportError_.clear();
     }
 }
 
@@ -1286,50 +1263,18 @@ void GuiRuntime::loadRawCaptureReplayTimelineFromPath(const std::filesystem::pat
 {
     rememberFileDialogPath(path, false);
     rawCaptureReplayTimelinePath_ = fileDialogPathText(path);
-    std::string error;
-    std::optional<plot::RawCaptureFileData> capture;
-    const auto csvKind = plot::detectCsvKind(path, error);
-    if (csvKind == plot::CsvKind::Wave) {
-        rawCaptureReplayTimelineError_ = "波形 CSV 不能作为原始回放时间轴载入";
+    unifiedDataPath_ = rawCaptureReplayTimelinePath_;
+    unifiedExportMode_ = false;
+    unifiedDataDialogOpen_ = true;
+    importProcessingMode_ = 0;
+    importReplayPacing_ = 0;
+    rawCaptureReplayTimelineError_.clear();
+    if (!application_.startDataImport(path, rawCaptureReplayTimelineError_)) {
         application_.setStatusMessage("原始回放时间轴载入失败: " + rawCaptureReplayTimelineError_);
         return;
     }
-    if (csvKind == plot::CsvKind::RawEvents) {
-        capture = plot::readRawCaptureCsvFile(path, error);
-    } else {
-        error.clear();
-        capture = plot::readRawCaptureFile(path, error);
-    }
-    if (!capture.has_value()) {
-        rawCaptureReplayTimelineError_ = error;
-        application_.setStatusMessage("原始回放时间轴载入失败: " + error);
-        return;
-    }
-    std::error_code protocolEntryError;
-    if (!capture->protocolDir.empty() &&
-        !std::filesystem::exists(configStore_.mainLuaPath(capture->protocolDir), protocolEntryError)) {
-        rawCaptureReplayTimelineError_ = "回放文件引用的协议目录不存在: " + capture->protocolDir;
-        if (protocolEntryError) {
-            rawCaptureReplayTimelineError_ += " (" + protocolEntryError.message() + ")";
-        }
-        application_.setStatusMessage("原始回放时间轴载入失败: " + rawCaptureReplayTimelineError_);
-        return;
-    }
-
-    const auto& currentLua = application_.docks().luaState();
-    if (!capture->protocolDir.empty() && currentLua.protocolDir != capture->protocolDir &&
-        !switchProtocolWorkspace(capture->protocolDir, false)) {
-        rawCaptureReplayTimelineError_ = "切换回放协议失败";
-        application_.setStatusMessage("原始回放时间轴载入失败: " + rawCaptureReplayTimelineError_);
-    } else if (!application_.loadRawCaptureReplayTimeline(*capture, error)) {
-        rawCaptureReplayTimelineError_ = error;
-        application_.setStatusMessage("原始回放时间轴载入失败: " + error);
-    } else {
-        application_.setStatusMessage("原始回放时间轴已载入");
-        rawCaptureReplayTimelineDialogOpen_ = false;
-        rawCaptureReplayTimelineDialogOpened_ = false;
-        rawCaptureReplayTimelineError_.clear();
-    }
+    rawCaptureReplayTimelineDialogOpen_ = false;
+    rawCaptureReplayTimelineDialogOpened_ = false;
 }
 
 void GuiRuntime::startRawCaptureRecordingToPath(const std::filesystem::path& path)
@@ -1352,18 +1297,19 @@ void GuiRuntime::importSessionPackageFromPath(const std::filesystem::path& path)
 {
     rememberFileDialogPath(path, false);
     sessionPackageImportPath_ = fileDialogPathText(path);
-    std::string error;
-    if (!application_.importSessionPackage(path, error)) {
-        sessionPackageImportError_ = error;
-        application_.setStatusMessage("现场会话包导入失败: " + error);
+    unifiedDataPath_ = sessionPackageImportPath_;
+    unifiedExportMode_ = false;
+    unifiedDataDialogOpen_ = true;
+    importProcessingMode_ = 0;
+    importReplayPacing_ = 0;
+    sessionPackageImportError_.clear();
+    if (!application_.startDataImport(path, sessionPackageImportError_)) {
+        application_.setStatusMessage("现场会话包导入失败: " + sessionPackageImportError_);
         return;
     }
     showOfflineReplayDock_ = true;
-    pendingProtocolWorkspaceSave_ = true;
-    application_.setStatusMessage("现场会话包已导入，原始回放已暂停在起点");
     sessionPackageImportDialogOpen_ = false;
     sessionPackageImportDialogOpened_ = false;
-    sessionPackageImportError_.clear();
 }
 
 void GuiRuntime::exportSessionPackageToPath(const std::filesystem::path& path)
@@ -1728,14 +1674,14 @@ void GuiRuntime::drawElfStaticAddressDialog()
             ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", elfStaticAddressError_.c_str());
         }
         ImGui::Spacing();
-        if (ImGui::Button("打开", ImVec2(90.0F, 0.0F))) {
+        if (drawUiButton("打开", ImVec2(90.0F, 0.0F), UiButtonRole::Primary)) {
             loadElfStaticAddressFromPath(elfStaticAddressPath_);
             if (!elfStaticAddressDialogOpen_) {
                 ImGui::CloseCurrentPopup();
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
+        if (drawUiButton("取消", ImVec2(90.0F, 0.0F))) {
             elfStaticAddressDialogOpen_ = false;
             elfStaticAddressDialogOpened_ = false;
             elfStaticAddressError_.clear();
@@ -1822,13 +1768,13 @@ void GuiRuntime::drawLogExportFileDialog()
             ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", logExportError_.c_str());
         }
         ImGui::Spacing();
-        if (ImGui::Button("导出", ImVec2(90.0F, 0.0F))) {
+        if (drawUiButton("导出", ImVec2(90.0F, 0.0F), UiButtonRole::Primary)) {
             if (exportLogTargetToPath(logExportTarget_, logExportPath_)) {
                 ImGui::CloseCurrentPopup();
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
+        if (drawUiButton("取消", ImVec2(90.0F, 0.0F))) {
             logExportDialogOpen_ = false;
             logExportDialogOpened_ = false;
             logExportError_.clear();
@@ -1863,13 +1809,13 @@ void GuiRuntime::drawRequestTraceExportFileDialog()
             ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", requestTraceExportError_.c_str());
         }
         ImGui::Spacing();
-        if (ImGui::Button("导出", ImVec2(90.0F, 0.0F))) {
+        if (drawUiButton("导出", ImVec2(90.0F, 0.0F), UiButtonRole::Primary)) {
             if (exportRequestTraceToPath(requestTraceExportPath_)) {
                 ImGui::CloseCurrentPopup();
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
+        if (drawUiButton("取消", ImVec2(90.0F, 0.0F))) {
             requestTraceExportDialogOpen_ = false;
             requestTraceExportDialogOpened_ = false;
             requestTraceExportError_.clear();

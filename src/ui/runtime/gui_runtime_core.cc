@@ -899,7 +899,8 @@ bool GuiRuntime::initializeImGui()
     themeManager_.applyPending();
     if (!themeError.empty()) application_.setStatusMessage(themeError, false);
     ImGuiIO& io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    // 生产路径启用键盘导航，使工具栏与侧栏按钮可通过 Tab/方向键到达并激活。
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_NavEnableKeyboard;
     io.IniFilename = nullptr;
     ensureChineseFont();
 
@@ -1227,7 +1228,9 @@ void GuiRuntime::drawAppHeader(const float menuBarHeight)
     constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                                        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0F, 10.0F));
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07F, 0.09F, 0.13F, 0.98F));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,
+                          ImVec4(tokens.panelBackground.x, tokens.panelBackground.y,
+                                 tokens.panelBackground.z, 0.98F));
     ImGui::PushStyleColor(ImGuiCol_Border, tokens.panelBorder);
     if (ImGui::Begin("现代应用栏", nullptr, flags)) {
         ImGui::TextUnformatted("ProtoScope");
@@ -1258,7 +1261,7 @@ void GuiRuntime::drawAppHeader(const float menuBarHeight)
             requestProtocolWorkspaceSwitch(lua.protocolDir, true);
         }
         ImGui::SameLine();
-        if (ImGui::Button("视图")) {
+        if (drawUiButton("视图")) {
             ImGui::OpenPopup("##app_header_view_menu");
         }
         if (ImGui::BeginPopup("##app_header_view_menu")) {

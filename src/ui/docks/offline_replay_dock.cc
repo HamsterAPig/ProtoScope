@@ -112,16 +112,34 @@ namespace {
 
     const char* replayStateLabel(const app::Application::RawCaptureReplayStatus& status)
     {
-        if (!status.loaded) {
-            return "未载入";
+        using Phase = app::Application::OfflineReplayPhase;
+        if (!status.loaded) return "未载入";
+        switch (status.phase) {
+            case Phase::Preparing: return "准备中";
+            case Phase::Replaying: return "重放中";
+            case Phase::Draining: return "排空中";
+            case Phase::Paused: return "已暂停";
+            case Phase::Completed: return "已完成";
+            case Phase::Failed: return "失败";
+            case Phase::Cancelled: return "已取消";
         }
-        if (status.playing) {
-            return "播放中";
+        return "未知";
+    }
+
+    const char* processingLabel(const app::Application::RawCaptureReplayStatus& status)
+    {
+        using Processing = app::Application::OfflineReplayProcessing;
+        switch (status.processing) {
+            case Processing::BrowseRaw: return "仅浏览原始 RX/TX";
+            case Processing::CurrentProtocol: return "当前磁盘协议重新解析";
+            case Processing::PackageProtocol: return "现场包内协议重新解析";
         }
-        if (status.eventIndex >= status.eventCount) {
-            return "已结束";
-        }
-        return "已暂停";
+        return "未知";
+    }
+
+    const char* pacingLabel(const app::Application::RawCaptureReplayStatus& status)
+    {
+        return status.pacing == app::Application::OfflineReplayPacing::OriginalTimeline ? "按原始时间轴" : "快速分批解析";
     }
 
     std::string replayPositionText(const app::Application::RawCaptureReplayStatus& status)
@@ -316,8 +334,17 @@ void GuiRuntime::drawOfflineReplayDock()
                          ? std::string("-")
                          : application_.rawCaptureRecordingPath().filename().generic_string());
         drawKeyValue("录制字节", formatBytes(application_.rawCaptureRecordingBytes()));
+        drawKeyValue("处理方式", processingLabel(replayStatus));
+        drawKeyValue("协议来源", dashIfEmpty(replayStatus.protocolSource));
+        drawKeyValue("重放节奏", pacingLabel(replayStatus));
         drawKeyValue("回放状态", replayStateLabel(replayStatus));
         drawKeyValue("回放位置", replayPositionText(replayStatus));
+        drawKeyValue("输入 backlog", formatCount(replayStatus.inputBacklog));
+        drawKeyValue("worker backlog", formatCount(replayStatus.workerBacklog));
+        drawKeyValue("输出 backlog", formatCount(replayStatus.outputBacklog));
+        drawKeyValue("逐帧 schema", replayStatus.hasStreamSchema ? "可用" : "无（逐帧视图为空）");
+        drawKeyValue("截断", replayStatus.truncated ? "是" : "否");
+        if (!replayStatus.error.empty()) drawKeyValue("失败原因", replayStatus.error);
         drawKeyValue("请求追踪", formatCount(docks.requestTraceState().rows.size()));
         drawKeyValue("收发日志", formatCount(docks.receiveState().rows.size()));
         drawKeyValue("宿主日志", formatCount(docks.logState().rows.size()));

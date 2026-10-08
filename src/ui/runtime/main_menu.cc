@@ -100,7 +100,16 @@ void GuiRuntime::drawReplayMenu()
     const bool canAdvance = status.loaded && status.eventIndex < status.eventCount;
     const char* replayState = "未载入";
     if (status.loaded) {
-        replayState = status.playing ? "播放中" : (status.eventIndex >= status.eventCount ? "已结束" : "已暂停");
+        using Phase = app::Application::OfflineReplayPhase;
+        switch (status.phase) {
+            case Phase::Preparing: replayState = "准备中"; break;
+            case Phase::Replaying: replayState = "重放中"; break;
+            case Phase::Draining: replayState = "排空中"; break;
+            case Phase::Paused: replayState = "已暂停"; break;
+            case Phase::Completed: replayState = "已完成"; break;
+            case Phase::Failed: replayState = "失败"; break;
+            case Phase::Cancelled: replayState = "已取消"; break;
+        }
     }
     ImGui::Text("状态 %s", replayState);
     ImGui::Text("位置 %zu / %zu (%.1f%%)", status.eventIndex, status.eventCount, status.progress * 100.0);

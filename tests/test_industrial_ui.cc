@@ -9,6 +9,11 @@
 #include <iostream>
 #include <thread>
 
+#if defined(_MSC_VER)
+#include <crtdbg.h>
+#include <cstdlib>
+#endif
+
 namespace protoscope::ui {
 struct GuiRuntimeTestAccess {
     static void draw(GuiRuntime& runtime, const std::vector<scripting::ControlSnapshot>& controls,
@@ -121,6 +126,14 @@ void capture(const std::filesystem::path& directory, int width, int height)
 
 int main(int argc,char** argv)
 {
+#if defined(_MSC_VER)
+    _set_error_mode(_OUT_TO_STDERR);
+    _set_abort_behavior(_WRITE_ABORT_MSG,_WRITE_ABORT_MSG|_CALL_REPORTFAULT);
+    _CrtSetReportMode(_CRT_ASSERT,_CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT,_CRTDBG_FILE_STDERR);
+    _CrtSetReportMode(_CRT_ERROR,_CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ERROR,_CRTDBG_FILE_STDERR);
+#endif
     using namespace protoscope;
     if (argc<2) return 2;
     const bool withGl=argc>2;
@@ -141,7 +154,7 @@ int main(int argc,char** argv)
     iconConfig.MergeMode=true;
     static constexpr ImWchar iconRanges[]={0xf000,0xf8ff,0};
     const auto iconPath=std::filesystem::absolute(argv[1]).parent_path().parent_path()/"assets/fonts/fa-solid-900.ttf";
-    if (!io.Fonts->AddFontFromFileTTF(iconPath.string().c_str(),13.0F,&iconConfig,iconRanges)) return 2;
+    if (!io.Fonts->AddFontFromFileTTF(iconPath.string().c_str(),0.0F,&iconConfig,iconRanges)) return 2;
     unsigned char* pixels;int w,h;
     if (withGl) {
         if (!ImGui_ImplOpenGL3_Init("#version 130")) return 2;
@@ -170,6 +183,9 @@ int main(int argc,char** argv)
         app::Application application;
         config::ConfigStore configs;
         ui::GuiRuntime runtime(application,configs);
+        for (const auto theme : {config::GuiTheme::ProfessionalDark, config::GuiTheme::ProfessionalLight,
+                                 config::GuiTheme::DebugHighContrast}) {
+        ui::applyUiTheme(theme);
         for (const int width:{1000,360}) {
             io.DisplaySize=ImVec2(static_cast<float>(width),900);
             for (int frame=0;frame<6;++frame) {
@@ -183,10 +199,12 @@ int main(int argc,char** argv)
                 if (withGl) {
                     glViewport(0,0,width,900);glClearColor(0.05F,0.05F,0.05F,1);glClear(GL_COLOR_BUFFER_BIT);
                     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());glFinish();
-                    if (frame==5) capture(argv[2],width,900);
+                    if (frame==5) capture(std::filesystem::path(argv[2])/config::guiThemeId(theme),width,900);
                 }
             }
         }
+        }
+        ui::applyUiTheme(config::GuiTheme::ProfessionalDark);
         // 真实 ImGui 输入帧覆盖按下、宿主更新、释放及多行普通回车，不依赖 UI 测试插件。
         std::map<std::string,ImRect> rectangles;
         auto frame = [&] {

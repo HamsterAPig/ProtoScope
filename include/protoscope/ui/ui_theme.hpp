@@ -102,6 +102,11 @@ void applyImPlotProfessionalDarkTheme();
 // title 为空时仅绘制容器背景和边框，不绘制内部标题与分割线，并使用更紧凑的子窗口纵向留白。
 bool beginToolbarGroup(const char* id, const char* title, float minHeight = 0.0F);
 void endToolbarGroup();
+// 按钮角色只改变局部绘制；退出后恢复输入、组合框与复选框的必要边界。
+enum class UiButtonRole { Secondary, Primary, Toolbar, Danger };
+bool drawUiButton(const char* label, const ImVec2& size = ImVec2(0.0F, 0.0F),
+                  UiButtonRole role = UiButtonRole::Secondary, bool active = false);
+bool drawUiSmallButton(const char* label, bool active = false);
 bool drawToolbarSectionButton(const char* label,
                               const char* tooltip,
                               bool active = false,

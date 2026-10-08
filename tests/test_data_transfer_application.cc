@@ -325,6 +325,33 @@ int main(int argc, char**)
         require(recording && recording->events.size() == 1 && recording->events[0].bytes.size() == 2 &&
             recording->events[0].endpoint == "probe", "TX recording lost or duplicated");
         writer.closeTransport();
+        app::Application boundaryImporter;
+        capture = {};
+        capture.events = {
+            {.type = plot::RawCaptureEventType::RxBytes,
+             .bytes = std::vector<std::uint8_t>(65536, 0x11), .sequence = 1},
+            {.type = plot::RawCaptureEventType::RxBytes,
+             .bytes = std::vector<std::uint8_t>(131072, 0x22), .sequence = 2},
+            {.type = plot::RawCaptureEventType::TxBytes,
+             .bytes = std::vector<std::uint8_t>(65536, 0x33), .sequence = 3},
+        };
+        require(plot::writeRawCaptureFile(file.path(), capture, error), error);
+        require(boundaryImporter.startDataImport(file.path(), error), error);
+        waitFor(boundaryImporter, [&] { return boundaryImporter.dataTransferStatus().awaitingConfirmation; });
+        boundaryImporter.confirmDataImport();
+        waitFor(boundaryImporter, [&] {
+            const auto status = boundaryImporter.dataTransferStatus();
+            return status.complete && !status.active;
+        });
+        boundaryImporter.pumpOnce();
+        const auto& boundaryEvents = boundaryImporter.docks().waveState().rawCapture.events;
+        require(boundaryEvents.size() == 3 &&
+                boundaryEvents[0].sequence == 1 && boundaryEvents[0].bytes.size() == 65536 &&
+                boundaryEvents[1].sequence == 2 && boundaryEvents[1].bytes.size() == 131072 &&
+                boundaryEvents[2].sequence == 3 && boundaryEvents[2].bytes.size() == 65536,
+                "64 KiB boundary events lost, merged, or split");
+        boundaryImporter.shutdown();
+
         app::Application parser;
         std::size_t parserOpenCalls = 0;
         parser.setTransportFactoryForTest([&](auto) {

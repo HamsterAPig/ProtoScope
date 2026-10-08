@@ -67,8 +67,23 @@ public:
     std::optional<plot::WaveCsvData> captureWaveData(const plot::CsvExportRange& range, std::string& error) const;
     bool importRawRecords(const plot::RawCaptureFileData& data, std::string& error);
     bool startDataImport(const std::filesystem::path& path, std::string& error);
-    void confirmDataImport(bool parseWaveform = false) { parseImportedWave_ = parseWaveform; dataTransfer_.confirm(); }
-    void cancelDataTransfer() { dataTransfer_.cancel(); }
+    enum class OfflineReplayProcessing {
+        BrowseRaw,
+        CurrentProtocol,
+        PackageProtocol,
+    };
+
+    enum class OfflineReplayPacing {
+        OriginalTimeline,
+        FastBatchParse,
+    };
+
+    void confirmDataImport(bool parseWaveform = false) {
+        confirmDataImport(parseWaveform ? OfflineReplayProcessing::CurrentProtocol : OfflineReplayProcessing::BrowseRaw,
+                          OfflineReplayPacing::FastBatchParse);
+    }
+    void confirmDataImport(OfflineReplayProcessing processing, OfflineReplayPacing pacing);
+    void cancelDataTransfer();
     DataTransferStatus dataTransferStatus() const {
         auto status = dataTransfer_.status();
         status.active = status.active || dataImportActive_;
@@ -93,6 +108,16 @@ public:
                              bool allowMissingProtocol = false);
     bool importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error);
 
+    enum class OfflineReplayPhase {
+        Preparing,
+        Replaying,
+        Draining,
+        Paused,
+        Completed,
+        Failed,
+        Cancelled,
+    };
+
     struct RawCaptureReplayStatus {
         bool loaded{false};
         bool playing{false};
@@ -100,9 +125,24 @@ public:
         std::size_t eventCount{0};
         double progress{0.0};
         double speed{1.0};
+        OfflineReplayPhase phase{OfflineReplayPhase::Paused};
+        OfflineReplayProcessing processing{OfflineReplayProcessing::BrowseRaw};
+        OfflineReplayPacing pacing{OfflineReplayPacing::OriginalTimeline};
+        std::string protocolSource;
+        std::size_t inputBacklog{0};
+        std::size_t workerBacklog{0};
+        std::size_t outputBacklog{0};
+        bool hasStreamSchema{false};
+        bool truncated{false};
+        std::string error;
     };
 
     bool loadRawCaptureReplayTimeline(const plot::RawCaptureFileData& capture, std::string& error);
+    bool loadRawCaptureReplayTimeline(const plot::RawCaptureFileData& capture,
+                                      OfflineReplayProcessing processing,
+                                      OfflineReplayPacing pacing,
+                                      std::string& error,
+                                      const session::SessionPackageData* package = nullptr);
     void unloadRawCaptureReplayTimeline();
     bool playRawCaptureReplay(std::string& error);
     void pauseRawCaptureReplay();
@@ -210,9 +250,26 @@ private:
         plot::RawCaptureFileData capture{};
         transport::ConnectionContext context{};
         std::size_t eventIndex{0};
+        std::size_t targetEventIndex{0};
+        std::size_t completedLuaInputs{0};
+        bool resumeAfterSeek{false};
+        OfflineReplayPacing pacingAfterSeek{OfflineReplayPacing::OriginalTimeline};
         double speed{1.0};
         double accumulatedMs{0.0};
         std::uint64_t lastPumpMs{0};
+        std::uint64_t generation{0};
+        OfflineReplayPhase phase{OfflineReplayPhase::Paused};
+        OfflineReplayProcessing processing{OfflineReplayProcessing::BrowseRaw};
+        OfflineReplayPacing pacing{OfflineReplayPacing::OriginalTimeline};
+        std::string protocolSource;
+        std::string error;
+        std::filesystem::path temporaryProtocolDir;
+        std::filesystem::path temporaryStorageDir;
+        std::string protocolDirectory;
+        std::vector<session::SessionPackageEntry> packageProtocolEntries;
+        bool hasStreamSchema{false};
+        std::shared_future<scripting::ScriptRuntimeLoadResult> preparation;
+        std::shared_future<std::pair<bool, std::string>> profileFence;
     };
 
     std::unique_ptr<transport::ITransport> createTransport(transport::TransportKind kind) const;
@@ -223,6 +280,7 @@ private:
     void syncAdaptivePerformanceStatus();
     void maybeLogCommPressureDebug(const dock::CommDockState& comm);
     bool applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBatch& batch);
+    bool applyOfflineScriptOutputBatch(scripting::ScriptRuntimeOutputBatch batch);
     void applyLuaScriptSnapshot(const scripting::ScriptRuntimeSnapshot& snapshot);
     bool probeProtocolDirectory(const std::string& resolvedDirText);
     void prepareProtocolRuntimeReload();
@@ -259,6 +317,8 @@ private:
     bool drainRequestTimeoutBacklog();
     bool flushScriptOutputs();
     bool flushScriptOutputsUnbounded();
+    bool flushOfflineScriptOutputs();
+    bool flushOfflineScriptOutputsUnbounded();
     bool flushScriptLogs();
     bool flushScriptPlots();
     bool flushPendingTransferFrameRows(std::size_t maxRows);
@@ -284,6 +344,11 @@ private:
                          std::uint64_t finishedAtMs);
     void cancelPendingTxRequests(const std::string& reason, std::uint64_t finishedAtMs);
     void cancelAllTxRequests(const std::string& reason);
+    void resetDataImportGenerationState(bool cleanupReplayResources);
+    bool restoreSessionPackageContext(const session::SessionPackageData& package,
+                                      bool allowMissingProtocol,
+                                      std::vector<plot::WaveAnalysisMarker>& markers,
+                                      std::string& error);
     void notifyTxOverflow(const std::string& message);
     void handleStreamBufferAlert(const transport::ConnectionContext& context,
                                  const scripting::StreamParseBatch& batch,
@@ -295,7 +360,14 @@ private:
     void appendLiveRawCapture(const transport::TransportBytesEvent& event);
     void appendRawCaptureEvent(const plot::RawCaptureEvent& event);
     bool validateRawCaptureImport(const plot::RawCaptureFileData& capture, std::string& error) const;
+    bool prepareOfflineReplayProtocol(const plot::RawCaptureFileData& capture,
+                                      OfflineReplayProcessing processing,
+                                      const session::SessionPackageData* package,
+                                      std::string& error);
     void prepareRawCaptureImportReplay(const plot::RawCaptureFileData& capture);
+    void prepareRawCaptureBrowse(const plot::RawCaptureFileData& capture);
+    void cleanupOfflineReplayResources();
+    bool drainRawCaptureReplay(std::string& error);
     [[nodiscard]] transport::ConnectionContext makeRawCaptureReplayContext(
         const plot::RawCaptureFileData& capture) const;
     bool replayRawCaptureEvents(const plot::RawCaptureFileData& capture, std::string& error);
@@ -327,6 +399,8 @@ private:
     [[nodiscard]] dock::ReceiveRow makeTransferFrameRow(const dock::ReceiveRow& sourceRow,
                                                         const scripting::StreamParsedFrame& frame) const;
     [[nodiscard]] std::optional<TransferFrameParserState> makeTransferFrameParserState() const;
+    [[nodiscard]] std::optional<TransferFrameParserState> makeTransferFrameParserState(
+        const scripting::ScriptRuntimeSnapshot& snapshot) const;
 
     dock::DockStore dockStore_;
     config::ConfigStore configStore_{};
@@ -337,6 +411,7 @@ private:
     std::optional<config::ProtocolConfig> captureProtocolConfigOverride_;
     logging::LoggingFacade loggingFacade_{};
     scripting::ScriptRuntimeWorker scriptWorker_;
+    std::unique_ptr<scripting::ScriptRuntimeWorker> offlineScriptWorker_;
     plugin::ElfStaticViewBridge elfStaticView_;
     std::uint64_t elfStaticAddressRevision_{0};
     std::unique_ptr<transport::ITransport> transport_;
@@ -372,6 +447,10 @@ private:
     std::size_t retainedRawBytes_{0};
     DataTransferTask dataTransfer_;
     bool dataImportActive_{false};
+    OfflineReplayProcessing dataImportProcessing_{OfflineReplayProcessing::BrowseRaw};
+    OfflineReplayPacing dataImportPacing_{OfflineReplayPacing::FastBatchParse};
+    std::shared_ptr<session::SessionPackageData> pendingImportSession_;
+    std::vector<plot::WaveAnalysisMarker> pendingImportMarkers_;
     bool importedWaveIncomplete_{false};
     std::string importedWaveRange_{"full"};
     bool importReplacedWave_{false};
@@ -380,6 +459,7 @@ private:
     bool parseImportedWave_{false};
     std::optional<std::future<bool>> importReset_;
     std::optional<std::future<std::pair<bool, std::string>>> importProfile_;
+    plot::RawCaptureFileData pendingImportedCapture_;
     bool pumpDataImport();
 };
 

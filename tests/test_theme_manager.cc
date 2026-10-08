@@ -13,6 +13,8 @@ void check(bool ok, const char* text) { if (!ok) throw std::runtime_error(text);
 
 int main()
 {
+    ImGui::CreateContext();
+    int status = 0;
     try {
         ui::UiThemeDefinition theme;
         std::string error;
@@ -77,10 +79,34 @@ int main()
               "selection config roundtrip");
         check(!store.loadText("gui:\n  wave:\n    overview_selection:\n      min_alpha: 0.8\n      max_alpha: 0.2\n").error.empty(),
               "selection alpha validation");
+
+        ui::ThemeManager builtinThemes;
+        for (const auto* id : {"professional_dark", "professional_light", "debug_high_contrast"})
+            check(builtinThemes.find(id) != nullptr, "保留三个内置主题");
+        for (const auto* id : {"graphite_cyan", "warm_industrial", "paper_lab"}) {
+            check(builtinThemes.find(id) == nullptr, "退役主题不是内置主题");
+            builtinThemes.startup(id, error);
+            check(!error.empty() && builtinThemes.applyPending() &&
+                  ui::activeThemeDefinition().id == "professional_dark", "旧 ID 缺失时回退深色");
+            const auto original = store.loadText(std::string("gui:\n  theme: ") + id + "\n");
+            check(original.config.gui.theme == id, "回退不改写配置原 ID");
+        }
+
         const auto directory = std::filesystem::temp_directory_path() /
             ("protoscope-theme-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-        std::filesystem::create_directories(directory / "themes");
         manager.setConfigPath(directory / "config.yaml");
+        check(manager.reload(error) && manager.find("professional_dark"), "缺失目录仍提供内置主题");
+        std::filesystem::create_directories(directory / "themes");
+        check(manager.reload(error) && manager.find("professional_light"), "空目录仍提供内置主题");
+        // 同名用户文件不能被退役策略封禁，也不能清理运行目录旧副本。
+        for (const auto* id : {"graphite_cyan", "warm_industrial", "paper_lab"}) {
+            std::ofstream file(directory / "themes" / (std::string(id) + ".yaml"));
+            file << "version: 1\nid: " << id << "\nname: User\nbase: professional_dark\n";
+        }
+        check(manager.reload(error), "发现用户自定义主题");
+        for (const auto* id : {"graphite_cyan", "warm_industrial", "paper_lab"})
+            check(manager.request(id, error) && manager.applyPending() &&
+                  ui::activeThemeDefinition().id == id, "同名用户主题仍能应用");
         check(manager.exportCurrent(directory / "themes/custom.yaml", error), "export file");
         check(manager.reload(error) && manager.find("custom"), "scan user theme");
         check(manager.request("custom", error) && manager.applyPending(), "apply user theme");
@@ -92,10 +118,11 @@ int main()
         check(!manager.reload(error) && error.find("id:") != std::string::npos, "reject duplicate registry ID");
         check(ui::activeThemeRevision() == beforeReload && manager.find("custom"), "reload failure preserves registry");
         check(!manager.exportCurrent(directory / "themes/custom.yaml", error), "export refuses overwrite");
-        std::cout << "theme_manager: parsing, inheritance, errors, roundtrip, deferred apply, fallback passed\n";
-        return 0;
+        std::cout << "theme_manager: parsing, user discovery, inheritance, errors, roundtrip, deferred apply, retirement fallback passed\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
-        return 1;
+        status = 1;
     }
+    ImGui::DestroyContext();
+    return status;
 }

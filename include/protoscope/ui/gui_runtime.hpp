@@ -458,7 +458,8 @@ private:
     bool activeDialogOpened_{false};
     bool unifiedDataDialogOpen_{false};
     bool unifiedExportMode_{false};
-    bool importParseWaveform_{false};
+    int importProcessingMode_{0};
+    int importReplayPacing_{1};
     config::DataExportConfig dataExportDraft_{};
     config::DataExportConfig pendingDataExport_{};
     std::uint64_t pendingDataExportTask_{0};

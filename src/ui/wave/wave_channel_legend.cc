@@ -136,27 +136,27 @@ void drawChannelLegendPopup(plot::WaveDockState& wave,
         ImGui::Text("Bits：%zu..%zu",
                     updated.bitDisplay.firstBit,
                     updated.bitDisplay.firstBit + updated.bitDisplay.bitCount - 1U);
-        if (ImGui::Button("恢复 bit 偏移默认值")) {
+        if (drawUiButton("恢复 bit 偏移默认值")) {
             updated.bitDisplay.yOffset = defaultSpec.bitDisplay.yOffset;
             applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
         }
     }
-    if (ImGui::Button(active ? "激活中" : "设为激活")) {
+    if (drawUiButton(active ? "激活中" : "设为激活")) {
         wave.view.measurementChannelIndex = channelIndex;
     }
     protoscope::ui::beginDisabled(wave.buffer.importedLabelsReadOnly());
-    if (ImGui::Button("恢复默认标签")) {
+    if (drawUiButton("恢复默认标签")) {
         updated.label = defaultSpec.label;
         applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
     }
     protoscope::ui::endDisabled();
-    if (!bitChannel && ImGui::Button("恢复默认变换")) {
+    if (!bitChannel && drawUiButton("恢复默认变换")) {
         updated.ratio = defaultSpec.ratio;
         updated.scale = defaultSpec.scale;
         updated.offset = defaultSpec.offset;
         applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
     }
-    if (ImGui::Button("恢复全部默认")) {
+    if (drawUiButton("恢复全部默认")) {
         applyChannelTransformOverride(wave, channelIndex, defaultSpec, defaultSpec);
     }
 }

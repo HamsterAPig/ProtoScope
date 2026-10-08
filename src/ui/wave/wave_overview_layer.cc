@@ -334,8 +334,7 @@ void drawOverviewWindow(plot::WaveDockState& wave,
         const auto visualMin = visual.Min, visualMax = visual.Max;
         const auto left = visual.Min.x, right = visual.Max.x;
         const ImVec4 border(float(rectangleColor.r), float(rectangleColor.g), float(rectangleColor.b), 1.F);
-        const auto guard = plot::overviewLuminance(rectangleColor) > .35
-            ? IM_COL32(0, 0, 0, 255) : IM_COL32(255, 255, 255, 255);
+        const auto guard = cursorGuardColor(border);
         auto* selectionDraw = ImPlot::GetPlotDrawList();
         ImPlot::PushPlotClipRect();
         selectionDraw->AddRectFilled(visualMin, visualMax, ImGui::ColorConvertFloat4ToU32(

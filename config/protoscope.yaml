@@ -1,190 +1,397 @@
+# performance 分区：公共吞吐预算系数与自适应性能控制。
 performance:
   # 公共性能系数：1.0 使用默认吞吐预算；0.5 更保守；2.0 允许更高吞吐。
   # 显式写出的受控单项优先级高于公共系数。
+  # 默认 1.0；缺失、非正数（含 0 与负数）或 NaN 按 1.0 处理；+Inf 不做钳制，会把整数预算放大到上限，双精度项 output_flush_budget_ms 会被放大为 +Inf、失去时间预算限制。
+  # 只缩放未显式写出的预算项：receive.transport_read_buffer_bytes、scripting.worker 的 rx_queue_limit_bytes / memory_budget_bytes / output_queue_limit / batch_bytes / output_flush_budget_ms，以及 gui.realtime_backlog 的 rx_chunk_bytes_per_pump / transfer_frame_rows_per_pump / plot_appends_per_pump / raw_first_backlog_warn_bytes。
+  # 整数预算按四舍五入缩放，结果下限为 1；原值为 0 时保持 0。
   scale: 1.0
+  # 自适应性能控制：由运行时压力接管热调预算。
   adaptive:
     # 开启后由运行时压力控制热调预算，performance.scale 和相关热调项不再生效。
+    # 默认 false；开启后每 1000 ms 采样一次系统与应用压力。
     enabled: false
-    # 性能上限倍率 K：有效倍率会根据系统和软件压力在 0.25 到 K 之间调整。
+    # 性能上限倍率 K：有效倍率在各压力档为 K、0.75K、0.5K、0.25K，且不低于 0.25；K>1 时实际下限为 0.25*K。
+    # 仅在 adaptive.enabled 为 true 时参与运行时预算；关闭时该键不影响任何预算。
+    # 默认 1.0，有效范围 0.25 到 4.0；缺失、非有限数或非正数回退到 1.0，超出范围会钳制。
     max_multiplier: 1.0
 
 app:
+  # 界面语言标识，默认 zh-CN。
+  # 源码只对该字符串做读取、写回和保存，未做取值校验。
   language: zh-CN
+  # 主循环帧率上限，默认 60，单位帧/秒。
+  # 帧间隔按 1000 / fps_limit 毫秒取整并至少 1 毫秒；0 按 1 处理。
+  # 本键按无符号 32 位整数读取，含负号的值会使整份 YAML 读取失败：失败点之后的节（gui/protocol/receive/scripting/logging/communication）退回源码默认值，此前的节已生效。
+  # 不受 performance.scale 影响；performance.adaptive.enabled 开启后由自适应预算接管，帧率上限按 60 × 有效倍率重算，本键配置值不再参与。
   fps_limit: 60
+  # 空闲渲染策略字符串，默认 dirty_only。
+  # 源码只做字符串读写，不校验取值，也不识别其他取值。
   idle_render: dirty_only
+  # 是否自动保存配置，默认 false。
   auto_save:
+    # 开启后仅在配置处于未保存状态、且没有待处理的外部重载时自动写回。
     enabled: false
+    # 两次自动保存的最小间隔，默认 5000，单位毫秒；首次出现未保存状态时立即保存。
+    # 写 0 表示不限制最小间隔，即每轮检查都会保存。
     interval_ms: 5000
+  # 是否检测外部配置变更，默认 false。
   config_hot_reload:
+    # 开启后轮询配置文件，发现被外部修改时只在状态栏提示“检测到外部配置更新，请手动保存或重载”。
+    # 不会自动覆盖当前未保存状态，需用户手动保存或重载。
     enabled: false
 
 gui:
-  # professional_dark: 深墨蓝灰；professional_light: 冷白面板；debug_high_contrast: 近黑高对比。
-  # 可使用配置旁 themes 目录中的用户主题ID，显式覆盖不被预设改写。
+  # 主题字符串 ID；缺失该字段时默认 professional_dark。
+  # 启动时 ID 无法解析会回退显示专业深色，但配置中的原 ID 会被保留。
+  # 运行中可在“设置 -> 主题”即时切换，不需重启，也不重载当前协议；切换会把配置标记为待保存。
+  # 内置：professional_dark、professional_light、debug_high_contrast。
+  # 配置旁 themes 目录可放入用户 YAML 主题；不再随附额外主题，不清理已有用户文件。
   theme: professional_dark
+  # 是否显示应用顶部 header；默认 false，为 true 时顶部固定占用 58 像素高的区域。
   show_app_header: false
+  # GUI 渲染后端；取值 opengl（默认）、d3d11、d3d11_warp，无法识别的值回退 opengl。
+  # d3d11 使用硬件设备，d3d11_warp 使用 WARP 软件光栅化设备，两者仅在 Windows 上可用。
+  # 仅启动阶段生效：运行中改本项会在状态栏提示“重启后生效”。
+  # 命令行渲染后端参数优先于本项。
   renderer_backend: opengl
   window:
+    # 创建窗口时使用的初始标题；默认 ProtoScope。
+    # 窗口创建后运行时会把标题刷新为“ProtoScope <版本> - 当前协议名”，本项不会持续生效。
     title: ProtoScope
+    # 初始窗口宽度，单位像素，默认 1600；直接传给 glfwCreateWindow，配置层不做范围校验。
     width: 1600
+    # 初始窗口高度，单位像素，默认 900；直接传给 glfwCreateWindow，配置层不做范围校验。
     height: 900
+    # 启动时是否最大化；默认 false，为 true 时在窗口与渲染后端初始化成功后调用最大化。
     maximized: false
   font:
+    # 中文字形范围；取值 simplified_common（默认）或 full，取值无法识别时回退 simplified_common。
+    # full 使用 ImGui 完整 CJK 字形范围，可用字形更多，但字体图集更大、启动更慢。
     # simplified_common 启动更快；full 会加载完整 CJK 字形范围，适合需要显示生僻字时手动开启。
     chinese_glyph_range: simplified_common
   interaction_feedback:
+    # 是否启用交互反馈；默认 true。
+    # 关闭后不显示瞬时状态消息，也不再推送 Lua 控件反馈样式（触发时的边框高亮）。
+    # 关闭后波形的有效交互动画一并关闭，等效于 gui.wave.interaction_animation_enabled 失效。
     enabled: true
+    # 瞬时状态消息的显示时长，单位毫秒，默认 2000。
+    # 取值 0 等同于关闭瞬时状态消息。
     status_duration_ms: 2000
   wave:
+    # 波形 Dock 的显示与交互配置；仅当 gui.wave 节点存在时才读取这些字段，缺失项使用源码默认值。
+    # 波形全屏模式：focus 或 overlay，默认 overlay；未知值回退 overlay。
+    # focus 聚焦波形 Dock 并保存、恢复原 Dock 布局，overlay 使用覆盖层快照在退出全屏时恢复布局。
     fullscreen_mode: overlay
+    # 通道控制模式：oscilloscope（默认）或 legacy_global；未知值回退 oscilloscope。
     control_mode: oscilloscope
+    # 显示换算公式：offset_then_scale（默认，先偏移后缩放）或 scale_then_offset（先缩放后偏移）；未知值回退 offset_then_scale。
     display_formula: offset_then_scale
+    # 通道卡片每格读数的换算口径：display_value（默认）、actual_value 或 raw_value；未知值回退 display_value。
     grid_division_readout_mode: display_value
+    # Y 轴热区滚轮缩放激活模拟通道；本节点缺失时下面两项保持源码默认值。
     channel_scale_wheel:
+      # 默认 true；开启且未启用精调时，滚轮按 1-2-5 工程刻度调整激活模拟通道的实际值/格。
+      # 设为 false 时回退 pow(1.1, wheel) 连续缩放；精调开启时优先按 pow(1.01, wheel) 细调。
       enabled: true
+      # 滚轮加速方式：none、linear 或 log，默认 log；非法值回退 log。
+      # 同通道同方向且事件间隔不超过 250ms 时累计加速。
       acceleration: log
+    # 通道卡片宽度模式：fixed（默认，取 channel_card_fixed_width）或 adaptive（按面板宽度比例）；未知值回退 fixed。
     channel_card_width_mode: fixed
+    # 双击通道的动作：reset_all、reset_scale_offset（默认）、reset_scale 或 reset_offset；未知值回退 reset_scale_offset。
     channel_double_click_action: reset_scale_offset
+    # 双击 X 轴的动作：fit_full_history（默认，适配全历史）或 fit_visible_window（适配可见窗口）；未知值回退 fit_full_history。
     x_axis_double_click_action: fit_full_history
+    # 双击 Y 轴的动作：fit_visible_channels（默认，聚合所有图例可见模拟通道）或 fit_active_channel（只取当前激活模拟通道，激活通道无效、隐藏或为 bit-display 时回退到可见模拟通道）；未知值回退 fit_visible_channels。
     y_axis_double_click_action: fit_visible_channels
+    # 保留旧配置的读写兼容；主图适配现在统一写入 scale 和 offset，此字段不再改变适配行为。默认 false。
     y_axis_double_click_adjust_offset: false
+    # 默认 false；开启后各 CH 的全历史概览包络独立映射到 [-1,1]，常量位于 0，空通道和非有限值跳过。
+    # 只改变概览绘制，不修改主图 scale、offset、共享缓存和实际读数；隐藏策略、时间导航与游标保持原行为。
     overview_normalize_channels: false
+    # 默认 false，Bit 通道不参与概览绘制和纵轴范围计算；开启后 Bit 通道先绘制、普通通道覆盖其上，选框与游标位于最上层。
+    # 所有通道均为 Bit 且关闭此项时，概览仍保留完整历史时间导航；仅支持配置文件控制。
     overview_show_bit_channels: false
     # 自动色独立于主题 correct_contrast；false 恢复主题 cursor_palette 映射。
     cursor_auto_color: true
+    # 隐藏通道是否参与派生视图：visible_only（默认，不参与）或 include_hidden；未知值回退 visible_only。
     hidden_channel_policy: visible_only
+    # 游标极值吸附策略：nearest_waveform（默认，吸附最近波形）或 viewport_zone；未知值回退 nearest_waveform。
     cursor_extreme_snap_policy: nearest_waveform
+    # 鼠标拖动通道 Y 偏移的触发方式：direct（默认，直接拖动）、shift（按住 Shift 拖动）或 disabled（禁用）；未知值回退 direct。
     mouse_y_offset_drag_mode: direct
+    # 默认 true；双击展开图内图例后，鼠标离开并结束输入/拖动交互时是否自动收起，仅在 legend_overlay_open_mode 为 double_click 时生效。
     legend_overlay_double_click_auto_collapse: true
+    # Wave Dock 交互动效总开关，默认 true；关闭后离散视口跳转、工具抽屉、概览折叠和图例浮层直接跳到最终状态。
     interaction_animation_enabled: true
+    # 框选放大后是否自动退出框选模式，默认 false。
     zoom_selection_auto_exit: false
+    # fixed 模式下的通道卡片宽度，单位为 ImGui 逻辑像素，默认 128.0；非正值回退 128.0。
     channel_card_fixed_width: 128.0
+    # adaptive 模式下的宽度比例，默认 0.22，实际宽度为 clamp(可用宽度 × 比例, 160, 220) 逻辑像素；非正值回退 0.22。
     channel_card_adaptive_ratio: 0.22
     # 0.0 表示不限制；正数按 ImGui 逻辑像素限制全部通道图例的名称显示宽度。
+    # 作用于展开态通道表格、紧凑态浮窗和底部通道卡片，超长名称会裁剪并在悬浮时显示完整 tooltip；非有限值或非正值按 0.0 处理。
     legend_channel_name_max_width: 0.0
+    # 纵向自动适配余量倍数，默认 1.25，即数据包络约占视图高度 80%；非正值回退 1.25。
     vertical_auto_fit_multiplier: 1.25
+    # 单通道渲染点数预算，默认 1200。
     max_render_points_per_channel: 1200
+    # 波形渲染总顶点预算，默认 60000。
+    # 上述两项在 performance.adaptive.enabled 为 true 时会被运行时按压力临时覆盖，YAML 值仍会保存。
     max_render_vertices: 60000
+    # 默认 true；legacy_uniform 下高密度主图按 peak-detect 路径绘制首点、极小值、极大值、末点轨迹，关闭时绘制 min/max 包络。
+    # stable_edges 下查询轨迹始终直接绘制，此开关不再二次压缩模拟通道。
     peak_detect_downsample: true
     # stable_edges: 稳定分桶并保留边沿邻点；legacy_uniform: 旧版均匀分桶及绘制路径
+    # 缺省、空字符串及未知值均按 legacy_uniform 处理，仅显式设置 stable_edges 才切换算法；本项只能通过配置文件选择，不增加界面控件。
     downsample_mode: legacy_uniform
+    # 默认 2.0，最终按不小于 1.0 生效；legacy_uniform 下控制主图进入峰值检测／包络绘制的原始可见点数阈值（单通道点数预算 × 本倍数）。
+    # stable_edges 下控制稀疏点标记阈值，不延后查询层降采样；两种模式的查询输出都严格遵守点数预算，此倍数不会放大预算。
     downsample_start_multiplier: 2.0
+    # 概览桶数上限，默认 20000，每桶最多两个极值点；0 仅取消此项限制。
+    # performance.adaptive.enabled 为 true 时由自适应预算接管本项，此处 YAML 值（含 0）不参与。
     overview_max_samples: 20000
+    # X 轴最小可见时间跨度，默认 0.001；缩放与自动适配都不会把可见窗口压得比它更窄。
     min_visible_time_span: 0.001
+    # 时间轴重置时是否清空已积累的波形历史，默认 true。
     reset_history_on_time_reset: true
+    # 是否显示坐标轴标签，默认 false。
     show_axis_labels: false
+    # 是否显示通道图例，默认 true。
     show_channel_legend: true
+    # 是否显示 FFT 图例，默认 true。
     show_fft_legend: true
+    # 默认 false；开启后视口做等宽平移时测量游标随之移动，保持与数据的相对时间偏移，工具栏可在“游标跟随滚动”和“游标固定时间”之间切换。
     follow_measurement_cursors_on_scroll: false
+    # 游标分屏模式下主波形 C1~C2 FFT 输入窗口的高亮色，按 [r, g, b, a] 四个浮点数写入；数组长度不是 4 时整组回退默认值。
     cursor_fft_highlight_rgba: [0.20, 0.55, 1.00, 0.16]
+    # 各类波形重置触发时应用的默认视口策略；本节点缺失时下面各项保持源码默认值。
     reset_viewport:
+      # 协议绘图设置下发且需要重置视口时是否应用本策略，默认 true；不应用时回退旧版重置行为。
       apply_on_plot_setup_reset: true
+      # 手动清空波形历史时是否应用本策略，默认 true。
       apply_on_manual_clear: true
+      # 导入原始采集文件（离线浏览或重放）时是否应用本策略，默认 true。
       apply_on_raw_import: true
+      # 水平缩放口径：preserve（默认，保留当前可见时宽）或 protocol_default；非法值回退 preserve。
+      # protocol_default 在无采样频率时基时取 max(min_visible_time_span, max(timeScale*1000, timeScale))；存在采样频率时基（sampleFrequencyHz>0）时按“单通道渲染点数预算 ÷ 采样频率”重算，协议 timeScale 不参与。
       x_scale: preserve
+      # 垂直缩放口径：preserve（默认，保留当前 Y 范围）或 protocol_default（取协议 verticalMin/verticalMax）；非法值回退 preserve。
       y_scale: preserve
+      # 水平锚点：wave_start（默认，窗口左端对齐首个显示时刻）或 latest（右端对齐最新时刻）；非法值回退 wave_start。
       x_anchor: wave_start
+      # 自动跟随处理：existing（默认）、enable（强制开启）或 disable（强制关闭）；非法值回退 existing。
+      # 手动清空波形历史与导入原始采集会先把自动跟随置为开启，existing 因而保留该已开启状态；只有协议绘图设置重置时才严格保留用户当前开关。
       auto_follow: existing
+  # 下列运行态字段只在 gui.wave 节点存在时才从 YAML 覆盖默认值：log_history、raw_capture、transfer_log、realtime_backlog 四个子节点，
+  # 以及 gui 下的 show_app_header、lua_dock_layout_debug、lua_dock_render_copy_mode、send_history_limit；gui.wave 缺失时这些字段全部沿用源码默认值。
   log_history:
+    # 原始行视图（含 RX/TX 分块及带状态/错误文本的行）保留上限，默认 10000 行；超出后从最旧一行开始丢弃，0 表示不保留。
     transfer_raw_limit: 10000
+    # 逐帧（已解析）行视图保留上限，默认 120000 行；同时约束待投放的逐帧 backlog，按同一上限裁剪。
     transfer_frame_limit: 120000
+    # 宿主日志保留上限，默认 5000 行；超出后从最旧一行开始丢弃，0 表示不保留。
     host_limit: 5000
+    # 脚本（Lua）日志保留上限，默认 5000 行；超出后从最旧一行开始丢弃，0 表示不保留。
     script_limit: 5000
+    # 请求追踪行保留上限，默认 5000 行；超出后从最旧一行开始丢弃，0 表示不保留。
     request_trace_limit: 5000
   raw_capture:
+    # 实时原始缓存上限，单位字节，默认 67108864（64 MiB）；RX/TX 共用该预算，超出后只保留最近一段并标记截断，0 表示不保留。
     live_limit_bytes: 67108864
   transfer_log:
+    # 布尔，默认 false；保留读写兼容的旧键，当前不影响界面行为：切换原始/逐帧视图只改 displayMode，不再用独立 UI parser 从原始历史重建逐帧行（重建入口已无生产调用点）。
     replay_raw_history_on_schema_switch: false
   realtime_backlog:
+    # 追赶模式字符串，默认 responsive；complete 仅在断开连接时与响应式模式不同——不丢弃待追赶 backlog，每轮 pump 的追赶预算与清债行为不变；其它取值一律按响应式处理。
     mode: responsive
     # 以下预算缺省受 performance.scale 控制；写出后即覆盖公共系数。
+    # 每轮 pump 处理的 RX 字节预算，默认 4096 字节；缺省受 performance.scale 缩放。
     # rx_chunk_bytes_per_pump: 4096
+    # 每轮投放到逐帧视图的行数预算，默认 2000 行；缺省受 performance.scale 缩放。
     # transfer_frame_rows_per_pump: 2000
+    # 每轮波形追加次数预算，默认 128 次；缺省受 performance.scale 缩放。
     # plot_appends_per_pump: 128
+    # 原始 backlog 首次告警阈值，默认 33554432 字节（32 MiB）；达到后记录 debug 级的 comm_pressure 日志，并作为自适应性能控制的输入。
     # raw_first_backlog_warn_bytes: 33554432
+    # 主循环（pump）最小间隔，单位毫秒，默认 1.0；大于 0 时用睡眠限制空转；该项不受 performance.scale 控制。
     pump_min_interval_ms: 1.0
+    # 布尔，默认 false；仅在响应式模式（mode 不为 complete）下生效，为 true 时断开连接直接丢弃待追赶 backlog，否则保留并解除与连接的绑定。
     discard_backlog_on_disconnect: false
   elf_symbol_combo:
+    # Lua elf_symbol_combo 控件的默认候选数上限，默认 10；控件自身显式配置 limit 时以控件为准；读取时要求大于 0，非正值不覆盖默认值。
     limit: 10
+    # 输入消抖毫秒数，默认 300；控件未显式配置 debounce_ms 时使用；读取时要求大于 0，非正值不覆盖默认值。
     debounce_ms: 300
+    # 布尔，默认 true；ELF 静态符号刷新后按当前 label 重新查找并同步已选地址，找不到时保留旧值并在状态栏集中告警。
     auto_refresh_selected_address: true
+    # 布尔，默认 false；为 true 时自动刷新走 updateControlValue 触发 Lua on_control 回调，否则只静默恢复控件值。
     auto_refresh_emit_on_control: false
+  # 发送历史条数上限，默认 20；运行时实际生效值会钳制到最多 200，0 表示不保留发送历史。
   send_history_limit: 20
+  # 布尔，默认 false；开启后 Lua Dock 的默认停靠与工作区布局加载过程会在状态栏输出 LuaDockLayout 调试信息。
   lua_dock_layout_debug: false
 
+# 协议目录与 TX（发送）请求队列配置。
 protocol:
+  # 协议根目录；缺省为可执行文件目录下的 protocols/templates。
+  # 启动时会在可执行文件目录下的 protocols 补齐内嵌模板，与 root_dir 无关；补齐按内容比对：文件缺失或与本体内嵌副本字节不同即被覆盖重写（含默认加载的 templates/default_protocol/main.lua），需要保留改动请复制到独立协议目录。
   root_dir: protocols/templates
+  # 当前选中的协议目录；缺省为可执行文件目录下的 protocols/templates/default_protocol。
+  # 只有含 main.lua 的目录才算有效协议；相对路径会依次按进程工作目录、root_dir/<目录名>、root_dir/selected_dir 尝试。
+  # root_dir 下能扫描到协议时回退到扫描结果中的第一个；一个都扫不到时回退到内置默认协议目录（可执行文件目录下 protocols/templates/default_protocol）。
   selected_dir: protocols/templates/default_protocol
+  # TX 请求的排队与超时配置。
   tx:
+    # proto.send() 的默认发送超时，单位毫秒；脚本可用 opts.timeout_ms 单次覆盖。
     send_timeout_ms: 1000
+    # proto.request() 的默认请求超时，单位毫秒；发送后等待 request_done 也以它为截止时间。
     request_timeout_ms: 1000
+    # 待处理 TX 请求上限；统计排队请求、正在写出的请求和等待应答的半双工请求，达到上限后走溢出策略。
+    # 配 0 表示不再排队，所有请求直接按溢出策略处理。
     max_pending: 64
+    # 溢出策略：drop_oldest_waiting 丢弃队首等待请求后收下新请求，drop_newest 丢弃新请求。
+    # 其余取值（含默认 reject_new）一律拒绝新请求。
     overflow_policy: reject_new
+    # 溢出提示策略：popup_once 弹出一个未关闭的溢出弹窗（同键去重），其余取值只写状态栏与日志。
     overflow_notify: popup_once
 
 receive:
-  # 缺省受 performance.scale 控制；写出后即覆盖公共系数。
+  # 接收链路配置：底层通讯读缓冲，以及协议解析流缓冲的接近溢出告警。
+  # 以下 transport_read_buffer_bytes 缺省受 performance.scale 控制，写出后即覆盖公共系数；stream_buffer 的比例与布尔键不参与缩放。
+  # 底层通讯读取缓冲，单位字节，默认 4096；显式写出后该项覆盖 performance.scale 的缩放。
+  # 同一取值用于 tcp_client、tcp_server、serial、udp_peer 四种通讯方式。
   # transport_read_buffer_bytes: 4096
+  # 协议解析接收流缓冲的接近溢出告警设置。
   stream_buffer:
+    # 接近溢出的告警比例，默认 0.8；缓冲占用达到该比例即触发告警。
+    # 取值不大于 0 时回退使用协议定义中的 near_overflow_threshold_ratio。
+    # 触发后总会更新状态栏并记录 warn 日志，是否弹窗由 popup_enabled 决定。
     near_overflow_threshold: 0.8
+    # 接近溢出时是否弹出提示框，默认 true。
+    # 需协议定义中的 popupEnabled 同时为 true 才弹窗；弹窗打开期间不再重复弹出，用户关闭后若占用仍超阈值可再次弹出。
+    # 宿主 Alert 弹窗当前只有“关闭”按钮，不会发出 mute_until_disconnect，因此“断开前不再提示”不可达。
     popup_enabled: true
 
 scripting:
+  # 脚本执行链路的线程池、worker 预算与文件 IO 访问控制。
   pipeline:
+    # 脚本后处理 worker 线程数；省略时取 max(1, hardware_concurrency()-1)。
+    # 显式写出时只收窄到 [1, max(1, hardware_concurrency()-1)]，不会超过当前机器可安全使用的上限。
     # worker_threads: 4
   worker:
+    # 是否启用脚本 worker；默认 true。关闭时每次投递后等待 worker 空闲，不再按背压水位等待。
     enabled: true
     # 以下预算缺省受 performance.scale 控制；写出后即覆盖公共系数。
+    # RX 输入队列字节上限；默认 67108864 字节（64 MiB），缺省随 performance.scale 缩放。
+    # 生效值再取 min(rx_queue_limit_bytes, memory_budget_bytes)；写 0 表示直接用内存预算。
     # rx_queue_limit_bytes: 67108864
+    # worker 内存预算；默认 268435456 字节（256 MiB），缺省随 performance.scale 缩放。
+    # 写 0 时才改由 memory_budget_available_ratio 决定，两者都为 0 则回退内置默认 256 MiB。
     # memory_budget_bytes: 268435456
+    # worker 输出队列上限（批次数）；默认 65536，缺省随 performance.scale 缩放；写 0 表示不限制。
     # output_queue_limit: 65536
+    # RX 字节合批上限；默认 8192 字节，缺省随 performance.scale 缩放。
+    # 相邻 RX 只有合并后不超过该值才会并入同一批，否则单独成批。
     # batch_bytes: 8192
+    # 每轮输出刷新的时间预算，单位毫秒；默认 2.0，缺省随 performance.scale 缩放。
+    # 预算内处理到的批次先落地，其余留到下一轮；写 0 表示不限时；启用 performance.adaptive 时由自适应预算接管。
     # output_flush_budget_ms: 2.0
+    # 按可用内存比例扩展内存预算；默认 0.0 表示关闭。
+    # 仅在 memory_budget_bytes 为 0 时生效，取可用物理内存乘以该比例，大于等于 1.0 即用满可用内存。
+    # 可用物理内存只在 Windows 上可取；其它平台该项不生效，回退内置默认 256 MiB 预算。
     memory_budget_available_ratio: 0.0
+    # 是否启用 RX 背压；默认 true。启用后投递方在积压超过高水位时暂停投递。
     backpressure_enabled: true
+    # RX 背压高水位，相对 rx 队列预算的比例；默认 0.5。越过该值会暂停投递并推送一条告警。
     backpressure_rx_queue_high_watermark: 0.5
+    # RX 背压低水位；默认 0.3。积压回落到 min(高水位, 低水位) 以下才恢复投递；写 0（或负数）时低水位取 0，投递方需等积压完全清空才恢复；要关闭背压请设 backpressure_enabled: false。
     backpressure_rx_queue_low_watermark: 0.3
+    # 超时前是否使用无帧预算限制的 drain；默认 false。该键只被读取，保存配置时不会写回文件。
     # drain_request_outputs_unbounded: false
     #   true:  超时前使用无帧预算限制的 drain（flushScriptOutputsUnbounded）
     #   false: 使用受帧预算限制的 drain（flushScriptOutputs，默认值）
   file_io:
+    # 脚本文件 IO 总开关；默认 true。关闭后 proto.fs 各接口与文件对话框报“scripting.file_io 已禁用”，记录导入导出抛 “scripting.file_io is disabled”。
+    # 本组键在加载时不做范围钳制，配置值直接生效。
     enabled: true
+    # 是否允许访问当前协议目录；默认 true。
     allow_protocol_dir: true
+    # 是否允许文件对话框选中的路径获得访问授权；默认 true。
     allow_dialog_paths: true
+    # 额外允许访问的根目录列表；默认空数组 []，其下任意子路径都可读写。
     extra_allowed_roots: []
+    # 同时打开的文件句柄数上限；默认 8，达到上限后打开新文件返回错误。
     max_open_files: 8
+    # proto.fs.read 的默认分块字节数；默认 65536，读取时还会被 max_chunk_bytes 截断；proto.fs.write 不按该值分块，只受 max_write_file_size_bytes 限制。
     default_chunk_bytes: 65536
+    # 单次分块上限；默认 1048576 字节。同时约束 proto.fs.read、proto.fs.send_file 与 ProtoBuffer.bytes 转 Lua 表的长度。
     max_chunk_bytes: 1048576
+    # 读取类操作的文件大小上限；默认 1073741824 字节（1 GiB），超限的文件打开即被拒绝。
     max_file_size_bytes: 1073741824
+    # 写入类操作的文件大小上限；默认 1073741824 字节（1 GiB），累计写入超过即报错。
     max_write_file_size_bytes: 1073741824
     dialog:
+      # 是否允许 proto.fs.open_file_dialog() / open_dir_dialog()；默认 true。
       enabled: true
+      # 文件对话框是否记住上次目录；默认 true。
+      # 注意：该键目前只被读取与写回，无任何运行时消费者，设为 false 也不会阻止记住上次目录。
       remember_last_dir: true
     send_file:
+      # proto.fs.send_file() 的默认分块大小；默认 65536 字节，最终仍受 max_chunk_bytes 截断。
       default_chunk_bytes: 65536
+      # 文件发送的最大在途分块数；默认 2，运行时按 max(1, 值) 处理。
       max_inflight_chunks: 2
 
+# logging：应用日志配置；level 同时作用于控制台输出与日志文件过滤。
 logging:
+  # level：日志级别，默认 info；取值范围 trace / debug / info / warn / error，其中 warning 等价于 warn。
+  # 低于该级别的日志会被过滤掉；无法识别的取值回退为 info。
   level: info
+  # payload_preview：收发报文的十六进制预览，仅在调试时开启；预览随 trace 级日志输出，需同时把 level 设为 trace 才能看到。
   payload_preview:
+    # enabled：预览总开关，默认 false；关闭时不输出任何报文内容。
     enabled: false
+    # max_bytes：单条预览的最大字节数，默认 64；为 0 表示不截断、输出完整载荷。
+    # 载荷超过该值时只截取前 max_bytes 字节，并在末尾追加 ... 表示被截断。
     max_bytes: 64
+  # max_file_size_bytes：单个日志文件大小上限，单位字节，默认 5242880（5 MiB）；为 0 时按 1 处理。
   max_file_size_bytes: 5242880
+  # max_files：日志文件轮转保留数量，默认 3；为 0 时按 1 处理。
+  # 该值上限 200000，超出会抛异常导致文件日志不可用，程序降级为控制台 + UI 输出。
   max_files: 3
+  # 说明：可选键 file_path 未在本文件中写出；为空（默认）时不写日志文件，仅控制台 + UI 输出。
 
 communication:
+  # 通讯方式，取值 tcp_client、tcp_server、serial、udp_peer；无法识别的值回退为 tcp_client。
   kind: tcp_client
+  # TCP 客户端参数：作为客户端主动连接远端。
   tcp_client:
+    # 目标主机，默认 127.0.0.1。
     host: 127.0.0.1
+    # 目标端口，默认 9000；按无符号 16 位整数读取，界面输入限制在 0-65535。
     port: 9000
+  # TCP 服务端参数：在本机监听并接受客户端。
   tcp_server:
+    # 监听地址，默认 0.0.0.0，即绑定本机全部网卡。
     bind_address: 0.0.0.0
+    # 监听端口，默认 9000；按无符号 16 位整数读取，界面输入限制在 0-65535。
     port: 9000
+    # true（默认）时已有活动连接就拒绝新客户端；false 时新客户端接管并断开旧连接。
     reject_new_connection: true
+  # 串口参数。
   serial:
+    # 串口名，默认 COM1；可供选择的串口列表默认为 COM1-COM4，界面可刷新实际扫描结果。
     port_name: COM1
+    # 波特率，默认 115200；界面下拉提供 1200-921600 常用值，也接受纯数字输入。
     baud_rate: 115200
+    # 数据位，默认 8；界面输入被限制在 5-8。
     data_bits: 8
+    # 校验位，取值 none（默认）、odd、even；源码只识别 odd 与 even，其余取值按 none 处理。
     parity: none
+    # 停止位，取值 one（默认）、one_point_five、two；其余取值按 one 处理。
     stop_bits: one
+    # 流控，取值 none（默认）、software（XON/XOFF）、hardware（RTS/CTS）；其余取值按 none 处理。
     flow_control: none

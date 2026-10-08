@@ -6,6 +6,14 @@ void test_wave_channel_affine_transform();
 void test_wave_layout_multiframe_parameter_roundtrip();
 void test_application_bit_hover_setup_preserves_history();
 void test_wave_overview_channel_normalization();
+void test_application_offline_replay_modes_preserve_boundaries_and_budget();
+void test_application_offline_replay_current_and_package_protocol_have_independent_goldens();
+void test_application_offline_replay_browse_raw_blocks_every_lua_callback();
+void test_application_offline_replay_timeline_and_fast_batch_match_goldens();
+void test_application_offline_replay_profile_and_plot_fences_preserve_rx_order();
+void test_application_offline_replay_without_stream_has_explicit_empty_frame_state();
+void test_application_offline_replay_seek_rebuilds_lua_global_state_deterministically();
+void test_application_offline_replay_cancel_discards_old_generation_outputs();
 
 using TestFn = void (*)();
 
@@ -477,6 +485,7 @@ void test_application_plot_push_drains_with_budget_and_disconnect_keeps_pending(
 void test_runtime_scheduler_limits_busy_render_frames();
 void test_script_runtime_worker_disabled_mode_waits_for_rx_idle();
 void test_script_runtime_worker_rx_limit_keeps_all_queued_bytes();
+void test_script_runtime_worker_output_limit_drain_wakes_blocked_publisher();
 void test_script_runtime_worker_batch_bytes_merges_adjacent_rx_events();
 void test_script_runtime_worker_can_disable_adjacent_rx_merge();
 void test_script_runtime_worker_oscilloscope_toggle_sync_returns_lua_result();

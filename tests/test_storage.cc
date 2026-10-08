@@ -8,6 +8,7 @@
 #include <iostream>
 #include <fstream>
 #include <limits>
+#include <string_view>
 #include <thread>
 #include <cstdlib>
 #ifdef _WIN32
@@ -40,6 +41,31 @@ data::Record record(std::int64_t count = 1)
 {
     return {"protocol", "samples", "device", 123, {}, 0,
         {{count}, {}, {data::Bytes{0, 255}}}};
+}
+
+void temporaryPathCleanup()
+{
+    for (int attempt = 0; attempt < 32; ++attempt) {
+        const auto path = tests::makeUniqueTempDir("protoscope-storage-cleanup");
+        {
+            const tests::ScopedTempPath directory(path);
+            const auto nested = path / "records" / std::filesystem::path{L"清理测试"};
+            std::filesystem::create_directories(nested);
+            for (const auto* name : {"values.sqlite", "values.sqlite-wal", "values.sqlite-shm"}) {
+                std::ofstream file(nested / name, std::ios::binary);
+                file << "cleanup fixture";
+            }
+        }
+        require(!std::filesystem::exists(path), "嵌套临时目录必须完整清理");
+    }
+    const auto path = tests::makeUniqueTempFile("protoscope-storage-cleanup");
+    {
+        const tests::ScopedTempPath file(path);
+        std::ofstream output(path);
+        output << "cleanup fixture";
+    }
+    require(!std::filesystem::exists(path), "临时文件必须清理");
+    const tests::ScopedTempPath absent(path);
 }
 
 void model()
@@ -443,6 +469,7 @@ int main(int argc,char** argv)
     }
     int failed = 0;
     const std::pair<const char*, void(*)()> tests[] = {
+        {"temporary_path_cleanup", temporaryPathCleanup},
         {"model", model}, {"kv_persistence", kvPersistence},
         {"record_snapshots", recordSnapshots}, {"limits", limits},
         {"schema_versions", schemaVersions}, {"queue_fault", queueFault},
@@ -455,11 +482,15 @@ int main(int argc,char** argv)
         {"fault_persistence",faultPersistence},
         {"abrupt_process_recovery",abruptProcessRecovery},
     };
+    const char* filterEnv = std::getenv("PROTOSCOPE_TEST_FILTER");
+    const std::string_view filter = filterEnv == nullptr ? std::string_view{} : std::string_view{filterEnv};
     for (const auto& [name, run] : tests) {
-        try { run(); std::cout << "[PASS] " << name << '\n'; }
+        if (!filter.empty() && std::string_view{name}.find(filter) == std::string_view::npos) continue;
+        std::cout << "[RUN] " << name << '\n' << std::flush;
+        try { run(); std::cout << "[PASS] " << name << '\n' << std::flush; }
         catch (const std::exception& error) {
             ++failed;
-            std::cerr << "[FAIL] " << name << ": " << error.what() << '\n';
+            std::cerr << "[FAIL] " << name << ": " << error.what() << '\n' << std::flush;
         }
     }
     return failed == 0 ? 0 : 1;

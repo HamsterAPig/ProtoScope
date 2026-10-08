@@ -274,33 +274,18 @@ namespace {
 
     bool drawRailToggleButton(const char* label, bool active, const char* tooltip, const ImVec2& size)
     {
-        ImGui::InvisibleButton("##rail_toggle_button", size);
-
+        // 原生 Button 保留固定 ID，并提供键盘激活及绘制在填充之上的导航焦点。
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, kWaveToolsRailButtonRadius);
+        const bool clicked = drawUiButton("##rail_toggle_button", size, UiButtonRole::Toolbar, active);
+        ImGui::PopStyleVar();
         const bool hovered = ImGui::IsItemHovered();
-        const bool held = ImGui::IsItemActive();
-        const bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
 
         const ImVec2 itemMin = ImGui::GetItemRectMin();
         const ImVec2 itemMax = ImGui::GetItemRectMax();
 
         ImDrawList* drawList = ImGui::GetWindowDrawList();
 
-        ImU32 bgColor = ImGui::GetColorU32(ImGuiCol_Button);
-        ImU32 borderColor = ImGui::GetColorU32(ImGuiCol_Border);
-        ImU32 textColor = ImGui::GetColorU32(ImGuiCol_Text);
-
-        if (active) {
-            bgColor = ImGui::GetColorU32(ImGuiCol_ButtonActive);
-            borderColor = ImGui::GetColorU32(ImGuiCol_HeaderActive);
-        } else if (held) {
-            bgColor = ImGui::GetColorU32(ImGuiCol_ButtonActive);
-        } else if (hovered) {
-            bgColor = ImGui::GetColorU32(ImGuiCol_ButtonHovered);
-        }
-
-        drawList->AddRectFilled(itemMin, itemMax, bgColor, kWaveToolsRailButtonRadius);
-
-        drawList->AddRect(itemMin, itemMax, borderColor, kWaveToolsRailButtonRadius);
+        const ImU32 textColor = ImGui::GetColorU32(ImGuiCol_Text);
 
         const ImVec2 textPos = centeredTextPos(itemMin, itemMax, label);
 
@@ -679,7 +664,7 @@ namespace {
     {
         // todo)) Flow Layout
         auto& view = wave.view;
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.059F, 0.086F, 0.125F, 1.0F));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, defaultUiStyleTokens().panelBackground);
 
         const ImGuiStyle& style = ImGui::GetStyle();
         const bool reserveHorizontalScrollbar = wave.mainToolbarNeedsHorizontalScroll;
@@ -1042,8 +1027,11 @@ void drawZoomSelectionPreview(ImDrawList& drawList,
                               const ImVec2& selectionStart,
                               const ImVec2& selectionCurrent)
 {
-    const ImU32 fillColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.2F, 0.55F, 1.0F, 0.16F));
-    const ImU32 lineColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.45F, 0.75F, 1.0F, 0.95F));
+    const auto selection = activeWaveStyleTokens().selectionColor;
+    const ImU32 fillColor = ImGui::ColorConvertFloat4ToU32(
+        ImVec4(selection.x, selection.y, selection.z, 0.16F));
+    const ImU32 lineColor = ImGui::ColorConvertFloat4ToU32(
+        ImVec4(selection.x, selection.y, selection.z, 0.95F));
     switch (mode) {
         case ZoomSelectionAxisMode::XOnly: {
             const float lineY = 0.5F * (selectionStart.y + selectionCurrent.y);
@@ -1605,7 +1593,7 @@ public:
             releaseOverviewDrag(wave);
         }
         ImGui::SetCursorPos(overviewPanelCursor);
-        if (ImGui::Button(wave.overviewCollapsed ? "v" : "^", ImVec2(20.0F, 18.0F))) {
+        if (drawUiButton(wave.overviewCollapsed ? "v" : "^", ImVec2(20.0F, 18.0F), UiButtonRole::Toolbar)) {
             wave.overviewCollapsed = !wave.overviewCollapsed;
             if (wave.overviewCollapsed) releaseOverviewDrag(wave);
         }
