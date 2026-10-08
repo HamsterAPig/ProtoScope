@@ -3570,6 +3570,102 @@ void test_application_loads_protocol_action_templates()
     application.shutdown();
 }
 
+void test_lua_contract_template_guarded_request_roundtrip_retry_and_late_response()
+{
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+    require(application.initialize(), "请求模板闭环测试应用应初始化");
+    require(application.reloadProtocolDirectory("protocols/templates/request_guarded", true),
+            "真实受保护请求模板应可加载");
+    application.openTransport();
+    application.pumpOnce();
+
+    const auto waitFor = [&](auto&& predicate, const char* message) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (!predicate() && std::chrono::steady_clock::now() < deadline) {
+            application.pumpOnce();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        require(predicate(), message);
+    };
+    const auto traceCount = [&](const std::string& tag, protoscope::dock::RequestTraceState state) {
+        const auto& rows = application.docks().requestTraceState().rows;
+        return static_cast<std::size_t>(std::count_if(rows.begin(), rows.end(), [&](const auto& row) {
+            return row.tag == tag && row.state == state;
+        }));
+    };
+    const auto context = queuedTransportContext();
+
+    application.updateControlValue("timeout_ms", 100);
+    application.updateControlValue("max_attempts", 2);
+    application.updateControlValue("send_guarded", true);
+    waitFor([&] { return transportState->sentTasks.size() >= 1U; }, "模板应实际发送首次 guarded 请求");
+    std::this_thread::sleep_for(std::chrono::milliseconds(130));
+    waitFor([&] { return transportState->sentTasks.size() >= 2U; }, "首次请求超时后应按模板配置重试一次");
+    waitFor([&] { return traceCount("template_guarded_request", protoscope::dock::RequestTraceState::Sent) >= 2U; },
+            "首次发送和重试都应经过Application sent状态");
+    require(traceCount("template_guarded_request", protoscope::dock::RequestTraceState::Completed) == 0U,
+            "仅加载模板和发送请求不应被误判为闭环完成");
+    require(traceCount("template_guarded_request", protoscope::dock::RequestTraceState::Timeout) == 1U,
+            "第一次超时必须实际发生，才能证明模板请求重试闭环");
+    require(transportState->sentTasks[0].payload == std::vector<std::uint8_t>({0xAA, 0x55, 0x01, 0x0D}) &&
+                transportState->sentTasks[1].payload == transportState->sentTasks[0].payload,
+            "模板的首次发送和重试必须使用相同请求帧");
+    const auto firstRequestId = transportState->sentTasks[0].requestId;
+    require(transportState->sentTasks[1].requestId == firstRequestId,
+            "超时重试必须属于同一逻辑请求而不是新建request");
+    const auto retryQueued = std::count_if(application.docks().requestTraceState().rows.begin(),
+                                           application.docks().requestTraceState().rows.end(),
+                                           [&](const auto& row) {
+                                               return row.tag == "template_guarded_request" && row.attempt == 2U &&
+                                                      row.state == protoscope::dock::RequestTraceState::Queued;
+                                           });
+    require(retryQueued >= 1, "重试应记录第二次attempt的排队追踪");
+    for (int index = 0; index < 5; ++index) application.pumpOnce();
+    require(traceCount("template_guarded_request", protoscope::dock::RequestTraceState::Failed) == 0U &&
+                traceCount("template_guarded_request", protoscope::dock::RequestTraceState::Timeout) == 1U,
+            "非终止的首次超时只应重试，不应提前终止请求");
+    // 噪声及分片响应经真正的transport队列送入模板on_bytes(integer[])。
+    transportState->pendingEvents.emplace_back(
+        protoscope::transport::TransportBytesEvent{context, {0x99, 0xAA}});
+    transportState->pendingEvents.emplace_back(
+        protoscope::transport::TransportBytesEvent{context, {0x55, 0x01}});
+    transportState->pendingEvents.emplace_back(
+        protoscope::transport::TransportBytesEvent{context, {0x02, 0x0D}});
+    waitFor([&] { return traceCount("template_guarded_request", protoscope::dock::RequestTraceState::Completed) == 1U; },
+            "分片且带噪声的完整响应必须驱动真实模板request_done并完成请求");
+
+    // 完成后的迟到完整帧不可重复完成同一请求。
+    transportState->pendingEvents.emplace_back(
+        protoscope::transport::TransportBytesEvent{context, {0xAA, 0x55, 0x03, 0x0D}});
+    for (int index = 0; index < 5; ++index) application.pumpOnce();
+    require(traceCount("template_guarded_request", protoscope::dock::RequestTraceState::Completed) == 1U,
+            "完成后的迟到响应不得重复调用request_done");
+
+    // 再发一个仅一次的请求，等待终止超时后注入迟到响应，不得把终止请求误完成。
+    application.updateControlValue("reset_guard", true);
+    application.updateControlValue("timeout_ms", 100);
+    application.updateControlValue("max_attempts", 1);
+    application.updateControlValue("send_guarded", true);
+    waitFor([&] { return transportState->sentTasks.size() >= 3U; }, "解除guard后模板应能发出第二个请求");
+    waitFor([&] { return traceCount("template_guarded_request", protoscope::dock::RequestTraceState::Sent) >= 3U; },
+            "第二个模板请求必须实际发送后才能验证终止迟到响应");
+    std::this_thread::sleep_for(std::chrono::milliseconds(130));
+    waitFor([&] { return traceCount("template_guarded_request", protoscope::dock::RequestTraceState::Timeout) >= 2U; },
+            "第二个单次尝试请求应达到终止超时状态");
+    const auto completedBeforeLate = traceCount("template_guarded_request", protoscope::dock::RequestTraceState::Completed);
+    transportState->pendingEvents.emplace_back(
+        protoscope::transport::TransportBytesEvent{context, {0xAA, 0x55, 0x04, 0x0D}});
+    for (int index = 0; index < 5; ++index) application.pumpOnce();
+    require(traceCount("template_guarded_request", protoscope::dock::RequestTraceState::Completed) == completedBeforeLate,
+            "终止超时后的迟到完整响应不得完成已终止请求");
+    application.shutdown();
+}
+
 void test_application_initialize_prepares_default_config_and_protocol_dirs()
 {
     protoscope::config::ConfigStore store;

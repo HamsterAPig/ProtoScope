@@ -1222,6 +1222,36 @@ void test_script_crc_bridge()
     require(found, "CRC 桥接结果不正确");
 }
 
+void test_lua_contract_template_guarded_request_accepts_integer_array_and_completes_once()
+{
+    protoscope::scripting::ScriptHost host;
+    requireProtocolLoaded(host, templateProtocolDir("request_guarded").generic_string().c_str());
+
+    const auto ctx = sampleCtx();
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
+    host.onControl(ctx, "timeout_ms", 500);
+    host.onControl(ctx, "max_attempts", 2);
+    host.onControl(ctx, "send_guarded", true);
+    const auto requests = host.drainTxRequests();
+    require(requests.size() == 1U && requests.front().guarded &&
+                requests.front().payload == std::vector<std::uint8_t>({0xAA, 0x55, 0x01, 0x0D}),
+            "真实请求模板必须生成预期guarded请求帧");
+    host.setRequestAwaitingCompletion(true);
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, {0x99, 0xAA}});
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, {0x55, 0x01}});
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, {0x02, 0x0D}});
+    const auto completed = host.drainRequestDoneResults();
+    require(completed.size() == 1U && completed.front().ok,
+            "真实模板应将分片、带噪声integer[]响应转为一次成功request_done");
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, {0xAA, 0x55, 0x03, 0x0D}});
+    require(host.drainRequestDoneResults().empty(), "完成后的迟到帧不得再次request_done");
+    const auto logs = host.drainLogs();
+    require(std::none_of(logs.begin(), logs.end(), [](const auto& log) {
+                return log.message.find("on_bytes 执行失败") != std::string::npos;
+            }),
+            "integer[]响应处理不应因ProtoBuffer方法调用产生脚本错误");
+}
+
 void test_script_read_version_flow()
 {
     protoscope::scripting::ScriptHost host;
