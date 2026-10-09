@@ -45,8 +45,8 @@ local M = {}
 ---@field default? ProtoStreamFieldCount `case` 未匹配时的默认数量
 
 ---@class ProtoStreamBufferDef
----@field capacity? integer 初始环形缓冲容量，默认 4096；无损模式下会在宿主预算内自动扩容
----@field max_capacity? integer 无损模式自动扩容上限，默认 256MiB
+---@field capacity? integer 初始环形缓冲容量且是单帧解析长度上限，默认 4096；容量不足时累计缓冲仍可在 max_capacity 内自动扩容
+---@field max_capacity? integer 累计缓冲无损自动扩容上限，默认 256MiB；不放宽 capacity 的单帧长度限制
 ---@field overflow? 'drop_oldest' 显式丢弃最旧字节；省略时默认不丢弃，容量不足会先扩容并报告预算耗尽
 ---@field near_overflow_threshold_ratio? number 接近溢出告警阈值比例，默认 0.8
 ---@field near_overflow_notify? boolean 是否启用接近溢出告警
@@ -87,7 +87,7 @@ local M = {}
 ---@field runtime_profile? boolean 声明该帧长度与通道映射由 `proto.stream.set_profile()` 在运行时提供
 ---@field crc? ProtoStreamCrcDef|false CRC 配置；省略或 `false` 表示不校验
 ---@field fields? ProtoStreamFieldDef[] 字段定义
----@field on_frame? fun(ctx: ProtoConnectionContext, frame: ProtoStreamFrame) 完整有效帧回调；未定义 `on_batch` 时必填
+---@field on_frame? fun(ctx: ProtoConnectionContext, frame: ProtoStreamFrame) 完整有效帧回调；仅未定义 `on_batch` 时逐帧调用
 ---@field value_targets? ProtoStreamValueTargets 解析后自动填充 value_table 控件
 
 ---@class ProtoStreamSchema
@@ -96,10 +96,10 @@ local M = {}
 ---@field raw_output? ProtoStreamRawOutputMode 是否向 Lua frame 暴露 raw；默认 full 兼容旧脚本。
 ---@field low_overhead? boolean 低开销模式；与 `raw_output = "omit"` 配合时，成功帧不再保留大 raw 到实时解析快照。
 ---@field field_output? ProtoStreamFieldOutputMode 字段输出模式；默认 compat 同时写 `frame.fields.xxx` 和 `frame.xxx`，`fields_only` 只写 `frame.fields`。
----@field on_batch? fun(ctx: ProtoConnectionContext, frames: ProtoStreamFrame[]) 完整有效帧批量回调；定义后优先于各 frame 的 `on_frame`
+---@field on_batch? fun(ctx: ProtoConnectionContext, frames: ProtoStreamFrame[]) 完整有效帧批量回调；定义后优先于各 frame 的 `on_frame`；解析错误按顺序切开连续成功帧批次
 ---@field on_error? fun(ctx: ProtoConnectionContext, err: ProtoStreamError)
 
---- Lua stream schema 的 `buffer.capacity` 是初始容量，`buffer.max_capacity` 控制无损扩容上限。
+--- Lua stream schema 的 `buffer.capacity` 同时是初始容量和单帧长度上限；`buffer.max_capacity` 仅限制累计缓冲的无损扩容。
 --- 宿主 YAML `receive.stream_buffer.*` 只控制接近溢出告警阈值和弹窗，不改变 schema 容量。
 
 ---@class ProtoStreamFrame

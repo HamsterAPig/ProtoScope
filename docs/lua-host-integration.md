@@ -52,6 +52,20 @@ python tools\generate_luals_api.py --check
 - 现有 `proto.*` 名称保持兼容，不因内部模块化重构改脚本调用方式。
 - Lua 仍保持传输无关，只处理 `ProtoPayload`、`ProtoBuffer`、`ProtoConnectionContext` 和 TX/弹窗/文件/波形事件。
 - `ctx.kind` 只用于必要的展示或分支，协议解析应优先按 bytes 和业务帧格式编写。
+- `on_bytes(ctx, bytes)` 收到 1-based Lua `integer[]`，不接收 `ProtoBuffer`；`ProtoBuffer` 仅用于相应文件/数据 API。普通 Lua 回调错误记录日志，不回滚已经发生的宿主副作用。
+- `on_tx` 是 worker 线程回调；脚本不应假设其在 UI 主线程执行。
+
+## 协议回调与 stream 契约
+
+- `stream()` 优先用于定界明确的协议。帧解析事件按输入顺序派发；`on_batch` 定义后优先于 `on_frame`，错误会切开连续成功帧段，依序派发此前的帧、错误、后续帧。`on_batch` 报错不会降级重放为 `on_frame`。
+- 加载新脚本时 `proto.stream.set_profile/clear_profile` 返回 `false, error`；应在加载成功后的运行期回调（例如 `on_open` 或握手响应回调）调用。失败加载不会把候选 profile 写入仍存活的旧 runtime。
+- `buffer.capacity` 同时是初始环形缓冲容量和单帧解析长度上限。`buffer.max_capacity` 限制无损模式下累计接收缓冲可扩展的上限，不会放宽单帧长度限制；`overflow = "drop_oldest"` 才会在累计缓冲溢出时丢弃旧字节。
+- 新 schema 推荐 `field_output = "fields_only"`，业务字段位于 `frame.fields`；省略时仍默认 `compat` 以维持旧脚本行为。compat 字段不得占用 `name`、`fields`、`raw`、`crc_ok`、`channel_map` 元数据名。
+
+## 可信脚本与执行边界
+
+协议脚本按可信本地代码运行，不是完整安全沙箱。运行时以 Lua 指令钩子检查执行预算并可停止 Lua 指令执行，但无法抢占/中断正在执行的阻塞原生调用；文件访问等能力仍由宿主配置和授权策略约束。不要加载不可信脚本并依赖执行超时作为隔离措施。
+
 
 ## 脚本弹窗窗口参数
 
@@ -111,3 +125,4 @@ proto.ui.alert({
 清除尚未交给传输层的发送，错误进入脚本运行时状态。成功重载后恢复；
 加载新脚本失败时保留旧运行时。已发出的设备命令无法撤回。
 该机制仅中断 Lua 指令执行，不构成完整沙箱，也不能中断阻塞的原生调用。
+协议脚本按可信本地代码使用；不要把指令预算或文件访问授权误作恶意脚本隔离保证。
