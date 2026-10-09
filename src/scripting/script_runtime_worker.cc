@@ -737,7 +737,6 @@ struct ScriptRuntimeWorker::Impl {
         subtractPendingRxBytes(event.bytes.size());
         if (activeConnectionId.has_value() && event.context.readyForIo &&
             *activeConnectionId != event.context.connectionId) {
-            subtractPendingRxBytes(event.bytes.size());
             return false;
         }
 

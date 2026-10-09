@@ -197,6 +197,66 @@ void test_script_runtime_worker_disabled_mode_waits_for_rx_idle()
     require(hasEvent(outputs, "worker_bytes", "first=66"), "禁用异步 worker 时应立即产出脚本事件");
 }
 
+void test_script_runtime_worker_rejects_stale_rx_without_subtracting_other_pending_bytes()
+{
+    const ScopedTempPath protocolDir(makeWorkerProtocolDir("stale-rx-counter", R"lua(
+function controls() return {} end
+function on_bytes(ctx, bytes)
+  proto.emit("worker_bytes", tostring(bytes[1]))
+end
+)lua"));
+    protoscope::scripting::ScriptRuntimeWorker worker;
+    worker.configure({.enabled = true, .rxQueueLimitBytes = 64U, .outputQueueLimit = 1U,
+                      .backpressureEnabled = false});
+    require(worker.loadProtocolDirectory(protocolDir.path().generic_string()).ok,
+            "旧连接RX计数测试协议应可加载");
+    (void)worker.drainOutputs();
+
+    const auto observe = [](auto&& predicate) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!predicate() && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+        return predicate();
+    };
+    worker.postTransportBytes(bytesEvent({0x01}), false);
+    require(observe([&] { return worker.inputIdle() && worker.snapshot().outputQueueSize == 1U; }),
+            "首个RX应建立活动连接并占满输出发布槽");
+
+    worker.postTransportBytes(bytesEvent({0x02}), false);
+    require(observe([&] { return worker.executingRxBytes() == 1U && !worker.inputIdle(); }),
+            "第二个RX应受控阻塞在输出发布窗口");
+
+    auto stale = bytesEvent({0xA1, 0xA2});
+    stale.context.connectionId = 41U;
+    worker.postTransportBytes(std::move(stale), false);
+    worker.postTransportBytes(bytesEvent({0x03}), false);
+    worker.postTransportBytes(bytesEvent({0x04}), false);
+    require(worker.pendingRxBytes() == 4U,
+            "旧连接RX与其他已接受RX必须同时计入待处理字节数");
+
+    (void)worker.drainOutputs();
+    require(observe([&] {
+                return worker.executingRxBytes() == 1U && worker.pendingRxBytes() == 1U &&
+                       !worker.inputIdle();
+            }),
+            "拒绝旧代次后，后续RX仍须在输出发布窗口保留剩余待处理计数");
+    require(worker.pendingRxBytes() == 1U,
+            "拒绝旧连接RX不得重复扣减其他已接受输入计数");
+    require(worker.executingRxBytes() == 1U,
+            "RX输出发布窗口必须持续计入executingRxBytes");
+
+    const auto idleDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while ((!worker.inputIdle() || worker.pendingRxBytes() != 0U || worker.executingRxBytes() != 0U) &&
+           std::chrono::steady_clock::now() < idleDeadline) {
+        (void)worker.drainOutputs();
+        std::this_thread::yield();
+    }
+    require(worker.inputIdle() && worker.pendingRxBytes() == 0U && worker.executingRxBytes() == 0U,
+            "正常处理后worker应恢复空闲并归零RX计数");
+    worker.stop();
+    require(worker.pendingRxBytes() == 0U && worker.executingRxBytes() == 0U,
+            "停止/取消后pending与executing RX计数必须归零");
+}
+
 void test_script_runtime_worker_rx_limit_keeps_all_queued_bytes()
 {
     const ScopedTempPath protocolDir(makeWorkerProtocolDir("rx-limit", workerProbeScript()));

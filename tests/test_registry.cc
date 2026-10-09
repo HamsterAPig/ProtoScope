@@ -556,6 +556,8 @@ static const TestCase kAllTests[] = {
      &test_script_runtime_worker_disabled_mode_waits_for_rx_idle},
     {"script_runtime_worker_rx_limit_keeps_all_queued_bytes",
      &test_script_runtime_worker_rx_limit_keeps_all_queued_bytes},
+    {"script_runtime_worker_rejects_stale_rx_without_subtracting_other_pending_bytes",
+     &test_script_runtime_worker_rejects_stale_rx_without_subtracting_other_pending_bytes},
     {"lua_contract_backpressure_try_post_rejects_without_consuming_and_recovers",
      &test_lua_contract_backpressure_try_post_rejects_without_consuming_and_recovers},
     {"lua_contract_backpressure_reload_and_stop_recover_from_output_saturation",

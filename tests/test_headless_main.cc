@@ -24,6 +24,8 @@ const TestCase kHeadlessTests[] = {
      &test_script_runtime_worker_disabled_mode_waits_for_rx_idle},
     {"script_runtime_worker_rx_limit_keeps_all_queued_bytes",
      &test_script_runtime_worker_rx_limit_keeps_all_queued_bytes},
+    {"script_runtime_worker_rejects_stale_rx_without_subtracting_other_pending_bytes",
+     &test_script_runtime_worker_rejects_stale_rx_without_subtracting_other_pending_bytes},
     {"script_runtime_worker_output_limit_drain_wakes_blocked_publisher",
      &test_script_runtime_worker_output_limit_drain_wakes_blocked_publisher},
     {"script_runtime_worker_can_disable_adjacent_rx_merge", &test_script_runtime_worker_can_disable_adjacent_rx_merge},
