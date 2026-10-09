@@ -111,6 +111,10 @@ namespace {
         TxEvent event;
     };
 
+    struct TxCallbackTestHookCommand {
+        std::function<void()> hook;
+    };
+
     struct DialogEventCommand {
         transport::ConnectionContext context;
         DialogEvent event;
@@ -146,6 +150,7 @@ namespace {
                                        DataTableCommand,
                                        TickCommand,
                                        TxEventCommand,
+                                       TxCallbackTestHookCommand,
                                        DialogEventCommand,
                                        FileDialogEventCommand,
                                        RequestAwaitingCompletionCommand,
@@ -278,6 +283,7 @@ struct ScriptRuntimeWorker::Impl {
     ScriptRuntimeWorkerConfig config{};
     ScriptRuntimeSnapshot snapshot{};
     std::size_t pendingRxBytes{0};
+    std::size_t executingRxBytes{0};
     bool rxBackpressureWarningActive{false};
     bool stopping{false};
     bool executing{false};
@@ -495,6 +501,12 @@ struct ScriptRuntimeWorker::Impl {
         return pendingRxBytes;
     }
 
+    std::size_t executingRxBytesCount() const
+    {
+        std::lock_guard lock(mutex);
+        return executingRxBytes;
+    }
+
     std::vector<ScriptRuntimeOutputBatch> drainOutputs()
     {
         std::vector<ScriptRuntimeOutputBatch> drained;
@@ -650,6 +662,9 @@ struct ScriptRuntimeWorker::Impl {
                 } else {
                     command = std::move(commands.front());
                     commands.pop_front();
+                    if (const auto* bytes = std::get_if<BytesCommand>(&command); bytes != nullptr) {
+                        executingRxBytes += bytes->event.bytes.size();
+                    }
                     executing = true;
                     hasCommand = true;
                 }
@@ -722,6 +737,7 @@ struct ScriptRuntimeWorker::Impl {
         subtractPendingRxBytes(event.bytes.size());
         if (activeConnectionId.has_value() && event.context.readyForIo &&
             *activeConnectionId != event.context.connectionId) {
+            subtractPendingRxBytes(event.bytes.size());
             return false;
         }
 
@@ -880,6 +896,14 @@ struct ScriptRuntimeWorker::Impl {
 
     CommandExecutionResult executeCommandItem(ScriptHost& host,
                                               std::optional<std::uint64_t>&,
+                                              TxCallbackTestHookCommand& command)
+    {
+        host.setTxCallbackTestHookForTest(std::move(command.hook));
+        return {};
+    }
+
+    CommandExecutionResult executeCommandItem(ScriptHost& host,
+                                              std::optional<std::uint64_t>&,
                                               DialogEventCommand& command)
     {
         host.onDialogEvent(command.context, command.event);
@@ -935,6 +959,11 @@ struct ScriptRuntimeWorker::Impl {
 
             const auto execution = executeCommand(host, activeConnectionId, *command);
             publishOutputs(drainHostOutputs(host, execution.includeTransportStats));
+            if (const auto* bytes = std::get_if<BytesCommand>(&*command); bytes != nullptr) {
+                // RX未发布的回调输出计数覆盖callback执行及输出发布，供请求超时判断准确等待ACK结果。
+                std::lock_guard lock(mutex);
+                executingRxBytes -= (std::min)(executingRxBytes, bytes->event.bytes.size());
+            }
             publishSnapshot(host);
             {
                 std::lock_guard lock(mutex);
@@ -1119,6 +1148,11 @@ void ScriptRuntimeWorker::postTxEvent(transport::ConnectionContext context, TxEv
     impl_->pushCommand(TxEventCommand{.context = std::move(context), .event = std::move(event)});
 }
 
+void ScriptRuntimeWorker::setTxCallbackTestHookForTest(std::function<void()> hook)
+{
+    impl_->pushCommand(TxCallbackTestHookCommand{.hook = std::move(hook)});
+}
+
 void ScriptRuntimeWorker::postDialogEvent(transport::ConnectionContext context, DialogEvent event)
 {
     if (!event.runtimeGeneration) event.runtimeGeneration = snapshot().runtimeGeneration;
@@ -1159,6 +1193,11 @@ void ScriptRuntimeWorker::waitIdle()
 std::size_t ScriptRuntimeWorker::pendingRxBytes() const
 {
     return impl_->pendingRxBytesCount();
+}
+
+std::size_t ScriptRuntimeWorker::executingRxBytes() const
+{
+    return impl_->executingRxBytesCount();
 }
 
 std::vector<ScriptRuntimeOutputBatch> ScriptRuntimeWorker::drainOutputs()

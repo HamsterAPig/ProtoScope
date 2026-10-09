@@ -2082,9 +2082,13 @@ void Application::updateControlValue(const std::string& id, const scripting::Con
     }
     scriptWorker_.postControl(context, id, value, generation);
     if (!runtimeConfig_.scripting.workerEnabled) {
-        scriptWorker_.waitIdle();
+        // 同步兼容模式等待控件回调；异步 worker 不得阻塞 UI 主线程。
+        while (!scriptWorker_.idle()) {
+            flushScriptOutputs();
+            std::this_thread::yield();
+        }
+        flushScriptOutputs();
     }
-    flushScriptOutputs();
     syncDockState();
 }
 
@@ -4375,6 +4379,13 @@ bool Application::drainTransportEventQueues(const std::chrono::steady_clock::tim
 
         if (auto* bytes = std::get_if<transport::TransportBytesEvent>(&pendingTransportEvents_.front());
             bytes != nullptr) {
+            // 空RX不需要进入worker；必须消费该事件，避免它卡住后续ACK及超时drain。
+            if (bytes->bytes.empty()) {
+                pendingTransportEvents_.pop_front();
+                ++processedEvents;
+                if (std::chrono::steady_clock::now() - startedAt >= kTransportEventBudget) break;
+                continue;
+            }
             if (runtimeConfig_.scripting.workerEnabled && bytes->context.readyForIo) {
                 if (!activeConnection_.has_value() ||
                     activeConnection_->connectionId != bytes->context.connectionId) {
@@ -4750,6 +4761,8 @@ bool Application::processTransportTxEvent(const transport::TransportTxEvent& eve
         activeWrite.waitDeadlineMs = event.finishedAtMs + activeWrite.request.timeoutMs;
         activeHalfDuplexRequest_ = activeWrite;
         scriptWorker_.postRequestAwaitingCompletion(true);
+        dockStore_.appendRequestTraceRow(
+            makeRequestTraceRow(activeWrite.request, dock::RequestTraceState::Sent, error, event.finishedAtMs));
         // 核心流程：先进入等待 ACK 状态再回调 on_tx，允许脚本在 sent 事件中立即调用 proto.request_done。
         scriptWorker_.postTxEvent(
             activeWrite.request.connection,
@@ -4767,8 +4780,13 @@ bool Application::processTransportTxEvent(const transport::TransportTxEvent& eve
                 .guardState = guardStateForEvent(activeWrite.request, scripting::TxEventState::Sent),
                 .error = error,
             });
-        dockStore_.appendRequestTraceRow(
-            makeRequestTraceRow(activeWrite.request, dock::RequestTraceState::Sent, error, event.finishedAtMs));
+        if (!runtimeConfig_.scripting.workerEnabled) {
+            while (!scriptWorker_.idle()) {
+                flushScriptOutputs();
+                std::this_thread::yield();
+            }
+            flushScriptOutputs();
+        }
         loggingFacade_.trace(
             "tx",
             txRequestLogMessage("sent", activeWrite.request, pendingTxQueue_.size(), std::nullopt, event.finishedAtMs) +
@@ -5134,10 +5152,16 @@ bool Application::processRequestTimeouts()
         return false;
     }
 
-    if (drainRequestTimeoutBacklog()) return true;
-    // 不阻塞主循环等待worker；若ACK已经处理，下一次pump先drain输出并再检查活动请求。
-    if (scriptWorker_.pendingRxBytes() > 0U || scriptWorker_.snapshot().inputQueueSize > 0U ||
-        scriptWorker_.snapshot().outputQueueSize > 0U) {
+    // timeout只需先派发transport/RX backlog；普通tick等worker命令不得压住请求deadline。
+    if (!pendingTransportEvents_.empty() || !pendingRxByteChunks_.empty()) {
+        static_cast<void>(handleTransportEvents());
+        return true;
+    }
+    // 独立RX执行计数覆盖callback和输出发布，但不把RX字节占用期延长到输出队列消费，
+    // 避免改变worker背压水位；已发布ACK输出仍由主线程drain。
+    const auto workerSnapshot = scriptWorker_.snapshot();
+    if (scriptWorker_.executingRxBytes() > 0U || workerSnapshot.pendingWorkerRxBytes > 0U ||
+        workerSnapshot.outputQueueSize > 0U) {
         return true;
     }
     if (!activeHalfDuplexRequest_.has_value()) {

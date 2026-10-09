@@ -10,12 +10,14 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <condition_variable>
 #include <future>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -31,6 +33,10 @@ namespace protoscope::app {
 
 struct ApplicationBackpressureTestAccess {
     static scripting::ScriptRuntimeWorker& worker(Application& application) { return application.scriptWorker_; }
+    static void setTxCallbackHook(Application& application, std::function<void()> hook)
+    {
+        application.scriptWorker_.setTxCallbackTestHookForTest(std::move(hook));
+    }
 };
 
 } // namespace protoscope::app
@@ -216,6 +222,17 @@ std::filesystem::path makeSchemaSwitchReplayProtocolDir()
 bool waitUntil(auto&& predicate)
 {
     return protoscope::tests::waitUntil(std::forward<decltype(predicate)>(predicate), 80);
+}
+
+template <typename Predicate>
+void pumpApplicationUntil(protoscope::app::Application& application, Predicate&& predicate, const char* message)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!predicate()) {
+        require(std::chrono::steady_clock::now() < deadline, message);
+        application.pumpOnce();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
 }
 
 std::uint64_t currentTimeMs()
@@ -932,8 +949,13 @@ void test_application_tx_overflow_popup_keeps_dialog_payload()
             "dialog_requests 协议应可加载");
 
     application.updateControlValue("send_one", true);
-
-    const auto dialogs = application.drainDialogRequests();
+    std::vector<protoscope::scripting::DialogRequest> dialogs;
+    pumpApplicationUntil(application,
+                         [&] {
+                             dialogs = application.drainDialogRequests();
+                             return !dialogs.empty();
+                         },
+                         "发送队列溢出弹窗生成超时");
     require(dialogs.size() == 1, "发送队列溢出应生成一条弹窗请求");
     const auto& dialog = dialogs.front();
     require(dialog.kind == protoscope::scripting::DialogKind::Alert, "发送队列溢出应生成 alert");
@@ -966,6 +988,11 @@ void test_application_refreshes_selected_elf_symbol_controls_silently()
                                        .value = "0x20000010",
                                        .type = "uint32_t",
                                    });
+    const auto initialControl = [&] {
+        const auto* control = findElfSymbolControl(application, "target");
+        return control != nullptr && control->value == "0x20000010";
+    };
+    pumpApplicationUntil(application, initialControl, "静默ELF控件状态同步超时");
     const auto beforeEvents = countScriptEvents(application.docks().scriptState(), "symbol");
 
     protoscope::ui::ElfStaticAddressFileWatchState watch;
@@ -1049,11 +1076,20 @@ void test_application_refreshes_selected_elf_symbol_controls_with_on_control()
                                        .value = "0x20000010",
                                        .type = "uint32_t",
                                    });
+    pumpApplicationUntil(application,
+                         [&] { return countScriptEvents(application.docks().scriptState(), "symbol") == 1U; },
+                         "ELF控件异步回调完成超时");
     const auto beforeEvents = countScriptEvents(application.docks().scriptState(), "symbol");
 
     writeElfSymbolDump(elfPath, 0x20000088ULL, "uint16_t");
     require(application.loadElfStaticAddressFile(elfPath, error), "更新后的 ELF 数据应可加载");
     application.refreshSelectedElfSymbolControls();
+    pumpApplicationUntil(application,
+                         [&] {
+                             const auto* control = findElfSymbolControl(application, "target");
+                             return control != nullptr && control->value == "0x20000088";
+                         },
+                         "ELF刷新后的异步on_control输出超时");
 
     const auto* refreshed = findElfSymbolControl(application, "target");
     require(refreshed != nullptr, "应能找到已选 ELF 控件值");
@@ -1152,8 +1188,10 @@ void test_application_same_protocol_reload_keeps_runtime_stable()
         require(lua.lastError.empty(), "同协议强制 reload 成功后不应残留错误");
 
         application.updateControlValue("send", true);
-        require(transportState->sentTasks.size() == static_cast<std::size_t>(attempt + 1),
-                "同协议强制 reload 后 Lua 控件仍应能发送 table payload request");
+        const auto expectedCount = static_cast<std::size_t>(attempt + 1);
+        pumpApplicationUntil(application,
+                             [&] { return transportState->sentTasks.size() == expectedCount; },
+                             "同协议强制 reload 后 request 发送超时");
         const auto& sentTask = transportState->sentTasks.back();
         const std::vector<std::uint8_t> expectedPayload{0xff, 0x03, 0x00, 0x01};
         require(sentTask.payload == expectedPayload, "table payload 应按 number[] 转成原始字节，不应误走字符串转换");
@@ -1187,7 +1225,9 @@ void test_application_same_protocol_reload_without_force_preserves_runtime_state
             "非强制 reload 测试协议应可加载");
 
     application.updateControlValue("tick", true);
-    require(application.docks().configState().statusMessage == "count:1", "首次触发应把计数写入状态栏");
+    pumpApplicationUntil(application,
+                         [&] { return application.docks().configState().statusMessage == "count:1"; },
+                         "首次 on_control 状态更新超时");
 
     require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), false),
             "同协议非强制 reload 应成功");
@@ -1197,7 +1237,9 @@ void test_application_same_protocol_reload_without_force_preserves_runtime_state
     require(lua.lastError.empty(), "同协议非强制 reload 成功后不应残留错误");
 
     application.updateControlValue("tick", true);
-    require(application.docks().configState().statusMessage == "count:2", "同协议非强制 reload 不应重置 Lua 本地状态");
+    pumpApplicationUntil(application,
+                         [&] { return application.docks().configState().statusMessage == "count:2"; },
+                         "reload 后第二次 on_control 状态更新超时");
 
     application.shutdown();
 }
@@ -1241,8 +1283,9 @@ void test_application_failed_reload_keeps_old_callbacks_alive()
     require(after.docks.size() == before.docks.size(), "失败 reload 后旧 Dock 快照应保留");
 
     application.updateControlValue("ping", true);
-    require(application.docks().configState().statusMessage == "old callback alive",
-            "失败 reload 后旧协议控件回调仍应可用");
+    pumpApplicationUntil(application,
+                         [&] { return application.docks().configState().statusMessage == "old callback alive"; },
+                         "失败 reload 后旧协议回调输出超时");
 
     application.shutdown();
 }
@@ -1283,16 +1326,171 @@ void test_application_forced_reload_discards_old_tx_callback_outputs()
     application.pumpOnce();
 
     application.updateControlValue("start", true);
-    require(transportState->sentTasks.size() == 1, "首次控制应发送 1 条 request");
-    application.pumpOnce();
+    pumpApplicationUntil(application,
+                         [&] { return transportState->sentTasks.size() == 1U; },
+                         "首次控制 request 发送超时");
+    const std::vector<std::uint8_t> expectedPayload{0x01};
+    require(transportState->sentTasks.front().payload == expectedPayload, "首次 request payload 应保持不变");
+    pumpApplicationUntil(application,
+                         [&] { return application.docks().requestTraceState().rows.back().state ==
+                                       protoscope::dock::RequestTraceState::Sent; },
+                         "首次 request 的 Sent 事件派发超时");
 
     require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "强制重载应成功");
+    pumpApplicationUntil(application,
+                         [&] { return protoscope::app::ApplicationBackpressureTestAccess::worker(application).idle(); },
+                         "强制重载后旧worker回调完成超时");
     application.pumpOnce();
 
     require(transportState->sentTasks.size() == 1, "强制重载应丢弃旧 on_tx 追加的 request");
     require(application.docks().configState().statusMessage.find("old canceled leaked") == std::string::npos,
             "强制重载应丢弃旧 on_tx 追加的状态");
 
+    application.shutdown();
+}
+
+void test_application_async_worker_pump_does_not_wait_for_slow_tx_callback()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-slow-on-tx"));
+    writeTextFile(protocolDir.path() / "main.lua", R"lua(
+function ui()
+  return { { id = "slow_tx", title = "Slow TX", controls = {
+    { type = "button", id = "read", label = "Read" }
+  } } }
+end
+function on_control(ctx, id, value)
+  if id == "read" then proto.request({ 0x01 }, { timeout_ms = 1000, tag = "read" }) end
+end
+function on_tx(ctx, evt)
+  if evt.state == "sent" then proto.request_done({ ok = false, message = "slow callback done" }) end
+end
+)lua");
+
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    protoscope::app::Application application;
+    auto& worker = protoscope::app::ApplicationBackpressureTestAccess::worker(application);
+    struct CallbackGate {
+        std::mutex mutex;
+        std::condition_variable changed;
+        bool entered{false};
+        bool released{false};
+    } gate;
+    struct WorkerGuard {
+        protoscope::app::Application& application;
+        protoscope::scripting::ScriptRuntimeWorker& worker;
+        CallbackGate& gate;
+        std::thread watchdog;
+        ~WorkerGuard()
+        {
+            {
+                std::lock_guard lock(gate.mutex);
+                gate.released = true;
+            }
+            gate.changed.notify_all();
+            worker.stop();
+            if (watchdog.joinable()) watchdog.join();
+            application.shutdown();
+        }
+    } guard{application, worker, gate, {}};
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+
+    require(application.initialize(), "慢on_tx测试应用应初始化");
+    auto config = application.captureConfig();
+    require(config.scripting.workerEnabled, "慢on_tx测试必须保持默认异步worker启用");
+    config.scripting.execution.callbackTimeoutMs = 5000U;
+    require(application.applyConfig(config), "异步worker测试配置应应用");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "慢on_tx测试协议应加载");
+    protoscope::app::ApplicationBackpressureTestAccess::setTxCallbackHook(application, [&] {
+        std::unique_lock lock(gate.mutex);
+        gate.entered = true;
+        gate.changed.notify_all();
+        gate.changed.wait(lock, [&] { return gate.released; });
+    });
+    application.openTransport();
+    application.pumpOnce();
+    application.updateControlValue("read", true);
+    pumpApplicationUntil(application,
+                         [&] { return transportState->sentTasks.size() == 1U; },
+                         "慢回调测试request发送超时");
+    guard.watchdog = std::thread([&] {
+        std::unique_lock lock(gate.mutex);
+        gate.changed.wait_for(lock, std::chrono::seconds(2), [&] { return gate.released; });
+        gate.released = true;
+        lock.unlock();
+        gate.changed.notify_all();
+    });
+    const auto dispatchStarted = std::chrono::steady_clock::now();
+    application.pumpOnce();
+    const auto dispatchElapsed = std::chrono::steady_clock::now() - dispatchStarted;
+    {
+        std::unique_lock lock(gate.mutex);
+        require(gate.changed.wait_for(lock, std::chrono::seconds(5), [&] { return gate.entered; }),
+                "测试钩子应确认worker进入Sent回调");
+    }
+    const auto started = std::chrono::steady_clock::now();
+    application.pumpOnce();
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    {
+        std::lock_guard lock(gate.mutex);
+        gate.released = true;
+    }
+    gate.changed.notify_all();
+    guard.watchdog.join();
+    require(dispatchElapsed < std::chrono::milliseconds(100),
+            "实时pump分发Sent事件时不得等待异步on_tx完成");
+    require(elapsed < std::chrono::milliseconds(100),
+            "异步worker正在执行on_tx时，实时Application pump不得等待worker");
+    pumpApplicationUntil(application,
+                         [&] { return application.docks().commState().lastError == "slow callback done"; },
+                         "慢on_tx request_done结果消费超时");
+}
+
+void test_application_request_done_disabled_worker_completes_in_same_pump()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-request-done-sync"));
+    writeTextFile(protocolDir.path() / "main.lua", R"lua(
+function ui()
+  return { { id = "sync_request", title = "Sync Request", controls = {
+    { type = "button", id = "read", label = "Read" }
+  } } }
+end
+function on_control(ctx, id, value)
+  if id == "read" then proto.request({ 0x01 }, { timeout_ms = 1000, tag = "sync" }) end
+end
+function on_tx(ctx, evt)
+  if evt.state == "sent" then proto.request_done({ ok = true, message = "同步完成" }) end
+end
+)lua");
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+    require(application.initialize(), "同步request_done测试应用应初始化");
+    auto config = application.captureConfig();
+    config.scripting.workerEnabled = false;
+    require(application.applyConfig(config), "同步worker配置应应用");
+    require(!application.runtimeConfig().scripting.workerEnabled, "测试必须运行于worker disabled模式");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "同步request_done协议应加载");
+    application.openTransport();
+    application.pumpOnce();
+    application.updateControlValue("read", true);
+    application.pumpOnce();
+    require(transportState->sentTasks.size() == 1U, "同步request应在本次pump发送");
+    std::vector<protoscope::dock::RequestTraceState> states;
+    for (const auto& row : application.docks().requestTraceState().rows) {
+        if (row.tag == "sync") states.push_back(row.state);
+    }
+    require(states == std::vector<protoscope::dock::RequestTraceState>{
+                          protoscope::dock::RequestTraceState::Queued,
+                          protoscope::dock::RequestTraceState::Sent,
+                          protoscope::dock::RequestTraceState::Completed},
+            "disabled模式同pump追踪顺序必须为Queued、Sent、Completed");
+    require(application.docks().commState().lastError.empty(), "同步request_done成功不应设置通讯错误");
     application.shutdown();
 }
 
@@ -1331,16 +1529,28 @@ void test_application_request_done_success_does_not_set_comm_error()
     application.updateControlValue("read", true);
     application.pumpOnce();
 
-    require(application.docks().commState().lastError.empty(), "request_done ok=true 的成功消息不应显示到通讯配置错误");
-    const auto& requestTraceRows = application.docks().requestTraceState().rows;
     const auto hasTraceState = [&](protoscope::dock::RequestTraceState state) {
-        return std::any_of(requestTraceRows.begin(), requestTraceRows.end(), [&](const auto& row) {
+        const auto& rows = application.docks().requestTraceState().rows;
+        return std::any_of(rows.begin(), rows.end(), [&](const auto& row) {
             return row.tag == "read" && row.state == state;
         });
     };
-    require(hasTraceState(protoscope::dock::RequestTraceState::Queued), "请求追踪应记录 request 排队事件");
-    require(hasTraceState(protoscope::dock::RequestTraceState::Sent), "请求追踪应记录 request 已发送事件");
-    require(hasTraceState(protoscope::dock::RequestTraceState::Completed), "请求追踪应记录 request 完成事件");
+    const auto traceStates = [&] {
+        std::vector<protoscope::dock::RequestTraceState> states;
+        for (const auto& row : application.docks().requestTraceState().rows) {
+            if (row.tag == "read") states.push_back(row.state);
+        }
+        return states;
+    };
+    pumpApplicationUntil(application,
+                         [&] { return hasTraceState(protoscope::dock::RequestTraceState::Completed); },
+                         "异步 request_done 成功完成超时");
+    require(traceStates() == std::vector<protoscope::dock::RequestTraceState>{
+                                 protoscope::dock::RequestTraceState::Queued,
+                                 protoscope::dock::RequestTraceState::Sent,
+                                 protoscope::dock::RequestTraceState::Completed},
+            "request 追踪事件必须严格按 Queued、Sent、Completed 排序");
+    require(application.docks().commState().lastError.empty(), "request_done ok=true 的成功消息不应显示到通讯配置错误");
     application.shutdown();
 }
 
@@ -1378,6 +1588,15 @@ void test_application_request_timeout_drains_pending_rx_before_timeout()
     application.pumpOnce();
 
     application.updateControlValue("read", true);
+    // 先等实际 Sent 事件由 Application 消费并建立活动请求，不能把控件排队时刻当作超时起点。
+    pumpApplicationUntil(application,
+                         [&] {
+                             const auto& rows = application.docks().requestTraceState().rows;
+                             return std::any_of(rows.begin(), rows.end(), [](const auto& row) {
+                                 return row.tag == "read" && row.state == protoscope::dock::RequestTraceState::Sent;
+                             });
+                         },
+                         "request 实际 Sent 事件派发超时");
     const protoscope::transport::ConnectionContext context{
         .endpoint = "queued://wave",
         .connectionId = 7,
@@ -1390,7 +1609,18 @@ void test_application_request_timeout_drains_pending_rx_before_timeout()
     transportState->pendingEvents.push_back(protoscope::transport::TransportBytesEvent{context, {0xAA, 0x55}});
 
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
-    application.pumpOnce();
+    pumpApplicationUntil(application,
+                         [&] {
+                             application.pumpOnce();
+                             const auto requestState = application.docks().requestTraceState();
+                             return application.docks().commState().lastError.empty() &&
+                                    application.docks().commState().pendingRxBytes == 0U &&
+                                    std::any_of(requestState.rows.begin(), requestState.rows.end(), [](const auto& row) {
+                                        return row.tag == "read" &&
+                                               row.state == protoscope::dock::RequestTraceState::Completed;
+                                    });
+                         },
+                         "已排队ACK RX结果处理超时");
 
     require(application.docks().commState().lastError.empty(),
             "已排队 ACK 应先 drain 并完成 request，不应误报等待 request_done 超时");
@@ -1439,10 +1669,9 @@ void test_application_guarded_request_timeout_retry_then_success_keeps_guard_act
     application.pumpOnce();
 
     application.updateControlValue("read", true);
-    application.pumpOnce();
-    std::this_thread::sleep_for(std::chrono::milliseconds(30));
-    application.pumpOnce();
-    application.pumpOnce();
+    pumpApplicationUntil(application,
+                         [&] { return transportState->sentTasks.size() == 2U; },
+                         "guarded request 超时重试未完成");
 
     require(transportState->sentTasks.size() == 2, "同一个 guarded request 应先超时再重发一次");
     require(transportState->sentTasks[0].payload == std::vector<std::uint8_t>{0x01},
@@ -1451,7 +1680,9 @@ void test_application_guarded_request_timeout_retry_then_success_keeps_guard_act
             "第 2 次 attempt payload 应保持不变");
 
     application.updateControlValue("follow", true);
-    application.pumpOnce();
+    pumpApplicationUntil(application,
+                         [&] { return transportState->sentTasks.size() == 3U; },
+                         "成功完成的 guarded request 后续请求发送超时");
     require(transportState->sentTasks.size() == 3, "中间 attempt 成功后后续 guarded request 仍应可发送");
     application.shutdown();
 }
@@ -1488,13 +1719,9 @@ void test_application_guarded_request_final_timeout_halts_followup_guarded()
     application.pumpOnce();
 
     application.updateControlValue("go", true);
-    application.pumpOnce();
-    std::this_thread::sleep_for(std::chrono::milliseconds(30));
-    application.pumpOnce();
-    application.pumpOnce();
-    std::this_thread::sleep_for(std::chrono::milliseconds(30));
-    application.pumpOnce();
-    application.pumpOnce();
+    pumpApplicationUntil(application,
+                         [&] { return application.docks().commState().lastError.find("熔断") != std::string::npos; },
+                         "guarded request 达到最大重试次数后未触发熔断");
 
     require(transportState->sentTasks.size() == 2,
             "当前 guarded request 达到 max_attempts 后，后续 guarded request 不应发出");
@@ -1542,11 +1769,9 @@ void test_application_guarded_requests_count_attempts_independently()
     application.pumpOnce();
 
     application.updateControlValue("go", true);
-    for (int iteration = 0; iteration < 4; ++iteration) {
-        application.pumpOnce();
-        std::this_thread::sleep_for(std::chrono::milliseconds(30));
-        application.pumpOnce();
-    }
+    pumpApplicationUntil(application,
+                         [&] { return transportState->sentTasks.size() == 4U; },
+                         "两个 guarded request 未各自完成重试");
 
     require(transportState->sentTasks.size() == 4, "两个 guarded request 应各自独立重试到第 2 次");
     require(transportState->sentTasks[0].payload == std::vector<std::uint8_t>{0x01},
@@ -1603,15 +1828,25 @@ void test_application_guarded_request_reset_allows_new_attempts()
     application.pumpOnce();
 
     application.updateControlValue("fail", true);
-    application.pumpOnce();
-    std::this_thread::sleep_for(std::chrono::milliseconds(30));
-    application.pumpOnce();
+    pumpApplicationUntil(application,
+                         [&] { return application.docks().commState().lastError.find("超时") != std::string::npos; },
+                         "guarded request 超时未确认");
     require(transportState->sentTasks.size() == 1, "max_attempts=1 的 guarded request 应只发送一次");
 
     application.updateControlValue("reset", true);
-    application.pumpOnce();
+    pumpApplicationUntil(application,
+                         [&] {
+                             const auto& rows = application.docks().requestTraceState().rows;
+                             return std::any_of(rows.begin(), rows.end(), [](const auto& row) {
+                                 return row.tag == "request_guard" &&
+                                        row.state == protoscope::dock::RequestTraceState::GuardReset;
+                             });
+                         },
+                         "guarded request reset 输出超时");
     application.updateControlValue("again", true);
-    application.pumpOnce();
+    pumpApplicationUntil(application,
+                         [&] { return transportState->sentTasks.size() == 2U; },
+                         "reset 后 guarded request 发送超时");
 
     require(transportState->sentTasks.size() == 2, "reset 后新的 guarded request 应从 attempt=1 重新发送");
     require(transportState->sentTasks[1].payload == std::vector<std::uint8_t>{0x03}, "reset 后的新请求 payload 应发送");
@@ -1650,10 +1885,28 @@ void test_application_request_done_failure_sets_comm_error()
     application.pumpOnce();
 
     application.updateControlValue("read", true);
-    application.pumpOnce();
+    pumpApplicationUntil(application,
+                         [&] {
+                             const auto rows = application.docks().requestTraceState().rows;
+                             const auto failed = std::any_of(rows.begin(), rows.end(), [](const auto& row) {
+                                 return row.tag == "read" &&
+                                        row.state == protoscope::dock::RequestTraceState::Failed;
+                             });
+                             return failed && application.docks().commState().lastError == "读取应答失败";
+                         },
+                         "异步 request_done 失败结果消费超时");
 
     require(application.docks().commState().lastError == "读取应答失败",
             "request_done ok=false 的失败消息应显示到通讯配置错误");
+    std::vector<protoscope::dock::RequestTraceState> states;
+    for (const auto& row : application.docks().requestTraceState().rows) {
+        if (row.tag == "read") states.push_back(row.state);
+    }
+    require(states == std::vector<protoscope::dock::RequestTraceState>{
+                          protoscope::dock::RequestTraceState::Queued,
+                          protoscope::dock::RequestTraceState::Sent,
+                          protoscope::dock::RequestTraceState::Failed},
+            "request 追踪事件必须严格按 Queued、Sent、Failed 排序");
     application.shutdown();
 }
 
@@ -3623,7 +3876,8 @@ void test_lua_contract_template_guarded_request_roundtrip_retry_and_late_respons
     application.updateControlValue("max_attempts", 2);
     application.updateControlValue("send_guarded", true);
     waitFor([&] { return transportState->sentTasks.size() >= 1U; }, "模板应实际发送首次 guarded 请求");
-    std::this_thread::sleep_for(std::chrono::milliseconds(130));
+    waitFor([&] { return traceCount("template_guarded_request", protoscope::dock::RequestTraceState::Timeout) >= 1U; },
+            "首次请求应达到模板配置的超时");
     waitFor([&] { return transportState->sentTasks.size() >= 2U; }, "首次请求超时后应按模板配置重试一次");
     waitFor([&] { return traceCount("template_guarded_request", protoscope::dock::RequestTraceState::Sent) >= 2U; },
             "首次发送和重试都应经过Application sent状态");
@@ -3769,6 +4023,9 @@ void test_application_live_raw_capture_trim_keeps_runtime_profile_event()
 
     application.openTransport();
     application.pumpOnce();
+    auto& worker = protoscope::app::ApplicationBackpressureTestAccess::worker(application);
+    worker.waitIdle();
+    application.pumpOnce();
     const protoscope::transport::ConnectionContext context{
         .endpoint = "queued://wave",
         .connectionId = 7,
@@ -3778,9 +4035,15 @@ void test_application_live_raw_capture_trim_keeps_runtime_profile_event()
     std::vector<std::uint8_t> allBytes = firstFrame;
     allBytes.insert(allBytes.end(), secondFrame.begin(), secondFrame.end());
     transportState->pendingEvents.push_back(protoscope::transport::TransportBytesEvent{context, allBytes});
-    for (int i = 0; i < 4; ++i) {
-        application.pumpOnce();
-    }
+    pumpApplicationUntil(application,
+                         [&] {
+                             auto& worker = protoscope::app::ApplicationBackpressureTestAccess::worker(application);
+                             if (!worker.idle()) return false;
+                             application.pumpOnce();
+                             const auto& raw = application.docks().waveState().rawCapture;
+                             return raw.truncated && raw.payload == secondFrame;
+                         },
+                         "RX 原始字节或对应 stream profile 输出未完成");
 
     const auto& rawCapture = application.docks().waveState().rawCapture;
     require(rawCapture.truncated, "实时 raw 超限后应被裁剪");
@@ -3837,6 +4100,9 @@ void test_application_session_package_export_trims_raw_capture_window()
 
     application.openTransport();
     application.pumpOnce();
+    auto& worker = protoscope::app::ApplicationBackpressureTestAccess::worker(application);
+    worker.waitIdle();
+    application.pumpOnce();
     const protoscope::transport::ConnectionContext context{
         .endpoint = "queued://wave",
         .connectionId = 7,
@@ -3846,9 +4112,15 @@ void test_application_session_package_export_trims_raw_capture_window()
     std::vector<std::uint8_t> allBytes = firstFrame;
     allBytes.insert(allBytes.end(), secondFrame.begin(), secondFrame.end());
     transportState->pendingEvents.push_back(protoscope::transport::TransportBytesEvent{context, allBytes});
-    for (int i = 0; i < 4; ++i) {
-        application.pumpOnce();
-    }
+    pumpApplicationUntil(application,
+                         [&] {
+                             auto& worker = protoscope::app::ApplicationBackpressureTestAccess::worker(application);
+                             if (!worker.idle()) return false;
+                             application.pumpOnce();
+                             const auto& raw = application.docks().waveState().rawCapture;
+                             return raw.truncated && raw.payload == secondFrame;
+                         },
+                         "现场包测试 RX 原始字节或 profile 输出未完成");
 
     const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-session-runtime-profile-export"));
     const auto packagePath = tempRoot.path() / "field.pssession";
@@ -5323,7 +5595,12 @@ void test_application_complete_disconnect_keeps_realtime_backlog()
         protoscope::transport::TransportBytesEvent{ctx, makeRawImportStreamPayload(frameCount)});
     application.pumpOnce();
 
-    require(application.docks().commState().pendingTransferFrameRows > 0U, "complete 断开前应存在 pending 逐帧行");
+    pumpApplicationUntil(application,
+                         [&] {
+                             return application.docks().commState().pendingTransferFrameRows > 0U &&
+                                    application.docks().commState().rxInputQueueBytes == 0U;
+                         },
+                         "complete断开前完整RX接收及处理结果超时");
 
     application.closeTransport();
     require(application.docks().commState().state == protoscope::transport::TransportState::Closed,
@@ -5386,8 +5663,19 @@ void test_application_plot_push_merges_same_channel_source()
     require(application.reloadProtocolDirectory("tests/fixtures/protocols/plot_merge", true),
             "plot_merge 协议应可加载");
 
+    auto& worker = protoscope::app::ApplicationBackpressureTestAccess::worker(application);
+    worker.waitIdle();
+    application.pumpOnce();
     application.openTransport();
     application.pumpOnce();
+    pumpApplicationUntil(application,
+                         [&] {
+                             return application.docks().waveState().buffer.channelCount() == 1U &&
+                                    application.docks().waveState().buffer.snapshot(
+                                        -std::numeric_limits<double>::infinity(),
+                                        std::numeric_limits<double>::infinity()).channels.front().totalSamples == 3U;
+                         },
+                         "plot_merge on_open 输出超时");
 
     const auto snapshot = application.docks().waveState().buffer.snapshot(-std::numeric_limits<double>::infinity(),
                                                                           std::numeric_limits<double>::infinity());
@@ -5417,8 +5705,20 @@ void test_application_plot_push_drains_with_budget_and_disconnect_keeps_pending(
     require(application.reloadProtocolDirectory("tests/fixtures/protocols/plot_merge", true),
             "plot_merge 协议应可重新加载");
 
+    auto& worker = protoscope::app::ApplicationBackpressureTestAccess::worker(application);
+    worker.waitIdle();
+    application.pumpOnce();
     application.openTransport();
     application.pumpOnce();
+    pumpApplicationUntil(application,
+                         [&] {
+                             return application.docks().waveState().buffer.channelCount() == 1U &&
+                                    application.docks().waveState().buffer.snapshot(
+                                        -std::numeric_limits<double>::infinity(),
+                                        std::numeric_limits<double>::infinity()).channels.front().totalSamples == 2U &&
+                                    application.docks().commState().pendingPlotAppends == 1U;
+                         },
+                         "预算模式plot_merge on_open输出超时");
 
     auto snapshot = application.docks().waveState().buffer.snapshot(-std::numeric_limits<double>::infinity(),
                                                                     std::numeric_limits<double>::infinity());

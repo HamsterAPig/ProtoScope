@@ -4332,7 +4332,13 @@ void ScriptHost::onTxEvent(const transport::ConnectionContext& ctx, const TxEven
             }
         }
     }
+    if (txCallbackTestHook_) txCallbackTestHook_();
     callbackOnTx(ScriptHostContext{ctx}, event);
+}
+
+void ScriptHost::setTxCallbackTestHookForTest(std::function<void()> hook)
+{
+    txCallbackTestHook_ = std::move(hook);
 }
 
 void ScriptHost::onDialogEvent(const transport::ConnectionContext& ctx, const DialogEvent& event)

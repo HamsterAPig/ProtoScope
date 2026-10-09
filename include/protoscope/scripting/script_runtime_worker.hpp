@@ -10,6 +10,10 @@
 #include <string>
 #include <vector>
 
+namespace protoscope::app {
+struct ApplicationBackpressureTestAccess;
+}
+
 namespace protoscope::scripting {
 
 struct ScriptRuntimeWorkerConfig {
@@ -116,12 +120,16 @@ public:
     [[nodiscard]] bool idle() const;
     [[nodiscard]] bool inputIdle() const;
     [[nodiscard]] std::size_t pendingRxBytes() const;
+    [[nodiscard]] std::size_t executingRxBytes() const;
     [[nodiscard]] std::vector<ScriptRuntimeOutputBatch> drainOutputs();
     [[nodiscard]] std::optional<ScriptRuntimeOutputBatch> drainOneOutput();
     [[nodiscard]] ScriptRuntimeSnapshot snapshot() const;
     void stop();
 
 private:
+    friend struct protoscope::app::ApplicationBackpressureTestAccess;
+    void setTxCallbackTestHookForTest(std::function<void()> hook);
+
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
