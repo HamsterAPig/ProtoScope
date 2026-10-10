@@ -1,4 +1,7 @@
 #include "protoscope/ui/theme_manager.hpp"
+#include "theme_test_contract.hpp"
+#include <iomanip>
+#include <sstream>
 
 #include <iostream>
 #include <cmath>
@@ -14,6 +17,7 @@ void check(bool ok, const char* text) { if (!ok) throw std::runtime_error(text);
 int main()
 {
     ImGui::CreateContext();
+    ImPlot::CreateContext();
     int status = 0;
     try {
         ui::UiThemeDefinition theme;
@@ -56,6 +60,61 @@ int main()
                   ui::activeWaveStyleTokens().cursorPalette[0].x == roundtrip.wave.cursorPalette[0].x,
                   "应用不能覆盖用户字段");
         }
+        // 每个公开 UI 字段独立注入 8-bit RGBA；不复用生产字段表求预期。
+        for (auto preset : {config::GuiTheme::ProfessionalDark, config::GuiTheme::DebugHighContrast,
+                            config::GuiTheme::ProfessionalLight}) {
+            const auto& base=ui::uiThemeDefinition(preset);
+            const auto prefix="version: 1\nid: faithful\nname: Faithful\nbase: "+base.id+"\n";
+            check(ui::ThemeManager::parse(prefix+"ui:\n  panel_border: '#12345600'\n  accent: '#65432120'\n",
+                                          "legacy.yaml",theme,error),"旧 YAML 缺省新字段合法");
+            for(std::size_t i=12;i<tests::theme::fields.size();++i) {
+                const auto& field=tests::theme::fields[i];
+                tests::theme::color(theme.ui.*field.member,base.ui.*field.member,field.yaml);
+            }
+            for(int sample=0;sample<3;++sample) {
+                auto expected=base;
+                std::ostringstream yaml;
+                yaml<<prefix<<"ui:\n";
+                unsigned index=0;
+                for(const auto& field:tests::theme::fields) {
+                    const unsigned r=sample==0 ? 30+index : 100;
+                    const unsigned g=sample==0 ? 70+index : 100;
+                    const unsigned b=sample==0 ? 110+index : 100;
+                    const unsigned a=sample==2 ? 0 : sample==1 ? 64 : (index*11)%256;
+                    expected.ui.*field.member=ImVec4(r/255.F,g/255.F,b/255.F,a/255.F);
+                    yaml<<"  "<<field.yaml<<": '#"<<std::hex<<std::uppercase<<std::setfill('0')
+                        <<std::setw(2)<<r<<std::setw(2)<<g<<std::setw(2)<<b<<std::setw(2)<<a<<"'\n";
+                    ++index;
+                }
+                yaml<<"wave:\n  correct_contrast: true\n  legend_overlay_background: '#22334455'\n"
+                      "  legend_overlay_row_hover: '#66778800'\n  legend_overlay_row_active: '#AABBCC22'\n"
+                      "  channel_palette: ['#01234500', '#FEDCBA80']\n  cursor_palette: ['#56789040', '#A1B2C3FF']\n";
+                check(ui::ThemeManager::parse(yaml.str(),"faithful.yaml",theme,error),"低对比和透明主题必须合法");
+                for(const auto& field:tests::theme::fields)
+                    tests::theme::color(theme.ui.*field.member,expected.ui.*field.member,field.yaml);
+                const auto savedTheme=ui::ThemeManager::serialize(theme,"renamed");
+                check(ui::ThemeManager::parse(savedTheme,"renamed.yaml",roundtrip,error),"全部字段往返");
+                check(ui::ThemeManager::serialize(roundtrip,"faithful")==ui::ThemeManager::serialize(theme,"faithful"),
+                      "完整序列化内容、色板顺序及 alpha 往返");
+                for(const auto& field:tests::theme::fields)
+                    tests::theme::color(roundtrip.ui.*field.member,expected.ui.*field.member,field.yaml);
+                ui::applyUiTheme(theme); tests::theme::mapped(theme);
+                const auto before=ImGui::GetStyle(); const auto plotBefore=ImPlot::GetStyle();
+                ui::applyUiTheme(roundtrip); tests::theme::mapped(roundtrip);
+                tests::theme::sameStyles(before,ImGui::GetStyle());
+                for(int slot=0;slot<ImPlotCol_COUNT;++slot)
+                    tests::theme::color(ImPlot::GetStyle().Colors[slot],plotBefore.Colors[slot],"导出改 ID 不改 ImPlot");
+                roundtrip.wave.correctContrast=false; ui::applyUiTheme(roundtrip);
+                tests::theme::sameStyles(before,ImGui::GetStyle());
+            }
+        }
+        for (const auto* invalid : {"ui:\n  control_border: '#123456'\n  control_border: '#112233'\n",
+                "ui:\n  tab_selected: [1, 2, 3]\n", "ui:\n  floating_background: '#12345Z'\n",
+                "metrics:\n  frame_rounding: .inf\n", "wave:\n  selection_min_alpha: .nan\n",
+                "wave:\n  cursor_palette: []\n", "wave:\n  correct_contrast: perhaps\n"}) {
+            check(!ui::ThemeManager::parse(header+invalid,"invalid-new.yaml",roundtrip,error),"新字段信任边界仍拒绝非法输入");
+            check(error.find("invalid-new.yaml:")!=std::string::npos,"新字段错误保留来源");
+        }
         ui::ThemeManager manager;
         ui::applyUiTheme(config::GuiTheme::DebugHighContrast);
         const auto revision = ui::activeThemeRevision();
@@ -81,8 +140,14 @@ int main()
               "selection alpha validation");
 
         ui::ThemeManager builtinThemes;
-        for (const auto* id : {"professional_dark", "professional_light", "debug_high_contrast"})
-            check(builtinThemes.find(id) != nullptr, "保留三个内置主题");
+        for (const auto& [preset,name] : std::array{
+                 std::pair{config::GuiTheme::ProfessionalDark,"石墨青绿"},
+                 std::pair{config::GuiTheme::DebugHighContrast,"石墨琥珀"},
+                 std::pair{config::GuiTheme::ProfessionalLight,"冷白青蓝"}}) {
+            const auto* builtin=builtinThemes.find(config::guiThemeId(preset));
+            check(builtin && builtin->name==name && ui::uiThemeDefinition(preset).name==name,
+                  "管理器与预设名称只有一个来源且保留 ID");
+        }
         for (const auto* id : {"graphite_cyan", "warm_industrial", "paper_lab"}) {
             check(builtinThemes.find(id) == nullptr, "退役主题不是内置主题");
             builtinThemes.startup(id, error);
@@ -123,6 +188,7 @@ int main()
         std::cerr << error.what() << '\n';
         status = 1;
     }
+    ImPlot::DestroyContext();
     ImGui::DestroyContext();
     return status;
 }
