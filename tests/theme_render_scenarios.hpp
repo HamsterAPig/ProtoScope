@@ -19,9 +19,9 @@ void key(const Frame& frame,ImGuiKey keyCode)
 }
 void focusId(const Frame& frame,ImGuiID id)
 {
-    // 只用真实 Tab 导航查找生产 ID；不写 NavId/ActiveId，不误触途经开关。
+    // 鼠标点击也会留下 NavId，但隐藏焦点；必须通过真实 Tab 获得可见键盘焦点，不写 NavId/ActiveId。
     for(int i=0;i<100;++i) {
-        if(GImGui->NavId==id) return;
+        if(GImGui->NavId==id && GImGui->NavCursorVisible) return;
         key(frame,ImGuiKey_Tab);
     }
     throw std::runtime_error("真实键盘导航找不到控件 id="+std::to_string(id));
@@ -242,15 +242,16 @@ void drawers(const std::filesystem::path& directory)
     app::Application application; ui::WaveDockRenderer renderer(application);
     auto& wave=application.docks().waveState();
     ImGui::GetIO().ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;
-    wave.view.interactionAnimationEnabled=true; wave.view.showChannelLegend=false;
+    wave.view.interactionAnimationEnabled=true; wave.view.showChannelLegend=false; wave.view.glowEnabled=false;
     wave.buffer.append(0,{{},{{0,0},{1,1}}});
-    bool visible=true; float hostWidth=float(width);
+    bool visible=true; float hostWidth=float(width); int productionPath=0; bool fullscreenToggle=false;
     const Frame frame=[&] {
         const auto before=ImGui::GetStyle();
         const int colors=GImGui->ColorStack.Size,vars=GImGui->StyleVarStack.Size;
         ImGui_ImplOpenGL3_NewFrame(); ImGui::NewFrame();
         ImGui::SetNextWindowPos({0,0}); ImGui::SetNextWindowSize({hostWidth,float(height)});
-        renderer.draw(visible);
+        if(productionPath==2) renderer.drawOverlay(true,&fullscreenToggle);
+        else renderer.draw(visible,productionPath==1,&fullscreenToggle,productionPath==1);
         tests::theme::sameStyles(before,ImGui::GetStyle());
         check(colors==GImGui->ColorStack.Size && vars==GImGui->StyleVarStack.Size,"抽屉样式栈泄漏");
         finishFrame();
@@ -289,64 +290,83 @@ void drawers(const std::filesystem::path& directory)
                 fourBorders(pixels,bounds(drawer),t.floatingBorder,state);
                 check(matchingPixels(pixels,t.floatingBackground,drawer->InnerRect.Min,drawer->InnerRect.Max)>50,"抽屉未用浮层背景");
                 coverage(id,state);
-                // 拖动左侧命中区，既验证几何也验证释放后关闭行为。
-                if(index==0 && size==1000) {
-                    const float old=wave.toolsExpandedWidth;
-                    const ImVec2 handle(drawer->Pos.x-3,drawer->Pos.y+8);
-                    move(frame,handle);
-                    auto* hoveredWindowBeforePtr=GImGui->HoveredWindow;
-                    check(hoveredWindowBeforePtr!=nullptr,"splitter 位置没有真实 HoveredWindow");
-                    auto* splitterWindow=hoveredWindowBeforePtr->RootWindow;
-                    const ImGuiID splitterId=splitterWindow->GetID("##wave_tools_drawer_splitter");
-                    const ImGuiID hoveredBefore=GImGui->HoveredId;
-                    const char* hoveredWindowBefore=hoveredWindowBeforePtr->Name;
+                if(index==2) {
+                    const ImVec2 buttonMin=drawer->DC.CursorStartPos;
+                    const float buttonWidth=ImGui::CalcTextSize("辉光 Glow").x+ImGui::GetStyle().FramePadding.x*2;
+                    const ImVec2 buttonMax(buttonMin.x+buttonWidth,buttonMin.y+ImGui::GetFrameHeight());
+                    check(matchingPixels(pixels,t.panelBackgroundAlt,{buttonMin.x+3,buttonMin.y+3},
+                                         {buttonMax.x-3,buttonMax.y-3})>20,"抽屉可用未选按钮缺少实体填充");
+                    check(matchingPixels(pixels,t.controlBorder,{buttonMin.x+8,buttonMin.y},
+                                         {buttonMax.x-8,buttonMin.y+2})>10,"抽屉按钮缺少局部主题边界");
+                    move(frame,{buttonMin.x+buttonWidth*.5F,buttonMin.y+ImGui::GetFrameHeight()*.5F});
+                    check(GImGui->HoveredId==drawer->GetID("辉光 Glow"),"局部实体按钮仍应可用而非 disabled");
+                    const auto hoveredPixels=capture(directory,id+"-drawer-button-hover-"+std::to_string(int(size)));
+                    check(matchingPixels(hoveredPixels,ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered),
+                                         buttonMin,buttonMax)>20,"局部按钮悬停填充丢失");
                     ImGui::GetIO().AddMouseButtonEvent(0,true); frame();
-                    const ImGuiID activeAfterPress=GImGui->ActiveId;
-                    auto* activeWindow=GImGui->ActiveIdWindow;
-                    const char* activeWindowAfterPress=activeWindow?activeWindow->Name:"<none>";
-                    auto* hoveredWindow=GImGui->HoveredWindow;
-                    const bool splitterActivated=activeAfterPress==splitterId && activeWindow==splitterWindow;
-                    if(!splitterActivated || wave.toolsCollapsed) {
-                        std::ostringstream diagnostic;
-                        diagnostic<<"拖宽按下未激活真实 splitter; theme="<<id<<"; splitter="<<splitterId
-                                  <<"; hoveredBefore="<<hoveredBefore<<"; hoveredWindow="<<hoveredWindowBefore
-                                  <<"; activeAfterPress="<<activeAfterPress<<"; activeWindow="<<activeWindowAfterPress
-                                  <<"; drawerWindow="<<drawer->Name<<"; handle=("<<handle.x<<','<<handle.y
-                                  <<"); splitterWindowRect=("<<(hoveredWindow?hoveredWindow->Pos.x:0)<<','
-                                  <<(hoveredWindow?hoveredWindow->Pos.y:0)<<','<<(hoveredWindow?hoveredWindow->Size.x:0)<<','
-                                  <<(hoveredWindow?hoveredWindow->Size.y:0)<<"); itemRect=("
-                                  <<GImGui->LastItemData.Rect.Min.x<<','<<GImGui->LastItemData.Rect.Min.y<<','
-                                  <<GImGui->LastItemData.Rect.Max.x<<','<<GImGui->LastItemData.Rect.Max.y
-                                  <<"); clipRect=("<<(activeWindow?activeWindow->ClipRect.Min.x:0)<<','
-                                  <<(activeWindow?activeWindow->ClipRect.Min.y:0)<<','
-                                  <<(activeWindow?activeWindow->ClipRect.Max.x:0)<<','
-                                  <<(activeWindow?activeWindow->ClipRect.Max.y:0)
-                                  <<"); cursorPos=("<<(activeWindow?activeWindow->DC.CursorPos.x:0)<<','
-                                  <<(activeWindow?activeWindow->DC.CursorPos.y:0)
-                                  <<"); cursorStart=("<<(activeWindow?activeWindow->DC.CursorStartPos.x:0)<<','
-                                  <<(activeWindow?activeWindow->DC.CursorStartPos.y:0)
-                                  <<"); skipItems="<<(activeWindow?activeWindow->SkipItems:0)<<"; moveId="
-                                  <<(activeWindow?activeWindow->MoveId:0)
-                                  <<"; collapsed="<<wave.toolsCollapsed
-                                  <<"; width="<<wave.toolsExpandedWidth;
-                        throw std::runtime_error(diagnostic.str());
+                    check(GImGui->ActiveId==drawer->GetID("辉光 Glow"),"局部按钮按下状态未激活");
+                    const auto pressedPixels=capture(directory,id+"-drawer-button-active-"+std::to_string(int(size)));
+                    check(matchingPixels(pressedPixels,ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive),
+                                         buttonMin,buttonMax)>20,"局部按钮按下填充丢失");
+                    ImGui::GetIO().AddMouseButtonEvent(0,false); settle(frame,2);
+                    check(wave.view.glowEnabled,"局部按钮可用未选状态无法切换");
+                    move(frame,{-100,-100});
+                    const auto selectedPixels=capture(directory,id+"-drawer-button-selected-"+std::to_string(int(size)));
+                    check(matchingPixels(selectedPixels,ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive),
+                                         buttonMin,buttonMax)>20,"局部按钮选中填充丢失");
+                    focusId(frame,drawer->GetID("辉光 Glow"));
+                    const auto focusPixels=capture(directory,id+"-drawer-button-focus-"+std::to_string(int(size)));
+                    check(matchingPixels(focusPixels,ImGui::GetStyleColorVec4(ImGuiCol_NavCursor),
+                                         {buttonMin.x-4,buttonMin.y-4},{buttonMax.x+4,buttonMax.y+4})>10,
+                          "局部按钮主题边界覆盖了键盘焦点");
+                    wave.view.glowEnabled=false;
+                    move(frame,{-100,-100});
+                }
+                check(drawer->WindowPadding.x==ImGui::GetStyle().WindowPadding.x && drawer->WindowPadding.x>0,
+                      "rail 零横向留白泄漏到抽屉");
+                check(drawer->DC.CursorStartPos.x-drawer->Pos.x>=drawer->WindowPadding.x,
+                      "抽屉正文未保留左侧 padding");
+                // 在留白内按真实抓手中心命中，不以宿主窗口 ActiveId 冒充抽屉归属。
+                if(index==0 && size==1000) {
+                    wave.view.autoFollowLatest=false;
+                    const auto beforeViewport=ui::currentViewport(wave.view);
+                    const float old=wave.toolsExpandedWidth;
+                    const float anchor=drawer->Pos.x+drawer->Size.x;
+                    const ImVec2 handle(drawer->Pos.x+3.5F,drawer->InnerRect.GetCenter().y);
+                    move(frame,handle);
+                    const ImGuiID splitterId=drawer->GetID("##wave_tools_drawer_splitter");
+                    check(GImGui->HoveredWindow==drawer && GImGui->HoveredId==splitterId,
+                          "抓手未命中抽屉自己的 splitter");
+                    check(ImGui::GetMouseCursor()==ImGuiMouseCursor_ResizeEW,"抓手悬停缺少横向调整光标");
+                    const auto gripPixels=capture(directory,id+"-drawer-grip");
+                    check(matchingPixels(gripPixels,ImGui::GetStyleColorVec4(ImGuiCol_SeparatorHovered),
+                                         {handle.x-2,handle.y-18},{handle.x+2,handle.y+18})>15,"柔和抓手未绘制");
+                    ImGui::GetIO().AddMouseButtonEvent(0,true); frame();
+                    check(GImGui->ActiveId==splitterId && GImGui->ActiveIdWindow==drawer &&
+                          wave.toolsDrawerResizing && !wave.toolsCollapsed,"抓手按下归属错误或触发点外关闭");
+                    ImGui::GetIO().AddMousePosEvent(handle.x-30,handle.y); frame(); settle(frame,2);
+                    check(wave.toolsExpandedWidth>old && !wave.toolsCollapsed,"向左拖动未扩宽");
+                    check(std::abs(drawer->Pos.x+drawer->Size.x-anchor)<1,"拖宽未保持右边缘锚定");
+                    ImGui::GetIO().AddMousePosEvent(handle.x+20,handle.y); frame(); settle(frame,2);
+                    check(wave.toolsExpandedWidth<old && !wave.toolsCollapsed,"向右拖动未缩窄");
+                    // 鼠标进入主图和概览，滚轮不能穿透仍持有的抓手。
+                    for(const float y:{350.F,85.F}) {
+                        ImGui::GetIO().AddMousePosEvent(35,y);
+                        ImGui::GetIO().AddMouseWheelEvent(0,1); frame(); settle(frame,2);
+                        const auto during=ui::currentViewport(wave.view);
+                        check(during.minTime==beforeViewport.minTime && during.maxTime==beforeViewport.maxTime &&
+                              during.minValue==beforeViewport.minValue && during.maxValue==beforeViewport.maxValue &&
+                              !wave.view.overviewWindowDragging,"拖宽期间主图/概览发生平移或缩放");
                     }
-                    ImGui::GetIO().AddMousePosEvent(handle.x-30,handle.y); frame();
-                    const float dragDelta=ImGui::GetIO().MouseDelta.x;
-                    const float widthDuringDrag=wave.toolsExpandedWidth;
-                    settle(frame,1);
+                    ImGui::GetIO().AddMousePosEvent(handle.x-1000,handle.y); frame(); settle(frame,2);
+                    check(wave.toolsExpandedWidth==wave.maxToolsExpandedWidth,"拖宽上限失效");
+                    ImGui::GetIO().AddMousePosEvent(handle.x+1000,handle.y); frame(); settle(frame,2);
+                    check(wave.toolsExpandedWidth==wave.minToolsExpandedWidth,"拖宽下限失效");
                     ImGui::GetIO().AddMouseButtonEvent(0,false); settle(frame,3);
-                    if(!(widthDuringDrag>old && wave.toolsExpandedWidth>old && !wave.toolsCollapsed)) {
-                        std::ostringstream diagnostic;
-                        diagnostic<<"真实 splitter 拖动未扩宽或错误关闭抽屉; theme="<<id<<"; splitter="<<splitterId
-                                  <<"; activeAfterPress="<<activeAfterPress<<"; dragMouseDeltaX="<<dragDelta
-                                  <<"; oldWidth="<<old<<"; widthDuringDrag="<<widthDuringDrag
-                                  <<"; widthAfterRelease="<<wave.toolsExpandedWidth<<"; clamp=["
-                                  <<wave.minToolsExpandedWidth<<','<<wave.maxToolsExpandedWidth<<"]"
-                                  <<"; collapsed="<<wave.toolsCollapsed;
-                        throw std::runtime_error(diagnostic.str());
-                    }
-                    coverage(id,"drawer-drag-resize");
+                    check(!wave.toolsDrawerResizing && GImGui->ActiveId!=splitterId && !wave.toolsCollapsed,
+                          "抓手释放未结束拖动或误关抽屉");
+                    wave.toolsExpandedWidth=old; move(frame,{-100,-100}); settle(frame,3);
+                    coverage(id,"drawer-owned-bidirectional-resize-limits-input-isolation");
                 }
                 if(index%3==0) key(frame,ImGuiKey_Escape);
                 else if(index%3==1) {
@@ -362,7 +382,50 @@ void drawers(const std::filesystem::path& directory)
                 capture(directory,id+"-"+closed); coverage(id,closed);
             }
         }
+        hostWidth=1000; settle(frame,4); click(frame,railPoint(0)); settle(frame,24);
+        wave.toolsExpandedWidth=wave.maxToolsExpandedWidth; settle(frame,4);
+        const float desired=wave.toolsExpandedWidth;
+        hostWidth=300; settle(frame,6);
+        auto* narrowDrawer=activeWindowContaining("##wave_tools_drawer");
+        check(narrowDrawer->Size.x<desired && narrowDrawer->Pos.x>=0 &&
+              narrowDrawer->Pos.x+narrowDrawer->Size.x<=hostWidth && wave.toolsExpandedWidth==desired,
+              "窄宿主显示夹限覆盖了期望宽度或发生越界");
+        hostWidth=1000; settle(frame,6);
+        check(std::abs(activeWindowContaining("##wave_tools_drawer")->Size.x-desired)<1 &&
+              wave.toolsExpandedWidth==desired,"宿主恢复后抽屉没有恢复期望宽度");
+        wave.toolsExpandedWidth=280; key(frame,ImGuiKey_Escape); settle(frame,24);
+        coverage(id,"drawer-narrow-host-restores-preferred-width");
     }
+    for(const int path:{1,2}) {
+        productionPath=path; hostWidth=1000; settle(frame,6);
+        click(frame,railPoint(0)); settle(frame,24);
+        auto* pathDrawer=activeWindowContaining("##wave_tools_drawer");
+        check(pathDrawer->WindowPadding.x==ImGui::GetStyle().WindowPadding.x,"Focus/Overlay 未共享抽屉留白");
+        const float before=wave.toolsExpandedWidth;
+        const ImVec2 handle(pathDrawer->Pos.x+3.5F,pathDrawer->InnerRect.GetCenter().y);
+        move(frame,handle); ImGui::GetIO().AddMouseButtonEvent(0,true); frame();
+        check(GImGui->ActiveIdWindow==pathDrawer,"Focus/Overlay 抓手归属不在抽屉");
+        ImGui::GetIO().AddMousePosEvent(handle.x-20,handle.y); frame(); settle(frame,2);
+        ImGui::GetIO().AddMouseButtonEvent(0,false); settle(frame,3);
+        check(wave.toolsExpandedWidth>before && !wave.toolsCollapsed,"Focus/Overlay 共享拖宽失效");
+        key(frame,ImGuiKey_Escape); settle(frame,24);
+        check(wave.toolsCollapsed,"Focus/Overlay 抽屉 Escape 关闭失效");
+        coverage("shared",path==1?"drawer-focus-path":"drawer-overlay-path");
+    }
+    productionPath=0; wave.toolsExpandedWidth=280;
+    auto transparent=ui::uiThemeDefinition(config::GuiTheme::ProfessionalDark);
+    transparent.id="drawer-transparent";
+    transparent.ui.panelBackgroundAlt={.6F,.2F,.4F,0};
+    transparent.ui.controlBorder={.2F,.7F,.5F,0};
+    ui::applyUiTheme(transparent); settle(frame,6); click(frame,railPoint(2)); settle(frame,24);
+    auto* transparentDrawer=activeWindowContaining("##wave_tools_drawer");
+    move(frame,{-100,-100});
+    const auto transparentPixels=capture(directory,"custom-drawer-transparent-button");
+    expectPixel(transparentPixels,{transparentDrawer->DC.CursorStartPos.x+10,
+                                  transparentDrawer->DC.CursorStartPos.y+3},
+                transparent.ui.floatingBackground,"透明抽屉按钮保留源 alpha");
+    key(frame,ImGuiKey_Escape); settle(frame,24);
+    coverage("custom","drawer-transparent-button-contract");
     // 使用真实自定义主题的不同边框哨兵色，而非测试 PushStyleColor 替生产补画。
     auto custom=ui::uiThemeDefinition(config::GuiTheme::ProfessionalDark);
     custom.id="drawer_sentinel"; custom.ui.controlBorder={.2F,.8F,.3F,1}; custom.ui.floatingBorder={.8F,.2F,.7F,1};
@@ -389,10 +452,30 @@ void drawers(const std::filesystem::path& directory)
     popup(directory,"custom-drawer-color-picker");
     const auto* picker=GImGui->OpenPopupStack.back().Window;
     const auto depth=GImGui->OpenPopupStack.Size;
-    const ImVec2 nestedClick(picker->DC.CursorStartPos.x+30,picker->DC.CursorStartPos.y+30);
+    // ColorEdit 的 Popup 先绘标签和 Spacing，右键须落在其后的真实 SV/色轮区域。
+    const ImVec2 nestedClick(picker->DC.CursorStartPos.x+30,
+                            picker->DC.CursorStartPos.y+ImGui::GetTextLineHeightWithSpacing()+
+                            ImGui::GetStyle().ItemSpacing.y+30);
+    move(frame,nestedClick);
+    const ImGuiID pickerId=ImHashStr("##picker",0,picker->ID);
+    check(GImGui->HoveredWindow==picker &&
+          (GImGui->HoveredId==ImHashStr("sv",0,pickerId) || GImGui->HoveredId==ImHashStr("hsv",0,pickerId)),
+          "嵌套菜单右键位置未命中真实拾色器区域");
     click(frame,nestedClick,1); settle(frame,5);
     check(GImGui->OpenPopupStack.Size>depth,"抽屉嵌套 Popup 未打开");
     popup(directory,"custom-drawer-picker-options");
+    key(frame,ImGuiKey_Escape);
+    check(!wave.toolsCollapsed && !GImGui->OpenPopupStack.empty(),"嵌套 Popup 的 Escape 误关抽屉");
+    check(GImGui->OpenPopupStack.Size==depth && GImGui->ActiveId==0,
+          "最后一层 Popup 的 Escape 前置状态不符");
+    key(frame,ImGuiKey_Escape);
+    check(GImGui->OpenPopupStack.empty() && !wave.toolsCollapsed,
+          "关闭最后一层 Popup 的同一个 Escape 误关抽屉");
+    focusId(frame,ImHashStr("##ColorButton",0,drawer->GetID("固定色")));
+    key(frame,ImGuiKey_Enter); settle(frame,5);
+    check(GImGui->OpenPopupStack.Size==depth,"最后一层 Popup 关闭后无法重新打开拾色器");
+    click(frame,nestedClick,1); settle(frame,5);
+    check(GImGui->OpenPopupStack.Size>depth,"Escape 后嵌套 Popup 未能重新打开");
     // 首次点外部关闭 Popup 时，抽屉仍受任意层 Popup 保护。
     click(frame,{35,350});
     check(!wave.toolsCollapsed,"嵌套 Popup 的点外操作误关抽屉");

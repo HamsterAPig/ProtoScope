@@ -389,6 +389,8 @@ struct WaveDockState {
     bool overviewCollapsed{false};
     bool legendCollapsed{false};
     bool legendVisibilityRestorePending{false};
+    bool toolsDrawerResizing{false};
+    bool toolsDrawerPopupOpenLastFrame{false};
     float toolsDrawerProgress{0.0F};
     float overviewPanelProgress{1.0F};
     float legendOverlayProgress{0.0F};
