@@ -94,7 +94,8 @@ static void testImportedLuaBitToggle()
     const auto originalConfig = wave.buffer.viewConfig();
     const auto originalEpoch = wave.buffer.historyEpoch();
     const auto originalEvents = wave.rawCapture.events.size();
-    for (const std::string id : {"enable", "disable", "enable", "omit"}) {
+    // 连续相同 setup 也不能解除导入保护或新增通道。
+    for (const std::string id : {"enable", "enable", "disable", "enable", "omit"}) {
         application.updateControlValue(id, true);
         waitFor(application, [&] {
             require(application.docks().luaState().lastError.empty(), application.docks().luaState().lastError);
@@ -141,6 +142,33 @@ static void testImportedLuaBitToggle()
                 "Lua changed imported time axis");
         require(wave.rawCapture.events.size() == originalEvents, "unapplied Lua setup recorded in raw capture");
     }
+
+    // 显式清空导入快照后，同一 Lua setup 必须恢复普通通道名称和参数行为。
+    application.resetWaveHistory();
+    require(!wave.buffer.importedLabelsReadOnly(), "清空快照后应解除导入名称保护");
+    application.updateControlValue("enable", true);
+    waitFor(application, [&] {
+        require(application.docks().luaState().lastError.empty(), application.docks().luaState().lastError);
+        const auto& rows = application.docks().scriptState().rows;
+        return std::any_of(rows.begin(), rows.end(), [](const auto& row) {
+            return row.message.find("bit-toggle-enable") != std::string::npos;
+        });
+    });
+    require(wave.buffer.channelCount() == 3 && wave.defaultChannelSpecs.size() == 3,
+            "非导入 setup 应恢复其声明的全部通道");
+    const std::array<std::string, 3> labels{"renamed", "second", "extra"};
+    for (std::size_t i = 0; i < labels.size(); ++i) {
+        require(wave.buffer.channelSpec(i)->label == labels[i] && wave.defaultChannelSpecs[i].label == labels[i],
+                "非导入 Lua label 应按原顺序写入实际与默认通道名称");
+    }
+    const auto liveSpec = *wave.buffer.channelSpec(0);
+    require(liveSpec.unit == "changed" && liveSpec.ratio == 99 && liveSpec.scale == 88 && liveSpec.offset == 77 &&
+                liveSpec.bitDisplay.enabled && liveSpec.bitDisplay.firstBit == 0 && liveSpec.bitDisplay.bitCount == 1 &&
+                liveSpec.bitDisplay.yOffset == 99 && liveSpec.bitDisplay.hoverReadout,
+            "非导入 Lua 通道参数行为不应受名称保护影响");
+    const auto liveSnapshot = wave.buffer.snapshot(-1e9, 1e9, false);
+    require(liveSnapshot.channels[0].totalSamples == 1 && liveSnapshot.channels[0].samples[0].value == 999,
+            "非导入 Lua push 应仍可向原位置通道追加样本");
     application.shutdown();
 }
 
