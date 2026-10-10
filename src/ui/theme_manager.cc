@@ -18,6 +18,16 @@ const std::map<std::string, ImVec4 UiStyleTokens::*> uiColors{
     {"panel_background", &UiStyleTokens::panelBackground},
     {"panel_background_alt", &UiStyleTokens::panelBackgroundAlt},
     {"panel_border", &UiStyleTokens::panelBorder},
+    {"control_border", &UiStyleTokens::controlBorder},
+    {"floating_background", &UiStyleTokens::floatingBackground},
+    {"floating_border", &UiStyleTokens::floatingBorder},
+    {"tab_background", &UiStyleTokens::tabBackground},
+    {"tab_hovered", &UiStyleTokens::tabHovered},
+    {"tab_selected", &UiStyleTokens::tabSelected},
+    {"tab_dimmed", &UiStyleTokens::tabDimmed},
+    {"tab_dimmed_selected", &UiStyleTokens::tabDimmedSelected},
+    {"tab_selected_overline", &UiStyleTokens::tabSelectedOverline},
+    {"tab_dimmed_selected_overline", &UiStyleTokens::tabDimmedSelectedOverline},
     {"accent", &UiStyleTokens::accent}, {"accent_muted", &UiStyleTokens::accentMuted},
     {"success", &UiStyleTokens::success}, {"warning", &UiStyleTokens::warning},
     {"danger", &UiStyleTokens::danger}, {"text_strong", &UiStyleTokens::textStrong},
@@ -103,12 +113,7 @@ std::vector<UiThemeDefinition> builtins()
     std::vector<UiThemeDefinition> result;
     for (const auto theme : {config::GuiTheme::ProfessionalDark, config::GuiTheme::DebugHighContrast,
                              config::GuiTheme::ProfessionalLight}) {
-        auto value = uiThemeDefinition(theme);
-        value.id = config::guiThemeId(theme);
-        value.base = value.id;
-        value.name = theme == config::GuiTheme::ProfessionalDark ? "专业深色" :
-                     theme == config::GuiTheme::DebugHighContrast ? "仪器深黑（高对比）" : "专业浅色";
-        result.push_back(std::move(value));
+        result.push_back(uiThemeDefinition(theme));
     }
     return result;
 }
