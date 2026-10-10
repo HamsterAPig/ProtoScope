@@ -649,8 +649,9 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
                 }
             }
             cache.prepare(std::move(key), frameNumber, view.interactionActive);
-            cache.labelBackground = labelBackground;
-            cache.labelText = cursorOverviewColor(displayColor(ui.textStrong, cursorImVec(labelBackground), 1.F, 4.5F));
+            // 合成背景只供游标身份算法评估；实际读数保持显式 UI RGBA，不受波形校色开关影响。
+            cache.labelBackground = cursorOverviewColor(ui.panelBackgroundAlt);
+            cache.labelText = cursorOverviewColor(ui.textStrong);
             std::erase_if(cache.entries, [&](const auto& entry) {
                 return entry.identity >= 2 && std::none_of(view.auxiliaryCursors.items.begin(), view.auxiliaryCursors.items.end(),
                     [&](const auto& cursor) { return cursor.id + 2 == entry.identity; });
