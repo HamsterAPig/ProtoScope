@@ -1560,7 +1560,7 @@ void Application::openTransport()
         syncDockState();
         return;
     }
-    if (dockStore_.waveState().buffer.importedLabelsReadOnly()) resetWaveHistory();
+    switchToLiveWaveSource();
     if (replayReceiveHistory_) {
         // 核心流程：离线回放可能停在半帧，重新连接前必须丢弃回放 parser 状态，
         // 但保留当前收发记录供用户继续查看。
@@ -1845,10 +1845,50 @@ bool Application::applyResetViewportPolicy(const WaveResetViewportTrigger trigge
     return true;
 }
 
-bool Application::applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup)
+bool Application::offlineWaveRebuilding() const
+{
+    return offlineScriptWorker_ && importedRebuildGeneration_ == rawCaptureReplay_.generation &&
+           rawCaptureReplay_.loaded && rawCaptureReplay_.phase != OfflineReplayPhase::Failed &&
+           rawCaptureReplay_.phase != OfflineReplayPhase::Cancelled &&
+           rawCaptureReplay_.processing != OfflineReplayProcessing::BrowseRaw;
+}
+
+void Application::freezeImportedChannelLabels()
 {
     auto& wave = dockStore_.waveState();
-    if (wave.buffer.importedLabelsReadOnly()) {
+    while (wave.defaultChannelSpecs.size() < wave.buffer.channelCount())
+        wave.defaultChannelSpecs.push_back(*wave.buffer.channelSpec(wave.defaultChannelSpecs.size()));
+    for (std::size_t i = importedActualLabels_.size(); i < wave.buffer.channelCount(); ++i)
+        importedActualLabels_.push_back(wave.buffer.channelSpec(i)->label);
+    for (std::size_t i = importedDefaultLabels_.size(); i < wave.defaultChannelSpecs.size(); ++i)
+        importedDefaultLabels_.push_back(wave.defaultChannelSpecs[i].label);
+}
+
+void Application::switchToLiveWaveSource()
+{
+    if (!dockStore_.waveState().buffer.importedLabelsReadOnly()) return;
+    if (rawCaptureReplay_.loaded) unloadRawCaptureReplayTimeline();
+    logRealtimeBacklogDiscard(clearPendingRealtimeBacklog());
+    resetWaveHistory();
+    importedActualLabels_.clear();
+    importedDefaultLabels_.clear();
+    importedRebuildGeneration_.reset();
+    dockStore_.waveState().buffer.setHistoryTrimSuspended(false);
+    dockStore_.waveState().buffer.setDataSource(plot::WaveDataSource::Live);
+}
+
+plot::RawCapturePlotSetupEventData Application::normalizeImportedSetup(plot::RawCapturePlotSetupEventData setup) const
+{
+    for (std::size_t i = 0; i < setup.channels.size() && i < importedActualLabels_.size(); ++i)
+        setup.channels[i].label = importedActualLabels_[i];
+    return setup;
+}
+
+bool Application::applyPlotSetup(const plot::RawCapturePlotSetupEventData& input, bool rebuilding)
+{
+    const auto setup = rebuilding ? normalizeImportedSetup(input) : input;
+    auto& wave = dockStore_.waveState();
+    if (wave.buffer.importedLabelsReadOnly() && !rebuilding) {
         bool changed = false;
         // 导入数据只接受共有通道的 Bit 总开关，不应用清历史、通道身份或视窗配置。
         const auto count = (std::min)(setup.channels.size(), wave.buffer.channelCount());
@@ -1899,7 +1939,10 @@ bool Application::applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup
     }
     wave.channelOverrides.resize(setup.channels.size());
     for (std::size_t index = 0; index < setup.channels.size(); ++index) {
-        const auto defaultSpec = setup.channels[index];
+        auto defaultSpec = setup.channels[index];
+        if (rebuilding && defaultSpec.label.empty()) defaultSpec.label = "CH" + std::to_string(index + 1);
+        if (rebuilding && index < importedDefaultLabels_.size())
+            defaultSpec.label = importedDefaultLabels_[index];
         auto effectiveSpec = defaultSpec;
         if (!shouldResetOverrides && index < wave.channelOverrides.size()) {
             const auto& overrideState = wave.channelOverrides[index];
@@ -1922,8 +1965,11 @@ bool Application::applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup
                 effectiveSpec.bitDisplay.yOffset = overrideState.bitYOffset;
             }
         }
+        if (rebuilding && index < importedActualLabels_.size())
+            effectiveSpec.label = importedActualLabels_[index];
         wave.defaultChannelSpecs.push_back(defaultSpec);
-        wave.buffer.setChannelSpec(index, std::move(effectiveSpec));
+        if (rebuilding) wave.buffer.setChannelSpecForImport(index, std::move(effectiveSpec));
+        else wave.buffer.setChannelSpec(index, std::move(effectiveSpec));
     }
     const bool verticalDefaultsChanged = !nearlyEqual(previousConfig.verticalMin, setup.view.verticalMin) ||
                                          !nearlyEqual(previousConfig.verticalMax, setup.view.verticalMax);
@@ -2095,7 +2141,7 @@ void Application::updateControlValue(const std::string& id, const scripting::Con
 bool Application::requestOscilloscopeToggle(bool currentRunning, bool targetRunning)
 {
     if (dataTransferStatus().active) return false;
-    if (targetRunning && dockStore_.waveState().buffer.importedLabelsReadOnly()) resetWaveHistory();
+    if (targetRunning) switchToLiveWaveSource();
     transport::ConnectionContext context;
     if (activeConnection_.has_value()) {
         context = *activeConnection_;
@@ -2258,6 +2304,11 @@ bool Application::importWaveCsvData(const plot::WaveCsvData& data, std::string& 
     }
 
     auto& wave = dockStore_.waveState();
+    logRealtimeBacklogDiscard(clearPendingRealtimeBacklog());
+    importedActualLabels_.clear();
+    importedDefaultLabels_.clear();
+    importedRebuildGeneration_.reset();
+    wave.buffer.setDataSource(plot::WaveDataSource::Imported);
     wave.buffer.clear();
     wave.buffer.setHistoryTrimSuspended(true);
     wave.buffer.setViewConfig(data.view);
@@ -2271,15 +2322,15 @@ bool Application::importWaveCsvData(const plot::WaveCsvData& data, std::string& 
         auto spec = csvChannel.spec;
         spec.label = csvChannel.label.empty() ? "CH" + std::to_string(channelIndex + 1) : csvChannel.label;
         spec.unit = csvChannel.unit;
-        wave.buffer.setChannelSpec(channelIndex, spec);
-        wave.defaultChannelSpecs.push_back(spec);
+        wave.buffer.setChannelSpecForImport(channelIndex, spec);
+        wave.defaultChannelSpecs.push_back(*wave.buffer.channelSpec(channelIndex));
         if (!csvChannel.samples.empty()) {
             // 核心流程：CSV time 是外部数据的显示时间，直接作为脚本时间轴写入，不再按采样率重解释。
             wave.buffer.appendImported(channelIndex, csvChannel.samples, csvChannel.sampleIndexOffset);
             maxSampleCount = (std::max)(maxSampleCount, csvChannel.samples.size());
         }
     }
-    wave.buffer.setImportedLabelsReadOnly(true);
+    freezeImportedChannelLabels();
     wave.buffer.setImportedSource(data.source);
     importedWaveIncomplete_ = data.incomplete;
     importedWaveRange_ = data.rangeDescription;
@@ -2614,7 +2665,7 @@ bool Application::pumpDataImport()
                 if (importReset_ || importProfile_ || replaySnapshot.pendingWorkerRxBytes > 0U ||
                     replaySnapshot.inputQueueSize > 0U || replaySnapshot.outputQueueSize > 0U ||
                     !pendingScriptPlotAppends_.empty() || !pendingTransferFrameRows_.empty()) return true;
-                dockStore_.waveState().buffer.setImportedLabelsReadOnly(true);
+                freezeImportedChannelLabels();
 
             suppressRawCaptureProfileEvents_ = false;
             suppressRawCapturePlotSetupEvents_ = false;
@@ -3101,6 +3152,8 @@ void Application::prepareRawCaptureBrowse(const plot::RawCaptureFileData& captur
 
 void Application::cleanupOfflineReplayResources()
 {
+    if (dockStore_.waveState().buffer.importedLabelsReadOnly()) freezeImportedChannelLabels();
+    importedRebuildGeneration_.reset();
     rawCaptureReplay_.preparation = {};
     rawCaptureReplay_.profileFence = {};
     if (offlineScriptWorker_) {
@@ -3131,7 +3184,15 @@ void Application::prepareRawCaptureImportReplay(const plot::RawCaptureFileData& 
     if (offlineScriptWorker_) static_cast<void>(offlineScriptWorker_->drainOutputs());
     const auto discarded = clearPendingRealtimeBacklog();
     logRealtimeBacklogDiscard(discarded);
+    if (rawCaptureReplay_.replaceWaveLabels) {
+        importedActualLabels_.clear();
+        importedDefaultLabels_.clear();
+        rawCaptureReplay_.replaceWaveLabels = false;
+    }
+    dockStore_.waveState().buffer.setDataSource(plot::WaveDataSource::Imported);
+    importedRebuildGeneration_ = rawCaptureReplay_.generation;
     resetWaveHistoryForTrigger(WaveResetViewportTrigger::RawImport);
+    dockStore_.waveState().defaultChannelSpecs.clear();
     dockStore_.clearReceiveRows();
     pendingTransferFrameRows_.clear();
     transferFrameParser_ = offlineScriptWorker_ ? makeTransferFrameParserState(offlineScriptWorker_->snapshot())
@@ -3423,8 +3484,9 @@ bool Application::replayRawCaptureEvent(const plot::RawCaptureEvent& event,
         auto& wave = dockStore_.waveState();
         // 核心流程：raw 回放可能先由 Lua on_open/on_bytes 产生同一 setup；完全一致时跳过，避免 reset_history
         // 二次清空样本。
-        if (!sameAppliedPlotSetup(wave, event.plotSetup)) {
-            applyPlotSetup(event.plotSetup);
+        const auto setup = offlineWaveRebuilding() ? normalizeImportedSetup(event.plotSetup) : event.plotSetup;
+        if (!sameAppliedPlotSetup(wave, setup)) {
+            applyPlotSetup(setup, offlineWaveRebuilding());
         }
         return true;
     }
@@ -3634,6 +3696,9 @@ void Application::finishRawCaptureImportReplay()
     for (const auto& channel : importedSnapshot.channels) {
         importedHistoryLimit = (std::max)(importedHistoryLimit, channel.totalSamples);
     }
+    freezeImportedChannelLabels();
+    if (rawCaptureReplay_.eventIndex >= rawCaptureReplay_.capture.events.size())
+        importedRebuildGeneration_.reset();
     wave.buffer.setHistoryTrimSuspended(false);
     wave.buffer.preserveHistoryLimitAtLeast(importedHistoryLimit);
     syncDockState();
@@ -3712,6 +3777,7 @@ bool Application::loadRawCaptureReplayTimeline(const plot::RawCaptureFileData& c
     rawCaptureReplay_.generation = nextGeneration;
     rawCaptureReplay_.loaded = true;
     rawCaptureReplay_.capture = std::move(replayCapture);
+    rawCaptureReplay_.replaceWaveLabels = !capture.waveform.has_value();
     rawCaptureReplay_.context = makeRawCaptureReplayContext(rawCaptureReplay_.capture);
     rawCaptureReplay_.speed = 1.0;
     rawCaptureReplay_.pacing = pacing;
@@ -4979,20 +5045,22 @@ bool Application::applyScriptOscilloscopeOutputs(const scripting::ScriptRuntimeO
     return changed;
 }
 
-bool Application::applyScriptPlotOutputs(const scripting::ScriptRuntimeOutputBatch& batch)
+bool Application::applyScriptPlotOutputs(const scripting::ScriptRuntimeOutputBatch& batch, bool rebuilding)
 {
-    const bool setupChanged = applyScriptPlotSetups(batch.plotSetups);
+    const bool setupChanged = applyScriptPlotSetups(batch.plotSetups, rebuilding);
+    // 导入时普通输出不得入队，也不得消费离线预算残留；权限只随有效离线 generation 续 drain。
+    if (dockStore_.waveState().buffer.importedLabelsReadOnly() && !rebuilding) return setupChanged;
     enqueueScriptPlotAppends(batch.plotAppends);
     auto appendRequests = drainScriptPlotAppendsForPump(plotAppendsPerPump());
-    return appendScriptPlotRequestsToWave(std::move(appendRequests)) || setupChanged;
+    return appendScriptPlotRequestsToWave(std::move(appendRequests), rebuilding) || setupChanged;
 }
 
-bool Application::applyScriptPlotSetups(const std::vector<scripting::PlotSetup>& setups)
+bool Application::applyScriptPlotSetups(const std::vector<scripting::PlotSetup>& setups, bool rebuilding)
 {
     bool changed = false;
     for (const auto& setup : setups) {
         auto rawSetup = toRawPlotSetup(setup);
-        changed = applyPlotSetup(rawSetup) || changed;
+        changed = applyPlotSetup(rawSetup, rebuilding) || changed;
         // 导入保护只应用 Bit 开关，不能把被拒绝的整份 Lua 配置记成实际采集事件。
         if (dockStore_.waveState().buffer.importedLabelsReadOnly()) continue;
         const auto timestampMs = activeConnection_.has_value() ? activeConnection_->timestampMs : nowMs();
@@ -5028,14 +5096,29 @@ std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> Application::drainS
     return std::move(drainState.selected);
 }
 
-bool Application::appendScriptPlotRequestsToWave(std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> requests)
+bool Application::appendScriptPlotRequestsToWave(std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> requests,
+                                                 bool rebuilding)
 {
-    if (dockStore_.waveState().buffer.importedLabelsReadOnly()) return false;
+    if (dockStore_.waveState().buffer.importedLabelsReadOnly() && !rebuilding) return false;
     bool changed = false;
     auto mergedRequests = mergeNonEmptyScriptPlotAppends(std::move(requests));
     auto& wave = dockStore_.waveState();
     for (auto& [channelIndex, request] : mergedRequests) {
         if (wave.buffer.append(channelIndex, std::move(request))) {
+            if (rebuilding) {
+                // 高索引 push 会隐式建立所有低索引位置，必须分别恢复两组冻结名称。
+                for (std::size_t index = 0; index < wave.buffer.channelCount() &&
+                     index < importedActualLabels_.size(); ++index) {
+                    auto spec = *wave.buffer.channelSpec(index);
+                    spec.label = importedActualLabels_[index];
+                    wave.buffer.setChannelSpecForImport(index, std::move(spec));
+                }
+                while (wave.defaultChannelSpecs.size() < wave.buffer.channelCount())
+                    wave.defaultChannelSpecs.push_back(*wave.buffer.channelSpec(wave.defaultChannelSpecs.size()));
+                for (std::size_t index = 0; index < wave.defaultChannelSpecs.size() &&
+                     index < importedDefaultLabels_.size(); ++index)
+                    wave.defaultChannelSpecs[index].label = importedDefaultLabels_[index];
+            }
             changed = true;
         }
     }
@@ -5069,7 +5152,7 @@ bool Application::applyOfflineScriptOutputBatch(scripting::ScriptRuntimeOutputBa
     changed = applyScriptTransportStats(batch) || changed;
     changed = applyScriptRuntimeProfileEvents(batch) || changed;
     changed = applyScriptUiAndLogOutputs(batch) || changed;
-    changed = applyScriptPlotOutputs(batch) || changed;
+    if (offlineWaveRebuilding()) changed = applyScriptPlotOutputs(batch, true) || changed;
     return changed;
 }
 
@@ -5079,6 +5162,7 @@ bool Application::flushOfflineScriptOutputs()
     bool changed = false;
     const auto flushBudgetMs = outputFlushBudgetMs();
     const auto flushStartedAt = nowUs();
+    if (offlineWaveRebuilding()) changed = applyScriptPlotOutputs(scripting::ScriptRuntimeOutputBatch{}, true);
     auto batch = offlineScriptWorker_->drainOneOutput();
     while (batch.has_value()) {
         changed = applyOfflineScriptOutputBatch(std::move(*batch)) || changed;
@@ -5091,7 +5175,7 @@ bool Application::flushOfflineScriptOutputs()
 bool Application::flushOfflineScriptOutputsUnbounded()
 {
     if (!offlineScriptWorker_) return false;
-    bool changed = false;
+    bool changed = offlineWaveRebuilding() && applyScriptPlotOutputs(scripting::ScriptRuntimeOutputBatch{}, true);
     auto batch = offlineScriptWorker_->drainOneOutput();
     while (batch.has_value()) {
         changed = applyOfflineScriptOutputBatch(std::move(*batch)) || changed;

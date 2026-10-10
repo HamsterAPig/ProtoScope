@@ -63,6 +63,150 @@ static void waitFor(app::Application& app, const std::function<bool()>& ready, b
     }
 }
 
+static void testImportedSourceLabelsAfterReplay()
+{
+    app::Application application;
+    require(application.initialize(), "来源名称回归初始化失败");
+    const auto protocol = std::filesystem::path(__FILE__).parent_path() / "fixtures/protocols/import_source_label";
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true), "来源名称 fixture 加载失败");
+    plot::RawCaptureFileData capture;
+    capture.events = {
+        {.type = plot::RawCaptureEventType::RxBytes, .bytes = {77}, .sequence = 1},
+        {.type = plot::RawCaptureEventType::RxBytes, .bytes = {11, 12, 13}, .sequence = 2},
+    };
+    tests::ScopedTempPath file(tests::makeUniqueTempFile("protoscope-import-source-label", ".psraw"));
+    std::string error;
+    require(plot::writeRawCaptureFile(file.path(), capture, error), error);
+    require(application.startDataImport(file.path(), error), error);
+    waitFor(application, [&] { return application.dataTransferStatus().awaitingConfirmation; });
+    application.confirmDataImport(true);
+    waitFor(application, [&] {
+        const auto status = application.dataTransferStatus();
+        return status.complete && !status.active;
+    });
+
+    const auto assertWave = [&](const std::string& stage) {
+        const auto& wave = application.docks().waveState();
+        const auto snapshot = wave.buffer.snapshot(-1e9, 1e9, false);
+        require(snapshot.channels.size() == 2 && wave.defaultChannelSpecs.size() == 2,
+                stage + ": 内部解析必须建立两个通道及默认规格");
+        const std::array<std::string, 2> labels{"raw-original", "raw-second"};
+        for (std::size_t i = 0; i < labels.size(); ++i) {
+            require(wave.buffer.channelSpec(i)->label == labels[i] &&
+                        snapshot.channels[i].label == labels[i] && wave.defaultChannelSpecs[i].label == labels[i],
+                    stage + ": Lua setup 不得改变导入的实际或默认名称（通道 " + std::to_string(i) + "）");
+            require(snapshot.channels[i].totalSamples == 3,
+                    stage + ": 内部重建必须保留三个样本，用户 setup/push 不得清空或追加");
+            for (std::size_t j = 0; j < 3; ++j) {
+                require(snapshot.channels[i].samples[j].time == static_cast<double>(j + 1) &&
+                            snapshot.channels[i].samples[j].value == static_cast<double>(11 + j + i * 100),
+                        stage + ": 内部解析样本值或时间不正确");
+            }
+        }
+    };
+    const auto tryLuaRename = [&](const std::string& stage) {
+        assertWave(stage + "配置前");
+        application.docks().scriptState().rows.clear();
+        application.updateControlValue("rename", true);
+        waitFor(application, [&] {
+            require(application.docks().luaState().lastError.empty(), application.docks().luaState().lastError);
+            const auto& rows = application.docks().scriptState().rows;
+            return std::any_of(rows.begin(), rows.end(), [](const auto& row) {
+                return row.message.find("source-label-rename-consumed") != std::string::npos;
+            });
+        });
+        // 日志与真实 setup 同批消费后再核验，不能靠保护标记代替行为断言。
+        assertWave(stage);
+    };
+    const auto waitCompleted = [&] {
+        waitFor(application, [&] {
+            const auto status = application.rawCaptureReplayStatus();
+            require(status.error.empty(), status.error);
+            return status.phase == app::Application::OfflineReplayPhase::Completed &&
+                   status.inputBacklog == 0 && status.workerBacklog == 0 && status.outputBacklog == 0;
+        });
+    };
+
+    tryLuaRename("首次重解析完成后");
+    // 前缀中没有 setup，仅真实 Lua push(2) 隐式建立位置 0；不能用提前 setup 掩盖原名遗漏。
+    require(application.seekRawCaptureReplay(1, error), error);
+    waitFor(application, [&] {
+        const auto status = application.rawCaptureReplayStatus();
+        require(status.error.empty(), status.error);
+        // inputBacklog 是尚未播放的时间轴事件数，不是 worker 待处理输入。
+        return status.phase == app::Application::OfflineReplayPhase::Paused && status.eventIndex == 1 &&
+               status.eventCount == 2 && status.inputBacklog == status.eventCount - status.eventIndex &&
+               status.workerBacklog == 0 && status.outputBacklog == 0;
+    });
+    {
+        const auto& wave = application.docks().waveState();
+        const auto prefix = wave.buffer.snapshot(-1e9, 1e9, false);
+        require(prefix.channels.size() == 2 && wave.defaultChannelSpecs.size() == 2,
+                "高索引前缀必须隐式建立两个位置及默认规格");
+        const std::array<std::string, 2> labels{"raw-original", "raw-second"};
+        for (std::size_t i = 0; i < labels.size(); ++i)
+            require(wave.buffer.channelSpec(i)->label == labels[i] && prefix.channels[i].label == labels[i] &&
+                        wave.defaultChannelSpecs[i].label == labels[i],
+                    "高索引前缀不得丢失冻结实际/default 原名（通道 " + std::to_string(i) + "）");
+        require(prefix.channels[0].totalSamples == 0 && prefix.channels[1].totalSamples == 1 &&
+                    prefix.channels[1].samples[0].time == 1 && prefix.channels[1].samples[0].value == 77,
+                "无 setup 高索引前缀应只在第二通道产生准确样本");
+    }
+    require(application.playRawCaptureReplay(error), error);
+    waitCompleted();
+    tryLuaRename("短前缀继续完成后");
+    for (int repeat = 0; repeat < 2; ++repeat) {
+        require(application.seekRawCaptureReplay(application.rawCaptureReplayStatus().eventCount, error), error);
+        waitCompleted();
+        tryLuaRename("seek 完成后");
+        require(application.playRawCaptureReplay(error), error);
+        waitCompleted();
+        tryLuaRename("完成后再次播放");
+    }
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true), "导入后的普通 reload 失败");
+    tryLuaRename("普通 reload 后");
+    plot::WaveCsvData invalid;
+    error.clear();
+    require(!application.importWaveCsvData(invalid, error), "零通道导入应被拒绝");
+    tryLuaRename("失败导入后");
+    error.clear();
+    require(application.startDataImport(file.path(), error), error);
+    waitFor(application, [&] { return application.dataTransferStatus().awaitingConfirmation; });
+    application.cancelDataTransfer();
+    waitFor(application, [&] { return !application.dataTransferStatus().active; });
+    tryLuaRename("确认前取消后");
+    require(application.startDataImport(file.path(), error), error);
+    waitFor(application, [&] { return application.dataTransferStatus().awaitingConfirmation; });
+    application.confirmDataImport(true);
+    waitFor(application, [&] {
+        const auto status = application.dataTransferStatus();
+        return status.complete && !status.active;
+    });
+    tryLuaRename("重新导入后");
+
+    // 仅明确切换到实时来源后，同一 Lua label 配置才恢复普通写入行为。
+    application.unloadRawCaptureReplayTimeline();
+    application.setTransportFactoryForTest([](auto) { return std::make_unique<WriteProbe>(); });
+    application.openTransport();
+    application.pumpOnce();
+    application.docks().scriptState().rows.clear();
+    application.updateControlValue("rename", true);
+    waitFor(application, [&] {
+        const auto& rows = application.docks().scriptState().rows;
+        return std::any_of(rows.begin(), rows.end(), [](const auto& row) {
+            return row.message.find("source-label-rename-consumed") != std::string::npos;
+        });
+    });
+    const auto& live = application.docks().waveState();
+    require(live.buffer.channelSpec(0)->label == "lua-renamed" && live.defaultChannelSpecs[0].label == "lua-renamed" &&
+                live.buffer.channelSpec(1)->label == "lua-second" && live.defaultChannelSpecs[1].label == "lua-second",
+            "显式实时切换后 Lua label 必须恢复写入实际及默认名称");
+    const auto snapshot = live.buffer.snapshot(-1e9, 1e9, false);
+    require(snapshot.channels[0].totalSamples == 1 && snapshot.channels[0].samples[0].value == 999,
+            "显式实时切换后 Lua push 必须恢复");
+    application.shutdown();
+}
+
 static void testImportedLuaBitToggle()
 {
     app::Application application;
@@ -143,9 +287,15 @@ static void testImportedLuaBitToggle()
         require(wave.rawCapture.events.size() == originalEvents, "unapplied Lua setup recorded in raw capture");
     }
 
-    // 显式清空导入快照后，同一 Lua setup 必须恢复普通通道名称和参数行为。
+    // 清内存不等于切换来源，明确实时请求之前仍须保留导入身份。
     application.resetWaveHistory();
-    require(!wave.buffer.importedLabelsReadOnly(), "清空快照后应解除导入名称保护");
+    require(wave.buffer.dataSource() == plot::WaveDataSource::Imported,
+            "手动清空不得隐式切换导入来源");
+    // 明确切换到实时来源后，同一 Lua setup 必须恢复普通通道名称和参数行为。
+    application.setTransportFactoryForTest([](auto) { return std::make_unique<WriteProbe>(); });
+    application.openTransport();
+    application.pumpOnce();
+    require(!wave.buffer.importedLabelsReadOnly(), "实时来源应解除导入名称保护");
     application.updateControlValue("enable", true);
     waitFor(application, [&] {
         require(application.docks().luaState().lastError.empty(), application.docks().luaState().lastError);
@@ -175,6 +325,7 @@ static void testImportedLuaBitToggle()
 int main(int argc, char**)
 {
     try {
+        testImportedSourceLabelsAfterReplay();
         testImportedLuaBitToggle();
         const bool benchmark = argc > 1;
         const std::size_t sampleCount = benchmark ? 1000000 : 25000;

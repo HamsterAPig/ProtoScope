@@ -8,7 +8,12 @@
 #include <vector>
 #include "protoscope/plot/wave_query.hpp"
 
+namespace protoscope::app { class Application; }
+
 namespace protoscope::plot {
+
+// 数据来源与清空内存、Lua 运行状态独立。
+enum class WaveDataSource { Live, Imported };
 
 enum class WaveControlMode {
     Oscilloscope,
@@ -210,8 +215,8 @@ public:
     bool append(std::size_t channelIndex, WaveAppendRequest request);
     bool appendImported(std::size_t channelIndex, const std::vector<WaveSample>& samples,
                         std::size_t sampleIndexOffset = 0);
-    void setImportedLabelsReadOnly(bool readOnly) { importedLabelsReadOnly_ = readOnly; }
-    bool importedLabelsReadOnly() const { return importedLabelsReadOnly_; }
+    WaveDataSource dataSource() const { return dataSource_; }
+    bool importedLabelsReadOnly() const { return dataSource_ == WaveDataSource::Imported; }
     void setImportedSource(std::string source) { source_ = std::move(source); }
     WaveSnapshot snapshot(double visibleMinTime, double visibleMaxTime, bool computeStats = true) const;
     EnvelopeView buildEnvelope(std::size_t channelIndex,
@@ -231,6 +236,12 @@ public:
     static DeltaReadout makeDelta(const CursorReadout& left, const CursorReadout& right);
 
 private:
+    friend class protoscope::app::Application;
+    // 只有宿主的明确源转换和可信重建能写入导入身份/初始名称。
+    void setDataSource(WaveDataSource source) { dataSource_ = source; }
+    void setChannelSpecForImport(std::size_t index, ChannelSpec spec);
+    void setChannelSpecImpl(std::size_t index, ChannelSpec spec, bool importing);
+
     struct ChannelBuffer {
         ChannelSpec spec{};
         std::vector<WaveSample> samples;
@@ -262,7 +273,7 @@ private:
     std::size_t maxTotalSamples_{0};
     bool resetHistoryOnTimeReset_{true};
     bool historyTrimSuspended_{false};
-    bool importedLabelsReadOnly_{false};
+    WaveDataSource dataSource_{WaveDataSource::Live};
 };
 
 } // namespace protoscope::plot

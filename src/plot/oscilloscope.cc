@@ -310,8 +310,7 @@ void OscilloscopeBuffer::clear()
     channels_.clear();
     config_ = ViewConfig{};
     preservedHistoryLimit_ = 0;
-    if (importedLabelsReadOnly_) historyTrimSuspended_ = false;
-    importedLabelsReadOnly_ = false;
+    // clear 仅清内存，不能把离线来源隐式转换为实时，也不打断重建期间的历史保留。
     ++dataRevision_;
 }
 
@@ -332,6 +331,16 @@ void OscilloscopeBuffer::configureChannels(std::size_t channelCount)
 
 void OscilloscopeBuffer::setChannelSpec(std::size_t channelIndex, ChannelSpec spec)
 {
+    setChannelSpecImpl(channelIndex, std::move(spec), false);
+}
+
+void OscilloscopeBuffer::setChannelSpecForImport(std::size_t channelIndex, ChannelSpec spec)
+{
+    setChannelSpecImpl(channelIndex, std::move(spec), true);
+}
+
+void OscilloscopeBuffer::setChannelSpecImpl(std::size_t channelIndex, ChannelSpec spec, bool importing)
+{
     if (channelIndex >= channels_.size()) {
         configureChannels(channelIndex + 1);
     }
@@ -346,7 +355,7 @@ void OscilloscopeBuffer::setChannelSpec(std::size_t channelIndex, ChannelSpec sp
     }
     spec.bitDisplay = sanitizeBitDisplaySpec(spec.bitDisplay);
     auto& channelSpec = channels_[channelIndex].spec;
-    if (importedLabelsReadOnly_) spec.label = channelSpec.label;
+    if (importedLabelsReadOnly() && !importing) spec.label = channelSpec.label;
     if (channelSpec.ratio != spec.ratio) ++analysisRevision_;
     if (channelSpec.label != spec.label || channelSpec.unit != spec.unit || channelSpec.ratio != spec.ratio ||
         channelSpec.scale != spec.scale || channelSpec.offset != spec.offset || channelSpec.color != spec.color ||
