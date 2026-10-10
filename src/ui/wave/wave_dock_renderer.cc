@@ -23,6 +23,7 @@
 #include <vector>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <implot.h>
 #include <implot_internal.h>
 
@@ -370,8 +371,7 @@ namespace {
         }
         const ImU32 color = state.active || state.hovered ? ImGui::GetColorU32(ImGuiCol_SliderGrabActive)
                                                           : ImGui::GetColorU32(ImGuiCol_Border);
-        ImGui::GetWindowDrawList()->AddRectFilled(
-            handlePos, ImVec2(handlePos.x + safeThickness, handlePos.y + height), color, 2.0F);
+        ImGui::GetWindowDrawList()->AddRectFilled(handlePos, state.max, color, 2.0F);
         ImGui::SetItemTooltip("拖动调整右侧抽屉宽度");
         return state;
     }
@@ -1708,10 +1708,12 @@ public:
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, style.WindowPadding.y));
 
+        ImGui::PushStyleColor(ImGuiCol_Border, activeUiStyleTokens().panelBorder);
         ImGui::BeginChild("##wave_tools_rail",
                           ImVec2(context.toolsWidth, context.availableHeight),
                           true,
                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        ImGui::PopStyleColor();
 
         drawToolsRail(wave);
         ImGui::EndChild();
@@ -1741,13 +1743,13 @@ public:
             return;
         }
 
-        const ToolsDrawerResizeState resizeState = wave.toolsCollapsed
-                                                       ? ToolsDrawerResizeState{}
-                                                       : drawToolsDrawerResizeHandle(wave,
-                                                                                     drawerGeometry.pos,
-                                                                                     context.availableHeight,
-                                                                                     drawerGeometry.contentLeft,
-                                                                                     wave.contentToolsSplitterWidth);
+        ToolsDrawerResizeState resizeState = wave.toolsCollapsed
+                                                     ? ToolsDrawerResizeState{}
+                                                     : drawToolsDrawerResizeHandle(wave,
+                                                                                   drawerGeometry.pos,
+                                                                                   context.availableHeight,
+                                                                                   drawerGeometry.contentLeft,
+                                                                                   wave.contentToolsSplitterWidth);
 
         bool drawerOpen = true;
         const std::string title = std::string(toolsDrawerTitle(wave.activeToolsDrawer)) + "##wave_tools_drawer";
@@ -1761,8 +1763,16 @@ public:
 
         bool drawerHovered = false;
         bool drawerFocused = false;
-        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, drawerProgress);
-        if (ImGui::Begin(title.c_str(), &drawerOpen, drawerFlags)) {
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, style.Alpha * drawerProgress);
+        const auto& uiTokens = activeUiStyleTokens();
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, uiTokens.floatingBackground);
+        ImGui::PushStyleColor(ImGuiCol_Border, uiTokens.floatingBorder);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.F);
+        const bool drawerVisible = ImGui::Begin(title.c_str(), &drawerOpen, drawerFlags);
+        // 普通窗口在 Begin 绘制完整装饰；立即恢复，避免浮层边框污染内部控件/Popup。
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(2);
+        if (drawerVisible) {
             drawerHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows |
                                                    ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
             drawerFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
@@ -1785,7 +1795,9 @@ public:
         const ImVec2 drawerMax(drawerGeometry.pos.x + drawerGeometry.width,
                                drawerGeometry.pos.y + context.availableHeight);
         const bool drawerContainsMouse = pointInRect(context.io.MousePos, drawerGeometry.pos, drawerMax);
-        const bool resizeContainsMouse = pointInRect(context.io.MousePos, resizeState.min, resizeState.max);
+        const bool resizeContainsMouse = pointInRect(context.io.MousePos,
+            ImVec2(drawerGeometry.pos.x-wave.contentToolsSplitterWidth,drawerGeometry.pos.y),
+            ImVec2(drawerGeometry.pos.x,drawerGeometry.pos.y+context.availableHeight));
         const bool popupOpen = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
         const bool drawerKeyboardActive = drawerFocused && context.io.WantTextInput;
         const bool insideToolsArea = railHovered || drawerContainsMouse || resizeContainsMouse || drawerHovered ||

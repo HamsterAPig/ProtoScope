@@ -998,15 +998,20 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
     ImGui::SetNextWindowSize(windowSize, ImGuiCond_Always);
     const auto& waveTokens = activeWaveStyleTokens();
     const float bgAlpha = waveTokens.legendOverlayBackground.w;
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0F, 0.0F, 0.0F, 0.0F));
-    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.0F, 0.0F, 0.0F, 0.0F));
     ImGui::PushStyleColor(ImGuiCol_Text, waveTokens.legendOverlayTextPrimary);
     ImGui::PushStyleColor(ImGuiCol_TextDisabled, waveTokens.legendOverlayTextSecondary);
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.F);
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
                                    ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoMove |
                                    ImGuiWindowFlags_NoFocusOnAppearing;
-    if (ImGui::Begin("##wave_channel_overlay_legend", nullptr, flags)) {
+    const bool visible = ImGui::Begin("##wave_channel_overlay_legend", nullptr, flags);
+    // 只抑制宿主装饰；图例仍自绘一圈边，内部 ColorEdit/右键菜单使用原生控件边框。
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(2);
+    if (visible) {
         ImGuiWindow* legendWindow = ImGui::GetCurrentWindow();
         const ImVec2 legendMin = ImGui::GetWindowPos();
         const ImVec2 legendMax(legendMin.x + ImGui::GetWindowWidth(), legendMin.y + ImGui::GetWindowHeight());
@@ -1053,11 +1058,11 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
                           legendMax,
                           ImGui::GetColorU32(waveTokens.legendOverlayBorder),
                           ImGui::GetStyle().WindowRounding,
-                          0,
-                          1.0F);
+                          1.0F,
+                          ImDrawFlags_None);
     }
     ImGui::End();
-    ImGui::PopStyleColor(5);
+    ImGui::PopStyleColor(3);
     ImGui::PopStyleVar(3);
 }
 

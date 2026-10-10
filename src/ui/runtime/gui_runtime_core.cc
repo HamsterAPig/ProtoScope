@@ -1230,9 +1230,11 @@ void GuiRuntime::drawAppHeader(const float menuBarHeight)
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0F, 10.0F));
     ImGui::PushStyleColor(ImGuiCol_WindowBg,
                           ImVec4(tokens.panelBackground.x, tokens.panelBackground.y,
-                                 tokens.panelBackground.z, 0.98F));
+                                 tokens.panelBackground.z, tokens.panelBackground.w * .98F));
     ImGui::PushStyleColor(ImGuiCol_Border, tokens.panelBorder);
-    if (ImGui::Begin("现代应用栏", nullptr, flags)) {
+    const bool visible = ImGui::Begin("现代应用栏", nullptr, flags);
+    ImGui::PopStyleColor(2);
+    if (visible) {
         ImGui::TextUnformatted("ProtoScope");
         ImGui::SameLine();
         ImGui::TextDisabled("%s", build::kVersion);
@@ -1321,7 +1323,6 @@ void GuiRuntime::drawAppHeader(const float menuBarHeight)
         if (drawGhostIconButton("导出数据", "导出波形数据")) openUnifiedDataExport(0);
     }
     ImGui::End();
-    ImGui::PopStyleColor(2);
     ImGui::PopStyleVar();
 }
 
