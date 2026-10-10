@@ -2,7 +2,7 @@
 
 ## 应用内操作
 
-“设置 → 主题”提供专业深色、仪器深黑（高对比）、专业浅色，以及用户主题。
+“设置 → 主题”提供石墨青绿、石墨琥珀、冷白青蓝，以及用户主题。
 选择主题会标记配置未保存，沿用手动保存和自动保存机制，不重载协议。
 主题解析完成后在下一帧开始时应用。主题切换不清空采集数据、视口、游标身份或冻结状态，
 只使颜色相关余辉缓存失效。
@@ -12,40 +12,70 @@
   文件名作为新 ID，不覆盖已有文件或内置 ID。导出后使用“重载主题”更新列表。
 - “重载主题”：手动扫描 `.yaml`、`.yml` 文件并重新应用当前选择。
   任一文件解析失败时保留旧注册表及当前外观，状态栏显示文件、字段、行列。
-- 启动时找不到所选主题或解析失败，使用专业深色；配置中的原 ID 保留。
+- 启动时找不到所选主题或解析失败，使用石墨青绿；配置中的原 ID 保留。低对比或透明颜色不是解析错误。
 
 ## 内置与随附外观
 
 内置外观：
 
-- `professional_dark`：中性炭灰应用底、分层灰面板、低饱和灰青强调。
-- `professional_light`：冷白应用底、白色内容面板、深蓝灰正文与蓝色强调，工具组不使用大片灰底。
-- `debug_high_contrast`：近黑底与明亮信号、清晰键盘焦点；装饰边框和网格保持克制。
+- `professional_dark` / **石墨青绿**：石墨应用底、分层灰面板、克制青绿强调。
+- `debug_high_contrast` / **石墨琥珀**：石墨灰底与琥珀选中态，细灰边框；保留历史配置 ID，不再附带高对比特判。
+- `professional_light` / **冷白青蓝**：冷白内容与浅灰蓝宿主、青蓝操作与选中态。
+
+三款均按文字、控件、容器、浮层分层设计；两深一浅，不新增第四款。
+内置外观是否清晰舒适以实际截图评审为准，不以固定文字/边框比例作为加载条件。
+视觉参考图不属于当前程序运行证据。
 
 仓库不再随附 `graphite_cyan`、`warm_industrial`、`paper_lab` 三套额外主题。
 普通构建和发布包仍创建 `config/themes` 用户目录；不会删除已有运行副本或用户配置。
-旧 ID 对应文件缺失时启动回退专业深色并提示错误，配置原 ID 保留；
+旧 ID 对应文件缺失时启动回退石墨青绿并提示错误，配置原 ID 保留；
 若目录仍有有效同名 YAML，则继续作为用户主题发现。用户主题格式、显式颜色、继承与导出能力不变。
 
 普通按钮使用低饱和填充而非常驻亮框；工具栏与 ghost 默认透明，悬停/按下柔和填充，
 切换按钮保留持续选中态。每个操作组最多一个主操作；输入、组合框与复选框保留必要边界。
 去框仅发生在按钮局部作用域，退出恢复样式；自绘侧栏复用原生按钮以保留键盘激活和可见焦点。
-高对比基底保留可见边界，不强制低眩光。
+三款共用这一角色策略，历史 `debug_high_contrast` 不再强制按钮/徽标常驻边框。
 
-内置正文/辅助文字目标分别为普通主题 4.5:1/4.5:1、高对比主题 12:1/7:1，
-悬停、按下、选中填充同时受这两个阈值约束。必要输入边界与键盘焦点保持至少 3:1，
-与低对比装饰 `panel_border` 分工；焦点、输入光标、选中标签上沿等使用显式状态槽。
-危险按钮/状态徽标通过克制身份色填充表达状态，高对比仍保留身份色边界，正文保持主题文字色。
-业务禁用范围成对使用 `ui::beginDisabled` / `ui::endDisabled`，保留 ImGui 禁用交互语义及嵌套恢复。
-普通主题整体 alpha 为 0.72；高对比主题边界等元素仍为 0.86，但正文独立保留 0.98 的 alpha，
-按钮/输入表面改为空黑填充，避免把所有元素做成几乎相同的启用态来维持对比度。
-禁用与可用按钮同文字同尺寸的真实像素必须可区分（至少31个像素有通道差≥20）；
-按字体图集及实际 UV 滤波确认的≥90%覆盖字形核心必须**全部**满足普通4.5/高对比12阈值，
-不是仅有少量核心达标，不要求低覆盖抗锯齿边缘也达到正文阈值。原生 `ImGui::BeginDisabled`
-不自动分离正文和表面，因此业务调用应使用上述主题入口。
+UI 不强制 4.5:1、3:1、12:1 或 7:1；合法低对比、同色、半透明和全透明配置都可加载，
+不会因此回退、提亮、压暗或重写 alpha。普通悬停/按下状态只做固定强度叠色，
+保留源 alpha，不搜索对比度；显式标签状态和图例状态字段直接使用。
+用户可以有意选择不可见颜色，这与内置款追求清晰舒适的视觉设计是两回事。
 
-下述 2026-09-22 历史场景曾完成回归和独立复核，不代表本次按钮分级与主题退役已经验收；本次需重新运行完整构建、CTest 与截图入口，也不代表任意设备或用户主题均已验收。用户显式覆盖优先，未填写字段继承新基底；
-不改主题ID/格式，不在解析后重新生成预设，不重写用户主题文件。
+业务禁用范围成对使用 `ui::beginDisabled` / `ui::endDisabled`，沿用原生不可交互与嵌套恢复。
+三款统一 `DisabledAlpha=0.72`，不补偿正文 alpha，不改为空黑表面。
+导航焦点、键盘激活、关闭/ESC、拖宽与菜单保护仍属交互验收要求，取消的是审美比例门槛。
+
+### 边框、浮层与 Dock 状态
+
+- `text_strong` / `text_muted` 是文字；`control_border` 是控件边框；
+  `panel_border` 是容器、分隔线和普通图表边框，彼此不再通过正文颜色派生。
+- `floating_background` 用于原生 Popup/Tooltip 背景和六类工具抽屉背景；
+  `floating_border` 用于应用直接拥有的工具抽屉等浮层窗口装饰。
+- ImGui 只有一个 `Border` 槽，**原生 Popup/Tooltip 外框复用 `control_border`**，
+  `PopupBorderSize=1`。`floating_border` 不承诺控制 ColorEdit 内部生成的每层弹窗。
+  不重写原生拾色器、不补画第二层边框，也不引入帧末装饰钩子。
+- Main/Cursor/Measure/View/FFT/Renderer 抽屉仍是普通 NoDocking 窗口；Begin 前局部设置
+  浮层背景/边框与 `WindowBorderSize=1`，Begin 后立即恢复内容样式。
+  动画 alpha 独立作用于整个窗口；内部输入和嵌套 Popup 不继承浮层装饰边框。
+- 图例宿主在 Begin 时关闭原生窗口边框，保留唯一自绘 `wave.legend_overlay_border`。
+  透明装饰样式在内容绘制前恢复，右键菜单、ColorEdit 拾色弹窗和内部输入恢复正常原生边框。
+
+| 可选 UI 字段 | 原生槽 / 状态 |
+| --- | --- |
+| `tab_background` | `Tab`：激活节点未选页 |
+| `tab_selected` | `TabSelected`：激活节点已选页 |
+| `tab_dimmed` | `TabDimmed`：失焦节点未选页 |
+| `tab_dimmed_selected` | `TabDimmedSelected`：失焦节点已选页 |
+| `tab_hovered` | `TabHovered`：共用悬停/按住填充，优先于上述填充 |
+| `tab_selected_overline` | 激活已选页上沿 |
+| `tab_dimmed_selected_overline` | 失焦已选页上沿 |
+
+使用原生 Dock，标签上沿宽 1，整圈标签边框为 0。只有已选页绘制上沿；
+悬停已选页保留对应上沿，未选页没有额外上沿。失焦已选页有独立填充和上沿，
+不新增原生没有独立槽的“失焦悬停”设置。
+
+以下历史场景不代表本次已经验收；本次仍需完整构建、CTest 与实际截图入口。
+用户显式覆盖优先，不在解析后重新生成预设，不重写用户主题文件。
 
 ## 文件格式
 
@@ -63,8 +93,12 @@ base: professional_light
 不支持用户主题多级继承，不执行脚本。
 
 `ui` 与 `wave` 中的颜色使用带引号的 `"#RRGGBB"` 或 `"#RRGGBBAA"`。
-不写的字段直接继承基底；未知字段、重复键、无效颜色、非有限尺寸均报错。
-完整可用字段可通过导出内置主题获得，字段名为 snake_case。
+不写的字段直接继承新基底；上述十个新 UI 字段均可省略，旧 `version: 1` 文件继续加载。
+例如只覆盖 `accent` 或 `panel_border`，不会隐式重算遗漏的 `tab_*`、`control_border` 或 `wave.*`。
+解析顺序为复制完整基底再覆盖显式字段；应用与导出不重新执行预设初始化。
+换一个合法自定义 ID 不改变实际配色，RGBA 和色板顺序保留；十六进制导出精度为每分量 8 bit。
+未知字段、重复键、无效颜色、非有限尺寸仍报错；低对比不属于错误。
+新文件含新字段，不保证旧程序能读取。完整字段可通过导出内置主题获得，字段名为 snake_case。
 
 - `ui`：应用及面板背景、边框、强调色、状态色、主文字、辅助文字、普通绘图区。
 - `wave`：波形背景、三级网格、通道标签、状态浮层、图例状态及测量浮层颜色。
@@ -73,7 +107,8 @@ base: professional_light
   `(colorIndex + 2) % palette.size()`；切换主题保留游标身份和颜色序号。
   此开关默认 `true`，旧配置缺失时也启用。它独立于主题 `wave.correct_contrast`，
   不改写主题文件、通道源 RGBA 或 T 的 id/time/colorIndex。
-- `wave.correct_contrast`：默认 `true`。通道原始色值保留，在绘制时补足对比度；
+- `wave.correct_contrast`：默认 `true`，只控制波形/游标身份显示修正，不控制 UI 正文、
+  控件/浮层边框、按钮状态、错误/指示/日志颜色或读数正文。通道原始色值保留，在绘制时补足对比度；
   已达标色保持原样；低 alpha 优先寻找保持 RGB 的最小可行 alpha，只有不透明原色也不达标才
   分别求黑/白两方向的最小可行调整，再按RGB欧氏距离选较小者，而非固定最大端点对比方向。半透明背景先合成当前宿主 WindowBg/ChildBg/PopupBg（无 UI 上下文时使用主题应用底）。
   显式全透明色和关闭修正始终保留原语义；概览淡化、glow 与余辉层次须由真实截图复核。
@@ -93,7 +128,10 @@ base: professional_light
 主配置示例：`gui: { wave: { cursor_auto_color: true } }`。自动色复用概览的固定科研候选，
 先检查实际合成背景的图形 3:1 和文字 4.5:1，再比较最差波形对比与最小 Lab 色差。
 无解时保留未达标状态，图形加黑/白护边，标签正文回退主题文字；不保证任意重叠点或抗锯齿像素达标。
-A/B模拟、数字、交点及FFT读数标签使用统一不透明背景、主题正文和身份色边框，不再依赖ImPlot按身份填充色经验选择黑/白字。
+A/B模拟、数字、交点及FFT读数标签使用主题 `panel_background_alt`、`text_strong` 和身份色边框，
+保留显式 RGBA，不按 UI 文字阈值重新校色；算法评估背景与实际半透明背景分开。
+身份色标签仍可使用自动算法的 `textPass` 结果，但不再增加 debug 基底 12:1 例外。
+不依赖 ImPlot 按身份填充色经验选择黑/白字。
 A/B 与 T 分别分配身份槽；A/B 实线、T 虚线及编号保留非颜色线索，T 不是触发线。
 
 每个 Dock 在帧准备阶段冻结结果，概览、Overlay/Stacked/Split、FFT A/B、标签和读数共用；
@@ -136,20 +174,55 @@ gui:
 
 ## 验证入口
 
+本次由工作流使用独立日志脚本：实现前 Configure → Build → Baseline；
+实现后重新 Configure → Build → Acceptance → DiffCheck。
+复用 `cmake-build-debug`，先重新配置再完整构建；GUI/BUILD_TESTING 开启，Ninja 和本地 GLFW 源目录不变。
+完整 CTest 不设统一 60 秒超时，保留全量单测 900 秒。截图入口必须另行执行，
+因为 `theme_render` 不是 CTest 用例，`--controls-only` 不能替代完整入口。
+
+下列命令从仓库工作目录运行；直接启动 EXE 只在子进程 PATH 补当前 MinGW DLL 目录。
+截图目录每轮独立，不覆盖 before：
+
 ```powershell
-cmake --build build-theme
-ctest --test-dir build-theme --output-on-failure
-.\build-theme\tests\protoscope_theme_render_tests.exe build-theme/theme-captures
-.\build-theme\tests\protoscope_auxiliary_cursor_tests.exe --capture build-theme/cursor-captures
+ctest --test-dir cmake-build-debug --output-on-failure --no-tests=error
+.\cmake-build-debug\tests\protoscope_theme_render_tests.exe <本轮目录>/theme_render
+.\cmake-build-debug\tests\protoscope_industrial_ui_tests.exe protocols/data_storage_demo <本轮目录>/industrial_ui
+.\cmake-build-debug\tests\protoscope_auxiliary_cursor_tests.exe --capture <本轮目录>/auxiliary_cursor
+.\cmake-build-debug\tests\protoscope_wave_ui_benchmark.exe --verify --gl --capture <本轮目录>/wave_ui_benchmark
+.\cmake-build-debug\tests\protoscope_file_operation_ui_tests.exe --capture <本轮目录>/file_operation_ui
 ```
+
+当前验收标准为字段忠实应用、RGBA 合成、真实 Dock 状态、六抽屉完整边框、图例右键/拾色器、
+样式恢复、键盘/禁用交互、低对比/透明配置往返及 UI/波形开关隔离；保留波形算法与 CPU/GPU 回归。
+内置款用实际截图评审清晰度，不把自定义低对比当错误。
+
+### 本轮验收状态（2026-10-10，三轮后仍未通过）
+
+工作流在 `out/theme-redesign-20261010-115742-096/logs/` 中记录：修改后 Configure 与完整 `cmake --build cmake-build-debug` 三轮均退出 0。完整命令
+`ctest --test-dir cmake-build-debug --output-on-failure --no-tests=error`
+第一轮退出 8（`protoscope_record_import_tests` 的 `asynchronous_import` 报
+`unrecognized record volume file`），第二、三轮退出 0（35/35）；此瞬时失败未通过放宽文件校验或修改测试处理。
+三轮 Acceptance 的完整 `theme_render_tests.exe <round>/theme_render` 均退出 1，stderr 为
+`primary text color pixels missing`，每轮只生成 1 张截图。失败对应的像素断言位于
+`tests/test_theme_render.cc`；在诊断采样区域和命中数未被报告前，不将其推定为生产缺陷或测试缺陷。
+其它截图入口三轮报告退出 0：`industrial_ui`、`auxiliary_cursor`、`wave_ui_benchmark`、`file_operation_ui`；但 `theme_render` 提前失败，其内后续的真实 Dock、六类抽屉完整四边框、图例原生菜单/ColorEdit、样式恢复、低对比/全透明状态等场景未获验证，不能记作通过。D3D11/WARP、实际 DPI/跨屏和人工清晰度评审亦未完成。
+三轮 Acceptance 阶段整体均未通过（退出码依次 8、1、1）；独立 `DiffCheck` 没有结果。故本任务**未获完整验收**，本节记录失败和未覆盖范围，不表示验证通过；未提交/未推送，因任务明确禁止提交且 Acceptance/DiffCheck 未通过。
+
+工作流结果中前置首次 Configure 退出码 0；首次 Build 阶段因 PowerShell 包装脚本读取 `ExitCode` 失败退出 1，未启动 CMake 构建；局部修复后 before-retry Build 退出 0。主题实现前 Baseline 的 `theme_render`、`industrial_ui`、`auxiliary_cursor` 均退出 0。修改后每轮 Configure 和完整 Build 均退出 0；第二、三轮 CTest 均为 35/35。第一轮 CTest 的导入测试失败仅出现一次，后两轮通过，仍在计划中如实记录。
+
+
+本文修改不取代工作流的原始命令日志；详细时间、工具参数及逐项退出码见任务计划 `ProtoScope-task-plan-20261010-115742-096.md`。
+
+### 既有截图场景说明（历史覆盖，不代替本次验收）
 
 `theme_render_tests` 使用隐藏 OpenGL 窗口，检查三套主题和深色往返的正文像素、
 辅助文字像素、实际绘图区背景及 CPU/GPU 余辉后端，输出 BMP 截图。
 测试覆盖主波形、Split、数字通道、FFT、概览和极窄固定选区。固定 T 随机种子，深色回切使用 `-return` 后缀避免覆盖。
 三主题主要控件场景 `-controls-0..7-current`：默认、悬停、按下、键盘输入焦点、菜单弹出、模态、危险按钮悬停/按下，
-同时展示复选框、标签页、表格、禁用及 ghost 控件。本次新增 `-controls-8..11-current` 覆盖工具栏持续选中、键盘焦点、悬停和按下；`-business-docks` 使用真实通讯、协议、收发及日志 Dock，同入口输出供人工复核（不以截图非空冒充每项像素验收）。
+同时展示复选框、标签页、表格、禁用及 ghost 控件。历史扩展场景 `-controls-8..11-current` 覆盖工具栏持续选中、键盘焦点、悬停和按下；`-business-docks` 使用真实通讯、协议、收发及日志 Dock，同入口输出供人工复核（不以截图非空冒充每项像素验收）。
 Lua 业务控件的现有入口为 `tests/protoscope_industrial_ui_tests.exe protocols/data_storage_demo <截图目录>`，现在按三内置主题和宽/窄布局输出。按控件区域检查预期文字核心像素与实际内部背景；
-输入焦点使用空文本排除文字冒充光标。边界核心颜色容差为每RGB分量2/255；正文目标不降低。
+输入焦点使用空文本排除文字冒充光标。历史边界核心颜色容差为每RGB分量2/255；
+本次须按实际背景、字段 alpha、样式 alpha 和纹理覆盖率核验，而不是沿用旧正文比例门槛。
 同场景另输出 `-baseline-tokens-current-renderer`，仅回放旧 UI 基础令牌，使用当前算法与控件实现；
 它不是原始版本截图，不可标记为原始 before 或已通过新标准。真正 before/after 仍需各自版本同入口运行。
 辅助游标集成场景在三主题 × Overlay/Stacked/Split 中固定可见窗0..1秒，A/B位于真实采样点0.25/0.75秒，
@@ -157,7 +230,7 @@ Lua 业务控件的现有入口为 `tests/protoscope_industrial_ui_tests.exe pro
 同时保留T身份与截图检查。独立 `readout-labels` 图不能替代该集成覆盖。
 此图形入口验证 OpenGL；D3D11 和 D3D11 WARP 需单独进行后端验收。
 
-### 本轮验收（2026-09-22）
+### 历史验收（2026-09-22，不代表本次主题改版）
 
 工作流在 `build-overview-cursor-colors-20260922-162101` 使用 Ninja / MinGW Release、GUI 和测试开启，
 最终配置、构建、两个截图入口均退出 0；完整 CTest 为 **35/35，0 失败，47.82 秒**。
@@ -175,7 +248,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build-overview-cursor-colors
 原生命令为 `cmake -S . -B <上述目录> -G Ninja`（显式设置工具链、Release、GUI/测试和本地 GLFW）、
 `cmake --build <上述目录>`、`ctest --test-dir <上述目录> --output-on-failure --no-tests=error`；
 截图入口分别为 `tests/protoscope_theme_render_tests.exe <截图目录>` 与
-`tests/protoscope_auxiliary_cursor_tests.exe --capture <截图目录>`。完整工具参数及日志索引见本次交付报告。
+`tests/protoscope_auxiliary_cursor_tests.exe --capture <截图目录>`。完整工具参数及日志索引见该历史交付报告。
 不设置统一 60 秒超时，保留全量单测的 900 秒 CTest 配置。
 
 最终日志位于上述构建目录：`verify-Build-41db3fc29f3d4ba1806858637f3fc3f3.log`、
@@ -188,7 +261,8 @@ A/B 集成 after 夹具重置为 250/750 ms，before 的视窗/读数未追改�
 
 真实图形验收仅限 OpenGL 固定场景；D3D11/WARP、实际系统 DPI、跨原生窗口/跨屏释放、
 任意自定义透明表面、多轨迹叠加的所有像素及用户设备感知效果未验证。
-普通正文 4.5、高对比正文 12、辅助文字 7 的目标不扩展为低覆盖抗锯齿边缘保证。
+该历史验收采用的普通正文 4.5、高对比正文 12、辅助文字 7 目标现已取消，
+既不作为当前 UI 加载条件，也不作为新截图通过标准。
 
 ### 历史记录
 
