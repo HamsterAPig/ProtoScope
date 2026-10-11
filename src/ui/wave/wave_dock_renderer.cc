@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cfloat>
 #include <cstring>
 #include <iterator>
 #include <limits>
@@ -23,6 +24,7 @@
 #include <vector>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <implot.h>
 #include <implot_internal.h>
 
@@ -350,29 +352,57 @@ namespace {
         ImGui::PopStyleVar();
     }
 
-    ToolsDrawerResizeState drawToolsDrawerResizeHandle(
-        plot::WaveDockState& wave, const ImVec2& drawerPos, float height, float contentLeft, float thickness)
+    ImRect toolsDrawerHandleRect(const plot::WaveDockState& wave, const ImGuiWindow* window)
     {
-        const float safeThickness = (std::max)(thickness, 4.0F);
-        const ImVec2 handlePos((std::max)(contentLeft, drawerPos.x - safeThickness), drawerPos.y);
-        ImGui::SetCursorScreenPos(handlePos);
-        ImGui::InvisibleButton("##wave_tools_drawer_splitter", ImVec2(safeThickness, height));
-        ToolsDrawerResizeState state{
-            .min = handlePos,
-            .max = ImVec2(handlePos.x + safeThickness, handlePos.y + height),
-            .hovered = ImGui::IsItemHovered(),
-            .active = ImGui::IsItemActive(),
-        };
-        if (state.active) {
-            wave.toolsExpandedWidth = (std::clamp)(wave.toolsExpandedWidth - ImGui::GetIO().MouseDelta.x,
-                                                   wave.minToolsExpandedWidth,
-                                                   wave.maxToolsExpandedWidth);
+        const float thickness = (std::min)((std::max)(wave.contentToolsSplitterWidth, 4.0F), window->WindowPadding.x);
+        return ImRect(ImVec2(window->Pos.x + window->WindowBorderSize, window->InnerRect.Min.y),
+                      ImVec2(window->Pos.x + thickness, window->InnerRect.Max.y));
+    }
+
+    ToolsDrawerResizeState drawToolsDrawerResizeHandle(plot::WaveDockState& wave, float availableWidth)
+    {
+        auto* window = ImGui::GetCurrentWindow();
+        const ImRect handle = toolsDrawerHandleRect(wave, window);
+        const float minimum = (std::max)(wave.minToolsExpandedWidth, ImGui::GetStyle().WindowMinSize.x);
+        const float maximum = (std::max)(minimum, (std::min)(wave.maxToolsExpandedWidth, availableWidth));
+        float width = (std::clamp)(window->Size.x, minimum, maximum);
+        float left = maximum - width;
+        const float before = width;
+        const bool enabled = !wave.toolsCollapsed && !ImGui::GetIO().AppFocusLost;
+        if (enabled) {
+            // 命中区在正文留白内；扩大裁剪仅用于窗口内抓手，不改变正文布局。
+            const auto clip = window->ClipRect;
+            window->ClipRect = window->InnerRect;
+            ImGui::PushClipRect(window->InnerRect.Min, window->InnerRect.Max, false);
+            ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0, 0, 0, 0));
+            ImGui::PushStyleColor(ImGuiCol_SeparatorHovered, ImVec4(0, 0, 0, 0));
+            ImGui::PushStyleColor(ImGuiCol_SeparatorActive, ImVec4(0, 0, 0, 0));
+            ImGui::SplitterBehavior(handle, window->GetID("##wave_tools_drawer_splitter"), ImGuiAxis_X,
+                                    &left, &width, 0.0F, minimum, 0.0F, 0.0F);
+            ImGui::PopStyleColor(3);
+            ImGui::PopClipRect();
+            window->ClipRect = clip;
         }
-        const ImU32 color = state.active || state.hovered ? ImGui::GetColorU32(ImGuiCol_SliderGrabActive)
-                                                          : ImGui::GetColorU32(ImGuiCol_Border);
-        ImGui::GetWindowDrawList()->AddRectFilled(
-            handlePos, ImVec2(handlePos.x + safeThickness, handlePos.y + height), color, 2.0F);
-        ImGui::SetItemTooltip("拖动调整右侧抽屉宽度");
+        ToolsDrawerResizeState state{.min = handle.Min, .max = handle.Max,
+                                     .hovered = enabled && ImGui::IsItemHovered(),
+                                     .active = enabled && ImGui::IsItemActive()};
+        wave.toolsDrawerResizing = state.active;
+        // 宿主夹限只影响显示；没有真实拖动时不得覆写持久化的期望宽度。
+        if (state.active && width != before) wave.toolsExpandedWidth = width;
+        if (state.active) {
+            releaseOverviewDrag(wave);
+            wave.view.zoomSelectionDragging = false;
+        }
+        if (state.hovered || state.active) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+        const float centerY = (handle.Min.y + handle.Max.y) * 0.5F;
+        const float centerX = (handle.Min.x + handle.Max.x) * 0.5F;
+        const ImU32 color = ImGui::GetColorU32(state.active ? ImGuiCol_SeparatorActive :
+                                             state.hovered ? ImGuiCol_SeparatorHovered : ImGuiCol_Separator);
+        ImGui::GetWindowDrawList()->PushClipRect(window->InnerRect.Min, window->InnerRect.Max, false);
+        ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(centerX - 1, centerY - 18),
+                                                ImVec2(centerX + 1, centerY + 18), color, 1.0F);
+        ImGui::GetWindowDrawList()->PopClipRect();
+        if (state.hovered) ImGui::SetTooltip("拖动调整右侧抽屉宽度");
         return state;
     }
 
@@ -1702,23 +1732,30 @@ public:
         const ImVec2 railPos = ImGui::GetCursorScreenPos();
         const ImVec2 railMax(railPos.x + context.toolsWidth, railPos.y + context.availableHeight);
 
-        ScopedStyleVars railStyle;
-        railStyle.push(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, style.WindowPadding.y));
-        railStyle.push(ImGuiStyleVar_ItemSpacing, ImVec2(0.0F, style.ItemSpacing.y));
+        {
+            ScopedStyleVars railStyle;
+            railStyle.push(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, style.WindowPadding.y));
+            railStyle.push(ImGuiStyleVar_ItemSpacing, ImVec2(0.0F, style.ItemSpacing.y));
 
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, style.WindowPadding.y));
+            ImGui::PushStyleColor(ImGuiCol_Border, activeUiStyleTokens().panelBorder);
+            ImGui::BeginChild("##wave_tools_rail",
+                              ImVec2(context.toolsWidth, context.availableHeight),
+                              true,
+                              ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+            ImGui::PopStyleColor();
 
-        ImGui::BeginChild("##wave_tools_rail",
-                          ImVec2(context.toolsWidth, context.availableHeight),
-                          true,
-                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-
-        drawToolsRail(wave);
-        ImGui::EndChild();
-        ImGui::PopStyleVar();
+            drawToolsRail(wave);
+            ImGui::EndChild();
+        }
         const bool railHovered = pointInRect(context.io.MousePos, railPos, railMax);
 
-        if (!wave.toolsCollapsed && ImGui::IsKeyPressed(ImGuiKey_Escape) && !context.io.WantTextInput) {
+        const bool popupOpenBeforeDrawer =
+            ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        // NewFrame 的导航可能已用这个 Escape 关闭最后一层 Popup，当前空栈不代表按键未被消费。
+        const bool popupProtectedEscape = popupOpenBeforeDrawer || wave.toolsDrawerPopupOpenLastFrame;
+        wave.toolsDrawerPopupOpenLastFrame = popupOpenBeforeDrawer;
+        if (!wave.toolsCollapsed && ImGui::IsKeyPressed(ImGuiKey_Escape) && !context.io.WantTextInput &&
+            !popupProtectedEscape) {
             wave.toolsCollapsed = true;
         }
 
@@ -1741,13 +1778,7 @@ public:
             return;
         }
 
-        const ToolsDrawerResizeState resizeState = wave.toolsCollapsed
-                                                       ? ToolsDrawerResizeState{}
-                                                       : drawToolsDrawerResizeHandle(wave,
-                                                                                     drawerGeometry.pos,
-                                                                                     context.availableHeight,
-                                                                                     drawerGeometry.contentLeft,
-                                                                                     wave.contentToolsSplitterWidth);
+        ToolsDrawerResizeState resizeState{};
 
         bool drawerOpen = true;
         const std::string title = std::string(toolsDrawerTitle(wave.activeToolsDrawer)) + "##wave_tools_drawer";
@@ -1761,8 +1792,17 @@ public:
 
         bool drawerHovered = false;
         bool drawerFocused = false;
-        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, drawerProgress);
-        if (ImGui::Begin(title.c_str(), &drawerOpen, drawerFlags)) {
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, style.Alpha * drawerProgress);
+        const auto& uiTokens = activeUiStyleTokens();
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, uiTokens.floatingBackground);
+        ImGui::PushStyleColor(ImGuiCol_Border, uiTokens.floatingBorder);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.F);
+        const bool drawerVisible = ImGui::Begin(title.c_str(), &drawerOpen, drawerFlags);
+        // 普通窗口在 Begin 绘制完整装饰；立即恢复，避免浮层边框污染内部控件/Popup。
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(2);
+        if (drawerVisible) {
+            resizeState = drawToolsDrawerResizeHandle(wave, context.contentWidth);
             drawerHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows |
                                                    ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
             drawerFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
@@ -1787,6 +1827,7 @@ public:
         const bool drawerContainsMouse = pointInRect(context.io.MousePos, drawerGeometry.pos, drawerMax);
         const bool resizeContainsMouse = pointInRect(context.io.MousePos, resizeState.min, resizeState.max);
         const bool popupOpen = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        wave.toolsDrawerPopupOpenLastFrame = popupOpen;
         const bool drawerKeyboardActive = drawerFocused && context.io.WantTextInput;
         const bool insideToolsArea = railHovered || drawerContainsMouse || resizeContainsMouse || drawerHovered ||
                                      drawerKeyboardActive || resizeState.hovered || resizeState.active;
@@ -1866,13 +1907,15 @@ private:
     {
         ToolsDrawerGeometry geometry{};
 
-        if (contentWidth <= 0.0F || availableHeight <= 0.0F) {
+        if (contentWidth < ImGui::GetStyle().WindowMinSize.x ||
+            availableHeight < ImGui::GetStyle().WindowMinSize.y) {
             return geometry;
         }
 
         geometry.contentLeft = railPos.x - itemSpacingX - contentWidth;
         geometry.right = railPos.x - itemSpacingX;
-        geometry.width = (std::min)(requestedDrawerWidth, (std::max)(0.0F, contentWidth));
+        geometry.width = (std::min)((std::max)(requestedDrawerWidth, ImGui::GetStyle().WindowMinSize.x),
+                                    (std::max)(0.0F, contentWidth));
 
         if (geometry.width <= 0.0F) {
             return geometry;
@@ -1983,6 +2026,37 @@ void prepareWaveComponents(WaveComponentSet& components, WaveContext& context)
 
 void drawWaveContentComponents(WaveComponentSet& components, WaveContext& context)
 {
+    auto& wave = context.wave;
+    auto& io = context.io;
+    const bool wasResizing = wave.toolsDrawerResizing;
+    if (!io.MouseDown[0] || io.AppFocusLost || wave.toolsCollapsed) wave.toolsDrawerResizing = false;
+    const auto* hovered = GImGui->HoveredWindow;
+    const bool handlePress = !wave.toolsCollapsed && hovered &&
+        std::string_view(hovered->Name).find("##wave_tools_drawer") != std::string_view::npos &&
+        toolsDrawerHandleRect(wave, hovered).Contains(io.MousePos) && ImGui::IsMouseClicked(0);
+    // 绘图区先于抽屉提交；显式隔离按下至释放帧的鼠标输入，不能只依赖尚未提交的 ActiveId。
+    const bool blockMouse = wasResizing || handlePress;
+    const auto mousePos = io.MousePos;
+    const auto mouseDelta = io.MouseDelta;
+    const float wheel = io.MouseWheel, wheelH = io.MouseWheelH;
+    std::array<bool, ImGuiMouseButton_COUNT> mouseDown{}, mouseClicked{}, mouseReleased{}, mouseDoubleClicked{};
+    std::array<ImU16, ImGuiMouseButton_COUNT> mouseClickedCount{};
+    if (blockMouse) {
+        releaseOverviewDrag(wave);
+        wave.view.zoomSelectionDragging = false;
+        io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
+        io.MouseDelta = ImVec2(0, 0);
+        io.MouseWheel = io.MouseWheelH = 0;
+        for (int i = 0; i < ImGuiMouseButton_COUNT; ++i) {
+            mouseDown[i] = io.MouseDown[i];
+            mouseClicked[i] = io.MouseClicked[i];
+            mouseReleased[i] = io.MouseReleased[i];
+            mouseDoubleClicked[i] = io.MouseDoubleClicked[i];
+            mouseClickedCount[i] = io.MouseClickedCount[i];
+            io.MouseDown[i] = io.MouseClicked[i] = io.MouseReleased[i] = io.MouseDoubleClicked[i] = false;
+            io.MouseClickedCount[i] = 0;
+        }
+    }
     ImGui::BeginChild(
         "##wave_content", ImVec2(context.contentWidth, context.availableHeight), false, ImGuiWindowFlags_NoScrollbar);
     const ImVec2 contentPos = ImGui::GetWindowPos();
@@ -2006,6 +2080,19 @@ void drawWaveContentComponents(WaveComponentSet& components, WaveContext& contex
         components.plot.draw(context);
     }
     ImGui::EndChild();
+    if (blockMouse) {
+        io.MousePos = mousePos;
+        io.MouseDelta = mouseDelta;
+        io.MouseWheel = wheel;
+        io.MouseWheelH = wheelH;
+        for (int i = 0; i < ImGuiMouseButton_COUNT; ++i) {
+            io.MouseDown[i] = mouseDown[i];
+            io.MouseClicked[i] = mouseClicked[i];
+            io.MouseReleased[i] = mouseReleased[i];
+            io.MouseDoubleClicked[i] = mouseDoubleClicked[i];
+            io.MouseClickedCount[i] = mouseClickedCount[i];
+        }
+    }
 
     components.toolbar.draw(context);
 }

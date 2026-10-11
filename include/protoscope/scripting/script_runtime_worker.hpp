@@ -10,6 +10,10 @@
 #include <string>
 #include <vector>
 
+namespace protoscope::app {
+struct ApplicationBackpressureTestAccess;
+}
+
 namespace protoscope::scripting {
 
 struct ScriptRuntimeWorkerConfig {
@@ -42,6 +46,8 @@ struct ScriptRuntimeSnapshot {
     std::string lastError;
     std::size_t pendingPlotAppends{0};
     std::size_t pendingWorkerRxBytes{0};
+    // 与队列计数同锁读取，覆盖 RX 回调及输出发布窗口；不与 pending 相加统计字节数。
+    std::size_t executingRxBytes{0};
     std::size_t inputQueueSize{0};
     std::size_t outputQueueSize{0};
     std::size_t postprocessWorkerThreads{1U};
@@ -93,6 +99,9 @@ public:
     void postTransportClose(transport::TransportCloseEvent event);
     void postTransportError(transport::TransportErrorEvent event);
     void postTransportBytes(transport::TransportBytesEvent event, bool mergeAdjacent = true);
+    // 非阻塞接收 event 的有限前缀；返回已接收字节数，0表示背压/停止且调用方仍拥有全部字节。
+    [[nodiscard]] std::size_t tryPostTransportBytes(const transport::TransportBytesEvent& event, std::size_t maxBytes,
+                                                    bool mergeAdjacent = false);
     void postControl(transport::ConnectionContext context, std::string id, ControlValue value,
                      std::optional<std::uint64_t> generation = {});
     void postTick(std::uint64_t currentMs);
@@ -113,12 +122,16 @@ public:
     [[nodiscard]] bool idle() const;
     [[nodiscard]] bool inputIdle() const;
     [[nodiscard]] std::size_t pendingRxBytes() const;
+    [[nodiscard]] std::size_t executingRxBytes() const;
     [[nodiscard]] std::vector<ScriptRuntimeOutputBatch> drainOutputs();
     [[nodiscard]] std::optional<ScriptRuntimeOutputBatch> drainOneOutput();
     [[nodiscard]] ScriptRuntimeSnapshot snapshot() const;
     void stop();
 
 private:
+    friend struct protoscope::app::ApplicationBackpressureTestAccess;
+    void setTxCallbackTestHookForTest(std::function<void()> hook);
+
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

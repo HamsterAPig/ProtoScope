@@ -736,8 +736,7 @@ namespace {
             default:
                 break;
         }
-        return {displayColor(accent, tokens.panelBackground, 1.F, 4.5F),
-                tokens.panelBackgroundAlt, tokens.textStrong, tokens.panelBackground};
+        return {accent, tokens.panelBackgroundAlt, tokens.textStrong, tokens.panelBackground};
     }
 
     [[maybe_unused]] void drawFilledBadge(

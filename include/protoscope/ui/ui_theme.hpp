@@ -14,6 +14,18 @@ struct UiStyleTokens {
     ImVec4 panelBackground;
     ImVec4 panelBackgroundAlt;
     ImVec4 panelBorder;
+    // 文字、控件、容器和应用自有浮层分工；原生 Popup 与控件共用 Border 槽。
+    ImVec4 controlBorder;
+    ImVec4 floatingBackground;
+    ImVec4 floatingBorder;
+    // 原生 Dock 的四种焦点/选中填充、共用悬停填充与两种选中上沿。
+    ImVec4 tabBackground;
+    ImVec4 tabHovered;
+    ImVec4 tabSelected;
+    ImVec4 tabDimmed;
+    ImVec4 tabDimmedSelected;
+    ImVec4 tabSelectedOverline;
+    ImVec4 tabDimmedSelectedOverline;
     ImVec4 accent;
     ImVec4 accentMuted;
     ImVec4 success;
@@ -79,7 +91,7 @@ struct UiThemeDefinition {
     UiStyleTokens ui{};
     WaveStyleTokens wave{};
     std::string id{"professional_dark"};
-    std::string name{"专业深色"};
+    std::string name{"石墨青绿"};
     std::string base{"professional_dark"};
 };
 
@@ -114,7 +126,7 @@ bool drawToolbarSectionButton(const char* label,
 void drawHeaderBadge(const char* label, const ImVec4& color, bool filled = false);
 bool drawDangerIconButton(const char* label, const char* tooltip);
 bool drawGhostIconButton(const char* label, const char* tooltip);
-// 成对调用；高对比禁用正文与表面分开淡化，保留字体核心对比度和边界状态反馈。
+// 成对调用；沿用原生禁用交互和嵌套淡化，不改写文字或填充 RGBA。
 void beginDisabled(bool disabled = true);
 void endDisabled();
 

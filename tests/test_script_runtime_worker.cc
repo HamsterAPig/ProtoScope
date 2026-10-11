@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -185,12 +186,80 @@ void test_script_runtime_worker_disabled_mode_waits_for_rx_idle()
     const auto loaded = worker.loadProtocolDirectory(protocolDir.path().generic_string());
     require(loaded.ok, "worker 同步模式测试协议应可加载");
     (void) worker.drainOutputs();
+    const auto syncEvent = bytesEvent({0x42, 0x43, 0x44});
+    require(worker.tryPostTransportBytes(syncEvent, syncEvent.bytes.size(), false) == 0U,
+            "非阻塞GUI专用入口不得更改disabled worker同步模式契约");
 
-    worker.postTransportBytes(bytesEvent({0x42, 0x43, 0x44}));
+    worker.postTransportBytes(syncEvent);
     const auto outputs = worker.drainOutputs();
 
     require(worker.snapshot().pendingWorkerRxBytes == 0U, "禁用异步 worker 时 postTransportBytes 应等待 RX 空闲");
     require(hasEvent(outputs, "worker_bytes", "first=66"), "禁用异步 worker 时应立即产出脚本事件");
+}
+
+void test_script_runtime_worker_rejects_stale_rx_without_subtracting_other_pending_bytes()
+{
+    const ScopedTempPath protocolDir(makeWorkerProtocolDir("stale-rx-counter", R"lua(
+function controls() return {} end
+function on_bytes(ctx, bytes)
+  proto.emit("worker_bytes", tostring(bytes[1]))
+end
+)lua"));
+    protoscope::scripting::ScriptRuntimeWorker worker;
+    worker.configure({.enabled = true, .rxQueueLimitBytes = 64U, .outputQueueLimit = 1U,
+                      .backpressureEnabled = false});
+    require(worker.loadProtocolDirectory(protocolDir.path().generic_string()).ok,
+            "旧连接RX计数测试协议应可加载");
+    (void)worker.drainOutputs();
+
+    const auto observe = [](auto&& predicate) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!predicate() && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+        return predicate();
+    };
+    worker.postTransportBytes(bytesEvent({0x01}), false);
+    require(observe([&] { return worker.inputIdle() && worker.snapshot().outputQueueSize == 1U; }),
+            "首个RX应建立活动连接并占满输出发布槽");
+
+    worker.postTransportBytes(bytesEvent({0x02}), false);
+    // 出队先设置 executing，随后才扣 pending；必须等扣减完成才能验证后续四字节积压。
+    require(observe([&] {
+                const auto snapshot = worker.snapshot();
+                return snapshot.executingRxBytes == 1U && snapshot.pendingWorkerRxBytes == 0U &&
+                       !worker.inputIdle();
+            }),
+            "第二个RX应受控阻塞在输出发布窗口");
+
+    auto stale = bytesEvent({0xA1, 0xA2});
+    stale.context.connectionId = 41U;
+    worker.postTransportBytes(std::move(stale), false);
+    worker.postTransportBytes(bytesEvent({0x03}), false);
+    worker.postTransportBytes(bytesEvent({0x04}), false);
+    require(worker.pendingRxBytes() == 4U,
+            "旧连接RX与其他已接受RX必须同时计入待处理字节数");
+
+    (void)worker.drainOutputs();
+    require(observe([&] {
+                return worker.executingRxBytes() == 1U && worker.pendingRxBytes() == 1U &&
+                       !worker.inputIdle();
+            }),
+            "拒绝旧代次后，后续RX仍须在输出发布窗口保留剩余待处理计数");
+    require(worker.pendingRxBytes() == 1U,
+            "拒绝旧连接RX不得重复扣减其他已接受输入计数");
+    require(worker.executingRxBytes() == 1U,
+            "RX输出发布窗口必须持续计入executingRxBytes");
+
+    const auto idleDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while ((!worker.inputIdle() || worker.pendingRxBytes() != 0U || worker.executingRxBytes() != 0U) &&
+           std::chrono::steady_clock::now() < idleDeadline) {
+        (void)worker.drainOutputs();
+        std::this_thread::yield();
+    }
+    require(worker.inputIdle() && worker.pendingRxBytes() == 0U && worker.executingRxBytes() == 0U,
+            "正常处理后worker应恢复空闲并归零RX计数");
+    worker.stop();
+    require(worker.pendingRxBytes() == 0U && worker.executingRxBytes() == 0U,
+            "停止/取消后pending与executing RX计数必须归零");
 }
 
 void test_script_runtime_worker_rx_limit_keeps_all_queued_bytes()
@@ -233,6 +302,172 @@ void test_script_runtime_worker_rx_limit_keeps_all_queued_bytes()
     require(hasEvent(outputs, "worker_bytes", "first=161"), "RX 队列超过阈值后仍应保留最旧待解析字节");
     require(hasEvent(outputs, "worker_bytes", "first=178"), "RX 队列超过阈值后仍应保留较新的待解析字节");
     require(hasEvent(outputs, "worker_bytes", "first=195"), "RX 队列超过阈值后仍应保留最新待解析字节");
+}
+
+void test_lua_contract_backpressure_try_post_rejects_without_consuming_and_recovers()
+{
+    const ScopedTempPath protocolDir(makeWorkerProtocolDir("try-post-backpressure", R"lua(
+function controls() return {} end
+local calls = 0
+function on_bytes(ctx, bytes)
+  calls = calls + 1
+  if calls == 1 and bytes[1] == 1 then
+    local started = os.clock()
+    while os.clock() - started < 1.0 do end
+  end
+  proto.emit("worker_bytes", {
+    first = bytes[1],
+    size = #bytes,
+  })
+end
+)lua"));
+    protoscope::scripting::ScriptRuntimeWorker worker;
+    worker.configure({.execution = {.callbackTimeoutMs = 5000}, .enabled = true, .rxQueueLimitBytes = 4U,
+                      .outputQueueLimit = 8U, .batchBytes = 1U, .backpressureEnabled = true,
+                      .backpressureHighWatermark = 0.5, .backpressureLowWatermark = 0.25});
+    require(worker.loadProtocolDirectory(protocolDir.path().generic_string()).ok,
+            "非阻塞投递测试协议应可加载");
+    (void)worker.drainOutputs();
+
+    auto event = bytesEvent({0x01, 0x22, 0x33, 0x34, 0x55});
+    const auto firstAccepted = worker.tryPostTransportBytes(event, 8U, false);
+    require(firstAccepted == 2U, "高水位预算4、比例0.5时仅应原子接收2字节");
+    event.bytes.erase(event.bytes.begin(), event.bytes.begin() + static_cast<std::ptrdiff_t>(firstAccepted));
+    const auto callbackDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while ((worker.pendingRxBytes() != 0U || worker.inputIdle()) &&
+           std::chrono::steady_clock::now() < callbackDeadline) {
+        std::this_thread::yield();
+    }
+    require(worker.pendingRxBytes() == 0U && !worker.inputIdle(),
+            "首个RX回调必须处于脚本的受控阻塞段");
+    const auto queuedAtHighWater = worker.tryPostTransportBytes(event, 8U, false);
+    require(queuedAtHighWater == 2U, "低水位恢复后应原子接收至高水位，且仅接收有限前缀");
+    event.bytes.erase(event.bytes.begin(), event.bytes.begin() + static_cast<std::ptrdiff_t>(queuedAtHighWater));
+    require(worker.tryPostTransportBytes(event, 8U, false) == 0U,
+            "重新达到高水位时必须再次拒绝输入并保留调用方尾部");
+    require(event.bytes == std::vector<std::uint8_t>{0x55}, "高水位拒绝后尾字节仍须由调用方持有");
+
+    std::vector<protoscope::scripting::ScriptRuntimeOutputBatch> outputs;
+    const auto finishDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while ((!worker.inputIdle() || worker.pendingRxBytes() != 0U) &&
+           std::chrono::steady_clock::now() < finishDeadline) {
+        auto drained = worker.drainOutputs();
+        outputs.insert(outputs.end(), std::make_move_iterator(drained.begin()), std::make_move_iterator(drained.end()));
+        std::this_thread::yield();
+    }
+    auto preRetryDrained = worker.drainOutputs();
+    outputs.insert(outputs.end(), std::make_move_iterator(preRetryDrained.begin()),
+                   std::make_move_iterator(preRetryDrained.end()));
+    require(worker.inputIdle() && worker.pendingRxBytes() == 0U,
+            "worker应在有限时间内处理高水位前已接受输入并恢复到低水位");
+    auto lowWaterOutputs = worker.drainOutputs();
+    outputs.insert(outputs.end(), std::make_move_iterator(lowWaterOutputs.begin()),
+                    std::make_move_iterator(lowWaterOutputs.end()));
+    const auto acceptedAfterLowWater = worker.tryPostTransportBytes(event, 8U, false);
+    require(acceptedAfterLowWater == 1U, "低水位恢复后应继续接收调用方保留的尾字节");
+    event.bytes.erase(event.bytes.begin(), event.bytes.begin() + static_cast<std::ptrdiff_t>(acceptedAfterLowWater));
+    require(event.bytes.empty(), "低水位恢复后已接受的输入不得残留");
+    const auto deliveryDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while ((!worker.inputIdle() || worker.pendingRxBytes() != 0U || worker.snapshot().outputQueueSize > 0U) &&
+           std::chrono::steady_clock::now() < deliveryDeadline) {
+        auto drained = worker.drainOutputs();
+        outputs.insert(outputs.end(), std::make_move_iterator(drained.begin()), std::make_move_iterator(drained.end()));
+        std::this_thread::yield();
+    }
+    auto drained = worker.drainOutputs();
+    outputs.insert(outputs.end(), std::make_move_iterator(drained.begin()), std::make_move_iterator(drained.end()));
+    require(worker.inputIdle() && worker.pendingRxBytes() == 0U, "worker 应在有限时间内处理全部已接收输入");
+    std::string delivered;
+    std::size_t eventCount = 0U;
+    std::vector<std::string> deliveredPayloads;
+    for (const auto& batch : outputs) {
+        for (const auto& output : batch.events) {
+            if (output.name == "worker_bytes") {
+                delivered += output.payload;
+                delivered.push_back(';');
+                deliveredPayloads.push_back(output.payload);
+                ++eventCount;
+            }
+        }
+    }
+    const auto firstPosition = delivered.find("first=1");
+    const auto secondPosition = delivered.find("first=51");
+    const auto thirdPosition = delivered.find("first=85");
+    const auto deliveredCount = deliveredPayloads.size();
+    require(eventCount == 3U && deliveredCount == 3U && firstPosition != std::string::npos &&
+                secondPosition != std::string::npos && thirdPosition != std::string::npos &&
+                firstPosition < secondPosition && secondPosition < thirdPosition,
+            (std::string("交付事件数=") + std::to_string(eventCount) + ", payloads=" + delivered +
+             ", lastError=" + worker.snapshot().lastError).c_str());
+}
+
+void test_lua_contract_backpressure_reload_and_stop_recover_from_output_saturation()
+{
+    const ScopedTempPath protocolDir(makeWorkerProtocolDir("reload-stop-backpressure", workerProbeScript()));
+    protoscope::scripting::ScriptRuntimeWorker worker;
+    worker.configure({.enabled = true, .rxQueueLimitBytes = 4U, .outputQueueLimit = 1U, .batchBytes = 1U,
+                      .backpressureEnabled = true, .backpressureHighWatermark = 0.5,
+                      .backpressureLowWatermark = 0.25});
+    require(worker.loadProtocolDirectory(protocolDir.path().generic_string()).ok,
+            "重载/停止背压测试协议应可加载");
+    (void)worker.drainOutputs();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    const auto observe = [&](auto&& predicate) {
+        while (!predicate() && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+        return predicate();
+    };
+
+    worker.postTransportBytes(bytesEvent({0x31}, 1), false);
+    require(observe([&] { return worker.inputIdle() && worker.snapshot().outputQueueSize == 1U; }),
+            "输出硬上界应先被第一批占满");
+    worker.postTransportBytes(bytesEvent({0x32}, 2), false);
+    require(observe([&] { return worker.pendingRxBytes() == 0U && !worker.inputIdle(); }),
+            "第二批应确定阻塞在输出发布");
+
+    auto reload = worker.loadProtocolDirectoryAsync(protocolDir.path().generic_string());
+    while (reload.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready &&
+           std::chrono::steady_clock::now() < deadline) {
+        (void)worker.drainOutputs();
+        std::this_thread::yield();
+    }
+    require(reload.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready,
+            "持续drain输出后排队的协议重载必须完成");
+    require(reload.get().ok, "输出饱和恢复后新协议应成功加载");
+
+    worker.postTransportBytes(bytesEvent({0x33}, 3), false);
+    worker.stop();
+    require(worker.tryPostTransportBytes(bytesEvent({0x34}, 4), 1U, false) == 0U,
+            "stop完成后非阻塞RX必须拒绝输入并保留调用方所有权");
+}
+
+void test_lua_contract_backpressure_stop_cancels_blocked_output_waiter()
+{
+    const ScopedTempPath protocolDir(makeWorkerProtocolDir("stop-output-backpressure", workerProbeScript()));
+    protoscope::scripting::ScriptRuntimeWorker worker;
+    worker.configure({.enabled = true, .rxQueueLimitBytes = 4U, .outputQueueLimit = 1U, .batchBytes = 1U,
+                      .backpressureEnabled = true, .backpressureHighWatermark = 0.5,
+                      .backpressureLowWatermark = 0.25});
+    require(worker.loadProtocolDirectory(protocolDir.path().generic_string()).ok,
+            "停止背压测试协议应可加载");
+    (void)worker.drainOutputs();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    const auto observe = [&](auto&& predicate) {
+        while (!predicate() && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+        return predicate();
+    };
+    worker.postTransportBytes(bytesEvent({0x41}, 1), false);
+    require(observe([&] { return worker.inputIdle() && worker.snapshot().outputQueueSize == 1U; }),
+            "首批输出应达到硬上限");
+    worker.postTransportBytes(bytesEvent({0x42}, 2), false);
+    require(observe([&] { return worker.pendingRxBytes() == 0U && !worker.inputIdle(); }),
+            "第二批应阻塞在满输出发布");
+    worker.postTransportBytes(bytesEvent({0x43}, 3), false);
+    const auto startedAt = std::chrono::steady_clock::now();
+    worker.stop();
+    require(std::chrono::steady_clock::now() - startedAt < std::chrono::seconds(2),
+            "stop必须唤醒并join等待输出空间的worker");
+    require(worker.tryPostTransportBytes(bytesEvent({0x44}, 4), 1U, false) == 0U,
+            "停止后非阻塞投递应拒绝且不接收调用方输入");
 }
 
 void test_script_runtime_worker_output_limit_drain_wakes_blocked_publisher()

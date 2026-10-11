@@ -1,5 +1,6 @@
 #include "../src/ui/wave/wave_render_service.hpp"
 #include "protoscope/ui/ui_theme.hpp"
+#include "theme_test_contract.hpp"
 
 #include <imgui_impl_opengl3.h>
 #include <GLFW/glfw3.h>
@@ -351,10 +352,7 @@ void uiTests(bool withGl, const std::filesystem::path& directory)
                        config::GuiTheme::DebugHighContrast}) {
         ui::applyUiTheme(theme);
         const auto& themeTokens = ui::activeUiStyleTokens();
-        require(plot::overviewContrast(ui::cursorOverviewColor(themeTokens.textStrong),
-                                       ui::cursorOverviewColor(themeTokens.panelBackgroundAlt)) >=
-                    (theme == config::GuiTheme::DebugHighContrast ? 12 : 4.5),
-                "游标标签回退正文在新主题背景上不达标");
+        tests::theme::mapped(ui::activeThemeDefinition());
         for (auto mode : {plot::WaveViewMode::Overlay, plot::WaveViewMode::Stacked, plot::WaveViewMode::Split}) {
             // 前面的拖动/缩放用例会留下旧Y锚点和读数。每个集成场景独立恢复确定夹具，
             // 不能只设 pinned 后任由旧读数影响最近点查询；采样索引256/768确实存在。
@@ -435,8 +433,8 @@ void uiTests(bool withGl, const std::filesystem::path& directory)
                 if(!found) throw std::runtime_error("实际A/B两行标签缺失: theme="+std::to_string(int(theme))+
                     " mode="+std::to_string(int(mode))+" text="+text);
             }
-            require(plot::overviewContrast(view.cursorColors.labelText,view.cursorColors.labelBackground)>=
-                    (theme==config::GuiTheme::DebugHighContrast?12:4.5),"实际读数正文与标签背景阈值");
+            tests::theme::color(ui::cursorImVec(view.cursorColors.labelText),themeTokens.textStrong,"实际读数正文忠实应用");
+            tests::theme::color(ui::cursorImVec(view.cursorColors.labelBackground),themeTokens.panelBackgroundAlt,"读数背景保留原 RGBA");
             for (std::size_t i = 0; i < identities.size(); ++i)
                 require(view.auxiliaryCursors.items[i].id == identities[i].id &&
                         view.auxiliaryCursors.items[i].colorIndex == identities[i].colorIndex,

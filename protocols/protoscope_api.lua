@@ -436,6 +436,10 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@alias ProtoStreamRawOutputMode 'full'|'omit'
 ---@alias ProtoStreamFieldOutputMode 'compat'|'fields_only'
 
+---@class ProtoStreamBufferDef
+---@field capacity? integer @初始环形容量及单帧长度上限；默认 4096。
+---@field max_capacity? integer @累计缓冲无损扩容上限；默认 256MiB，不放宽单帧长度限制。
+
 ---@class ProtoStreamFrame
 ---@field name string
 ---@field raw? ProtoBytes
@@ -455,10 +459,13 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field controls ProtoStreamValueTargetControl[]
 
 ---@class ProtoStreamSchema
+---@field buffer? ProtoStreamBufferDef
+---@field frames ProtoStreamFrameDef[]
 ---@field raw_output? ProtoStreamRawOutputMode
 ---@field low_overhead? boolean
----@field field_output? ProtoStreamFieldOutputMode
----@field on_batch? fun(ctx: ProtoConnectionContext, frames: ProtoStreamFrame[])
+---@field field_output? ProtoStreamFieldOutputMode @省略时为 compat；新 schema 推荐 fields_only。
+---@field on_batch? fun(ctx: ProtoConnectionContext, frames: ProtoStreamFrame[]) @优先于 on_frame；解析错误会按原序切开连续成功帧批次。
+---@field on_frame? fun(ctx: ProtoConnectionContext, frame: ProtoStreamFrame) @仅未定义 on_batch 时逐帧调用。
 ---@field on_error? fun(ctx: ProtoConnectionContext, err: ProtoStreamError)
 
 ---@class ProtoStreamRuntimeProfile
@@ -683,7 +690,7 @@ function on_menu(ctx, id, checked) end
 ---@return ProtoStreamSchema|nil
 function stream() end
 
--- 原始字节回调：宿主收到串口/输入字节流后调用脚本解析。
+-- 原始字节回调：bytes 是 1-based integer[]，不是 ProtoBuffer；ProtoBuffer 用于文件/数据 API。
 ---@param ctx ProtoConnectionContext
 ---@param bytes ProtoBytes
 function on_bytes(ctx, bytes) end
@@ -700,7 +707,7 @@ function on_timer(ctx, name) end
 ---@return boolean allow_toggle
 function on_oscilloscope_toggle(ctx, current_running, target_running) end
 
--- 传输事件回调：用于跟踪 send/request 的发送结果、超时或失败。
+-- 传输事件回调：由脚本 worker 线程派发，用于跟踪 send/request 的发送结果、超时或失败。
 ---@param ctx ProtoConnectionContext
 ---@param evt ProtoTxEvent
 function on_tx(ctx, evt) end

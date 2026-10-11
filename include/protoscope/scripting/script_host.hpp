@@ -21,6 +21,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -41,6 +42,7 @@ class PlotScriptHostApiModule;
 class StatusScriptHostApiModule;
 class TxScriptHostApiModule;
 class UiScriptHostApiModule;
+class ScriptRuntimeWorker;
 
 enum class ControlType {
     Button,
@@ -582,6 +584,9 @@ public:
     void setRequestAwaitingCompletion(bool active);
 
 private:
+    friend class ScriptRuntimeWorker;
+    void setTxCallbackTestHookForTest(std::function<void()> hook);
+
     struct Runtime;
     void configureDataBindings();
     void applyPublishedRecord(const data::Record& record);
@@ -613,7 +618,7 @@ private:
     void callbackOnClose(const ScriptHostContext& ctx);
     void callbackOnError(const ScriptHostContext& ctx, const std::string& message);
     void callbackOnBytes(const ScriptHostContext& ctx, const std::vector<std::uint8_t>& bytes);
-    bool callbackOnStreamBatch(const ScriptHostContext& ctx, const std::vector<StreamParsedFrame>& frames);
+    bool callbackOnStreamBatch(const ScriptHostContext& ctx, std::span<const StreamParsedFrame> frames);
     void callbackOnStreamFrame(const ScriptHostContext& ctx, const StreamParsedFrame& frame);
     void callbackOnStreamError(const ScriptHostContext& ctx, const StreamParseError& error);
     void callbackOnTimer(const ScriptHostContext& ctx, const std::string& timerName);
@@ -633,9 +638,9 @@ private:
                                                std::chrono::steady_clock::time_point& parserFinishedAt);
     void dispatchStreamParseErrors(const transport::ConnectionContext& context, const StreamParseBatch& batch);
     void updateStreamParseErrorSummary(const StreamParseBatch& batch);
-    void applyStreamValueTargets(const std::vector<StreamParsedFrame>& frames);
+    void applyStreamValueTargets(std::span<const StreamParsedFrame> frames);
     void dispatchStreamFrames(const transport::ConnectionContext& context,
-                              const std::vector<StreamParsedFrame>& frames);
+                              std::span<const StreamParsedFrame> frames);
 
     void registerLuaApi(Runtime& runtime, sol::table& proto);
     void pollStorageCompletions();
@@ -749,6 +754,7 @@ private:
     std::optional<transport::ConnectionContext> activeConnection_;
     std::unique_ptr<Runtime> runtime_;
     std::shared_ptr<std::atomic_bool> stopSignal_;
+    std::function<void()> txCallbackTestHook_;
     ExecutionConfig executionConfig_{};
     std::filesystem::path storageRoot_;
     storage::Config storageConfig_;

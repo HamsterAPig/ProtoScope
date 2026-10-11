@@ -375,9 +375,11 @@ void GuiRuntime::drawStatusBar()
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0F, 8.0F));
     ImGui::PushStyleColor(ImGuiCol_WindowBg,
                           ImVec4(tokens.panelBackground.x, tokens.panelBackground.y,
-                                 tokens.panelBackground.z, 0.98F));
+                                 tokens.panelBackground.z, tokens.panelBackground.w * .98F));
     ImGui::PushStyleColor(ImGuiCol_Border, tokens.panelBorder);
-    if (ImGui::Begin("状态栏", nullptr, flags)) {
+    const bool visible = ImGui::Begin("状态栏", nullptr, flags);
+    ImGui::PopStyleColor(2);
+    if (visible) {
         const auto snapshot = makeWaveStatusSnapshot(application_.docks().waveState(),
                                                       application_.docks().luaState().protocolDir);
         const auto& waveStatus = waveStatusPresenter_.update(snapshot, nowMs());
@@ -430,7 +432,6 @@ void GuiRuntime::drawStatusBar()
         }
     }
     ImGui::End();
-    ImGui::PopStyleColor(2);
     ImGui::PopStyleVar();
 }
 
@@ -652,8 +653,7 @@ void GuiRuntime::drawCommParserStatus(const dock::CommDockState& comm)
 {
     if (!comm.lastErrorSummary.empty()) {
         const auto& tokens = defaultUiStyleTokens();
-        const auto color = displayColor(tokens.danger, ImGui::GetStyleColorVec4(ImGuiCol_WindowBg), 1.0F, 4.5F);
-        ImGui::TextColored(color, "解析错误: %s", comm.lastErrorSummary.c_str());
+        ImGui::TextColored(tokens.danger, "解析错误: %s", comm.lastErrorSummary.c_str());
     }
 }
 
@@ -1389,12 +1389,8 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, s
             const std::string text = std::get<std::string>(control.value) +
                 (descriptor.unit.empty() ? "" : " " + descriptor.unit);
             const auto& tokens = defaultUiStyleTokens();
-            const auto staleColor = displayColor(tokens.warning,
-                                                   ImGui::GetStyleColorVec4(ImGuiCol_WindowBg),
-                                                   1.0F,
-                                                   4.5F);
             ImGui::PushTextWrapPos(0);
-            ImGui::TextColored(stale ? staleColor : ImGui::GetStyleColorVec4(ImGuiCol_Text),
+            ImGui::TextColored(stale ? tokens.warning : ImGui::GetStyleColorVec4(ImGuiCol_Text),
                                "%s%s", text.c_str(), stale ? " [stale]" : "");
             ImGui::PopTextWrapPos();
             if (descriptor.showUpdateTime) {
@@ -1407,10 +1403,7 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, s
             drawLuaControlLeftLabel(descriptor, visibleLabel);
             const bool on = std::get<bool>(control.value);
             const auto& tokens = defaultUiStyleTokens();
-            const auto indicatorColor = displayColor(on ? tokens.success : tokens.danger,
-                                                     ImGui::GetStyleColorVec4(ImGuiCol_WindowBg),
-                                                     1.0F,
-                                                     4.5F);
+            const auto indicatorColor = on ? tokens.success : tokens.danger;
             ImGui::PushTextWrapPos(0);
             ImGui::TextColored(indicatorColor, "%s", (on ? descriptor.onText : descriptor.offText).c_str());
             ImGui::PopTextWrapPos();
@@ -1485,7 +1478,7 @@ int GuiRuntime::pushLuaControlFeedbackStyle(const scripting::ControlDescriptor& 
         1.0F - static_cast<float>(elapsedMs) / static_cast<float>(kVisualFeedbackDurationMs);
     const auto accent = defaultUiStyleTokens().accent;
     const auto blend = [alpha](ImVec4 base, ImVec4 highlight, float strength) {
-        const float amount = (std::clamp)(alpha * strength, 0.0F, 1.0F);
+        const float amount = (std::clamp)(alpha * strength * highlight.w, 0.0F, 1.0F);
         return ImVec4(base.x + (highlight.x - base.x) * amount,
                       base.y + (highlight.y - base.y) * amount,
                       base.z + (highlight.z - base.z) * amount,
@@ -1506,7 +1499,7 @@ int GuiRuntime::pushLuaControlFeedbackStyle(const scripting::ControlDescriptor& 
         ImGuiCol_FrameBgHovered, blend(ImGui::GetStyleColorVec4(ImGuiCol_FrameBgHovered), accent, 0.40F));
     ImGui::PushStyleColor(
         ImGuiCol_FrameBgActive, blend(ImGui::GetStyleColorVec4(ImGuiCol_FrameBgActive), accent, 0.48F));
-    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(accent.x, accent.y, accent.z, 0.45F * alpha));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(accent.x, accent.y, accent.z, accent.w * .45F * alpha));
     return 4;
 }
 

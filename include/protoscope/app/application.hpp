@@ -19,6 +19,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -177,6 +178,19 @@ public:
         std::function<std::unique_ptr<transport::ITransport>(transport::TransportKind)> factory);
 
 private:
+    // 仅测试协调背压观察/取消，不暴露业务侧 worker 访问入口。
+    friend struct ApplicationBackpressureTestAccess;
+
+    // 跨职责实现共用的辅助函数，不增加对象状态或公开接口。
+    static std::uint64_t nowMs();
+    static std::uint64_t nowUs();
+    static std::string csvEscape(std::string_view text);
+    static std::string formatFrequencyInput(double valueHz);
+    static bool sameAppliedPlotSetup(const plot::WaveDockState& wave, const plot::RawCapturePlotSetupEventData& setup);
+    static std::string payloadPreviewSuffix(const config::AppLoggingConfig& logging,
+                                           const std::vector<std::uint8_t>& payload);
+    static std::string transportContextFields(std::string_view kind, const transport::ConnectionContext& context);
+
     enum class WaveResetViewportTrigger {
         PlotSetupReset,
         ManualClear,
@@ -253,6 +267,7 @@ private:
         std::size_t targetEventIndex{0};
         std::size_t completedLuaInputs{0};
         bool resumeAfterSeek{false};
+        bool replaceWaveLabels{false};
         OfflineReplayPacing pacingAfterSeek{OfflineReplayPacing::OriginalTimeline};
         double speed{1.0};
         double accumulatedMs{0.0};
@@ -301,6 +316,7 @@ private:
     bool processTransportCloseEvent(const transport::TransportCloseEvent& event);
     bool processTransportErrorEvent(const transport::TransportErrorEvent& event);
     bool processTransportBytesEvent(const transport::TransportBytesEvent& event);
+    std::size_t tryProcessLiveRxBytes(const transport::TransportBytesEvent& event, std::size_t maxBytes);
     bool processTransportTxEvent(const transport::TransportTxEvent& event);
     bool processPendingRxBytes(std::size_t maxBytes);
     void enqueuePendingRxBytes(transport::TransportBytesEvent event);
@@ -332,12 +348,13 @@ private:
     bool applyScriptRuntimeProfileEvents(const scripting::ScriptRuntimeOutputBatch& batch);
     bool applyScriptUiAndLogOutputs(const scripting::ScriptRuntimeOutputBatch& batch);
     bool applyScriptOscilloscopeOutputs(const scripting::ScriptRuntimeOutputBatch& batch);
-    bool applyScriptPlotOutputs(const scripting::ScriptRuntimeOutputBatch& batch);
-    bool applyScriptPlotSetups(const std::vector<scripting::PlotSetup>& setups);
+    bool applyScriptPlotOutputs(const scripting::ScriptRuntimeOutputBatch& batch, bool rebuilding = false);
+    bool applyScriptPlotSetups(const std::vector<scripting::PlotSetup>& setups, bool rebuilding = false);
     void enqueueScriptPlotAppends(const std::vector<std::pair<std::size_t, plot::WaveAppendRequest>>& appends);
     std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> drainScriptPlotAppendsForPump(
         std::size_t maxPlotAppends);
-    bool appendScriptPlotRequestsToWave(std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> requests);
+    bool appendScriptPlotRequestsToWave(std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> requests,
+                                        bool rebuilding = false);
     void finishTxRequest(const scripting::TxRequest& request,
                          scripting::TxEventState state,
                          std::optional<std::string> error,
@@ -385,7 +402,11 @@ private:
     bool applyTransferFrameRuntimeProfileEvent(const scripting::StreamRuntimeProfileEvent& event, std::string& error);
     void finishRawCaptureImportReplay();
     void cancelRawCaptureImportReplay();
-    bool applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup);
+    bool applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup, bool rebuilding = false);
+    bool offlineWaveRebuilding() const;
+    void freezeImportedChannelLabels();
+    void switchToLiveWaveSource();
+    plot::RawCapturePlotSetupEventData normalizeImportedSetup(plot::RawCapturePlotSetupEventData setup) const;
     bool applyResetViewportPolicy(WaveResetViewportTrigger trigger, const plot::ViewConfig& protocolView);
     void applyLegacyResetViewport(const plot::ViewConfig& protocolView, bool resetVerticalRange);
     void resetWaveHistoryForTrigger(WaveResetViewportTrigger trigger);
@@ -431,6 +452,10 @@ private:
     std::optional<TransferFrameParserState> transferFrameParser_;
     plot::RawCaptureStreamWriter rawCaptureRecording_;
     RawCaptureReplayState rawCaptureReplay_;
+    // 按位置冻结两组名称，短前缀重建不丢失尚未出现的位置。
+    std::vector<std::string> importedActualLabels_;
+    std::vector<std::string> importedDefaultLabels_;
+    std::optional<std::uint64_t> importedRebuildGeneration_;
     std::size_t rawCaptureReplayChunkBytes_{1024U};
     std::size_t rawCaptureReplayPendingBytes_{0U};
     std::vector<std::uint8_t> rawCaptureReplayBatchBytes_;

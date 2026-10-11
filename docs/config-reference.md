@@ -302,10 +302,10 @@ scripting:
 - `worker.rx_queue_limit_bytes`：RX 输入队列字节上限。
 - `worker.memory_budget_bytes`：worker 内存预算。
 - `worker.memory_budget_available_ratio`：按可用内存比例扩展预算，`0.0` 表示关闭。
-- `worker.output_queue_limit`：worker 输出队列上限。
+- `worker.output_queue_limit`：脚本 worker 待 UI 消费的输出**批次数**上限（默认 `65536`），不是字节数或全进程内存上限；达到上限时 worker 暂停发布输出，直到 UI drain 或停止信号唤醒。
 - `worker.batch_bytes`：RX 字节合批上限，默认 `8192` 字节，也是调节 worker 输出颗粒度的主控项。
-- `worker.backpressure_enabled`：是否启用背压。
-- `worker.backpressure_rx_queue_high_watermark` / `low_watermark`：背压高低水位。
+- `worker.backpressure_enabled`：启用实时接收的非阻塞队列背压；队列达到高水位时，Application 暂缓提交尚未接受的 RX 前缀，后续 pump 再继续，已拒绝字节仍由调用方持有。
+- `worker.backpressure_rx_queue_high_watermark` / `low_watermark`：分别控制 RX 队列高/低水位比例。该机制只约束相关 worker RX 队列并配合输出队列消费，不代表 transport 上游、解析器、脚本生成数据或整个应用的全链路内存均有硬上限。
 - `worker.output_flush_budget_ms`：每轮输出刷新的时间预算，默认 `2.0` ms。
 - `worker.drain_request_outputs_unbounded`：超时前是否使用无帧预算限制的 drain，默认关闭。
 

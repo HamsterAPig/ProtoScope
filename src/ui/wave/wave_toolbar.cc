@@ -17,6 +17,7 @@
 #include <type_traits>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 namespace protoscope::ui {
 
@@ -279,7 +280,16 @@ bool drawAdaptiveToolbarButton(
     const char* visibleLabel = useFullLabel ? fullLabel : shortLabel;
     const float buttonWidth = useFullLabel ? fullWidth : shortWidth;
     const std::string tooltip = buildToolbarButtonHelp(fullLabel, help);
-    const bool clicked = drawToolbarSectionButton(visibleLabel, tooltip.c_str(), active, ImVec2(buttonWidth, 0.0F));
+    const bool drawerContent = std::strstr(ImGui::GetCurrentWindow()->RootWindow->Name, "##wave_tools_drawer") != nullptr;
+    const bool clicked = drawerContent
+        ? drawUiButton(visibleLabel, ImVec2(buttonWidth, 0.0F), UiButtonRole::Secondary, active)
+        : drawToolbarSectionButton(visibleLabel, tooltip.c_str(), active, ImVec2(buttonWidth, 0.0F));
+    if (drawerContent) {
+        ImGui::GetWindowDrawList()->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                                          ImGui::GetColorU32(ImGuiCol_Border), ImGui::GetStyle().FrameRounding);
+        ImGui::RenderNavCursor(GImGui->LastItemData.Rect, GImGui->LastItemData.ID);
+        ImGui::SetItemTooltip("%s", tooltip.c_str());
+    }
     if (placeNextOnSameLine) {
         ImGui::SameLine(0.0F, kWaveToolbarButtonGap);
     }

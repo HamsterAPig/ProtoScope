@@ -146,6 +146,53 @@ std::vector<std::int64_t> parseExpressionValues(protoscope::scripting::FrameStre
 
 } // namespace
 
+void test_lua_contract_order_parser_event_indexes()
+{
+    using namespace protoscope::scripting;
+    const auto checkIndexes = [](const StreamParseBatch& batch) {
+        std::size_t frameIndex = 0;
+        std::size_t errorIndex = 0;
+        for (const auto& event : batch.events) {
+            if (event.kind == StreamParseEventKind::Frame) {
+                require(event.index == frameIndex++ && event.index < batch.frames.size(), "帧事件索引必须完整且有效");
+            } else {
+                require(event.index == errorIndex++ && event.index < batch.errors.size(), "错误事件索引必须完整且有效");
+            }
+        }
+        require(frameIndex == batch.frames.size() && errorIndex == batch.errors.size(), "每个帧和错误必须恰好有一个事件");
+    };
+    auto parser = makeDynamicParser();
+    auto bytes = makeDynamicFrame({1, 17});
+    auto broken = makeDynamicFrame({1, 34});
+    broken.back() ^= 1U;
+    bytes.insert(bytes.end(), broken.begin(), broken.end());
+    const auto good = makeDynamicFrame({1, 51});
+    bytes.insert(bytes.end(), good.begin(), good.end());
+    const auto batch = parser.pushBytes(bytes);
+    checkIndexes(batch);
+    require(batch.events.size() == 4 && batch.events[0].kind == StreamParseEventKind::Frame &&
+                batch.events[1].kind == StreamParseEventKind::Error &&
+                batch.errors[batch.events[1].index].code == StreamParseErrorCode::CrcMismatch &&
+                batch.events[2].kind == StreamParseEventKind::Error &&
+                batch.errors[batch.events[2].index].code == StreamParseErrorCode::NoiseDiscarded &&
+                batch.events[3].kind == StreamParseEventKind::Frame,
+            "有序索引应包含 CRC 重同步的噪声事件，不能只记录 CRC");
+    auto prefixParser = makeDynamicParser();
+    auto prefix = std::vector<std::uint8_t>{0, 0};
+    prefix.insert(prefix.end(), good.begin(), good.end());
+    const auto prefixBatch = prefixParser.pushBytes(prefix);
+    checkIndexes(prefixBatch);
+    require(prefixBatch.events.front().kind == StreamParseEventKind::Error &&
+                prefixBatch.events.back().kind == StreamParseEventKind::Frame, "候选帧前噪声必须先于成功帧");
+    auto overflowParser = makeDynamicParser(6);
+    const auto overflow = overflowParser.pushBytes({1, 2, 3, 4, 5, 6, 7, 8});
+    checkIndexes(overflow);
+    require(overflow.events.size() == 2 && overflow.errors[0].code == StreamParseErrorCode::Overflow &&
+                overflow.errors[1].code == StreamParseErrorCode::NoiseDiscarded,
+            "追加 overflow 与无候选噪声都必须登记事件");
+    checkIndexes(parser.pushBytes({}));
+}
+
 void test_frame_stream_parser_waits_for_full_frame()
 {
     auto parser = makeDynamicParser();
@@ -326,6 +373,31 @@ void test_frame_stream_parser_prefers_longer_same_header_candidate()
     require(batch.frames[0].name == "long", "同帧头候选应命中 long schema");
     const auto value = batch.frames[0].fields.at("value").integerScalar();
     require(value.has_value() && *value == 0x7F, "long schema 字段应从完整帧中解析");
+}
+
+void test_lua_contract_schema_count_division_rejects_int64_min_over_minus_one()
+{
+    using namespace protoscope::scripting;
+
+    StreamFrameDefinition frame;
+    frame.name = "division_overflow";
+    frame.header = {0xAA, 0x55};
+    frame.size = 4;
+    StreamFieldDefinition values;
+    values.name = "values";
+    values.type = StreamValueType::U8;
+    values.offset = 2;
+    values.count.expression = countBinary(StreamCountExpressionOp::Div,
+                                          countConst((std::numeric_limits<std::int64_t>::min)()),
+                                          -1);
+    frame.fields = {values};
+
+    FrameStreamParser parser(StreamBufferDefinition{.capacity = 16, .dropOldest = true}, {frame});
+    const auto batch = parser.pushBytes({0xAA, 0x55, 0x00, 0x01});
+    require(batch.frames.empty(), "INT64_MIN / -1 不应产出帧");
+    require(!batch.errors.empty(), "INT64_MIN / -1 必须转为可恢复 count 错误");
+    require(batch.errors.front().code == StreamParseErrorCode::CountResolveFailed,
+            "INT64_MIN / -1 应归类为 count 解析失败");
 }
 
 void test_frame_stream_parser_count_expression_arithmetic()
@@ -521,6 +593,22 @@ void test_frame_stream_parser_runtime_profile_errors()
         "重复 channel_map 应被拒绝");
     require(parser.setRuntimeProfile("dynamic_profile", StreamRuntimeProfile{.length = 6, .channelMap = {0, 2}}, error),
             "非连续 channel_map (如 {0,2}) 应被接受");
+    require(!parser.setRuntimeProfile("dynamic_profile", StreamRuntimeProfile{
+                                             .length = 6,
+                                             .channelMap = {(std::numeric_limits<std::size_t>::max)()}},
+                                         error),
+            "size_t 最大 channel_map 下标必须拒绝，不能让后续下标加一溢出");
+    if constexpr (sizeof(std::size_t) >= sizeof(std::int64_t)) {
+        const auto maxLuaTarget = static_cast<std::size_t>((std::numeric_limits<std::int64_t>::max)() - 1);
+        require(parser.setRuntimeProfile("dynamic_profile", StreamRuntimeProfile{
+                                                .length = 6,
+                                                .channelMap = {maxLuaTarget},
+                                            },
+                                         error),
+                "最大可映射到 Lua int64 的 channel_map 下标应安全接受，而非按其值分配去重数组");
+    }
+    require(parser.setRuntimeProfile("dynamic_profile", StreamRuntimeProfile{.length = 6, .channelMap = {0, 2}}, error),
+            "拒绝极大 channel_map 后既有 profile 仍可正常更新");
 }
 
 void test_frame_stream_parser_rejects_unsafe_count_bounds()

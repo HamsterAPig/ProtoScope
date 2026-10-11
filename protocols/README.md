@@ -492,7 +492,7 @@ end
 
 ## `on_tx` 回调
 
-宿主只在主线程回调 `on_tx(ctx, evt)`：
+`on_tx(ctx, evt)` 由脚本 worker 线程派发，不在 UI 主线程执行。回调中的宿主脚本 API 同样运行在该 worker 上；不要依赖 UI 主线程状态或在回调中阻塞等待主线程操作。普通业务回调报错会记录日志并继续，不会回滚此前已发生的副作用；例如已经入队的发送、状态或文件操作不会因后续 Lua 错误撤销。
 
 ```lua
 ---@class ProtoTxEvent
@@ -535,9 +535,13 @@ end
 ---@type ProtoStreamSchema
 local schema = {
   buffer = {
+    -- 每个输入帧必须不超过 capacity；它同时是初始环形缓冲容量。
     capacity = 4096,
+    -- 未能及时解析时，内部缓冲最多扩至该值；这不是单帧长度许可上限。
     max_capacity = 268435456,
   },
+  -- 新 schema 建议只通过 frame.fields 访问业务字段，避免 compat 顶层别名。
+  field_output = "fields_only",
   raw_output = "omit",
   low_overhead = true,
   frames = {
@@ -578,11 +582,11 @@ return schema
 - `crc`：CRC 类型与字节顺序。
 - `fields`：字段定义，`offset` 从 1 开始计数；`count` 可写整数、已解析字段名或纯 C++ count 表达式 table。
 - `on_frame`：完整有效帧回调；未定义 `on_batch` 时必填。
-- `on_batch`：完整有效帧批量回调，`frames` 中每项保持旧 `on_frame` 的 frame 结构；若同时定义 `on_batch` 与 `on_frame`，宿主只调用 `on_batch`。
+- `on_batch`：完整有效帧批量回调，`frames` 中每项保持旧 `on_frame` 的 frame 结构；若同时定义 `on_batch` 与 `on_frame`，宿主只调用 `on_batch`。一段连续成功帧按顺序合批；遇到解析错误先派发此前的帧批次，再派发错误，再处理后续帧，因此跨错误时一个输入批次可能拆成多个回调批次。
 - `on_error`：解析错误回调。
 - `raw_output`：默认 `full` 会向 Lua 暴露 `frame.raw`；高速连续采样建议写 `omit`，避免逐字节展开 raw。
 - `low_overhead`：默认 `false` 保持调试快照兼容；高速场景可与 `raw_output = "omit"` 配合，成功帧不保留到 `lastStreamParseBatch()`。
-- `field_output`：默认 `compat` 同时写 `frame.fields.xxx` 和 `frame.xxx`；高频回调可写 `fields_only`，只保留 `frame.fields`。
+- `field_output`：默认 `compat` 同时写 `frame.fields.xxx` 和 `frame.xxx`；高频回调可写 `fields_only`，只保留 `frame.fields`。新 schema 和新高速示例推荐显式写 `fields_only`，避免重复字段别名开销；旧合法脚本省略时仍保持 `compat`。
 - `value_targets`：声明解析帧后自动填充 value_table 控件。`controls` 里每项指定目标控件 id、`values_field` 和注册起始 `start_field` 或 `start_id`；当 `values_field` 是 `bytes` 字段时，会把整段 bytes 作为一个 bit 源更新对应 `start_id` 的 bit 行，不按字节拆成连续 row。
 
 ```lua
@@ -595,16 +599,21 @@ value_targets = {
 
 自动填充发生在 `on_batch/on_frame` 之前，Lua handler 里再次 `set_control` 同一行会覆盖自动值。
 
+schema 字段应使用唯一名称。默认 `compat` 会同时发布顶层业务别名和帧元数据；字段名若为 `name`、`fields`、`raw`、`crc_ok` 或 `channel_map` 会与元数据冲突并在加载时拒绝。`fields_only` 将业务字段留在 `frame.fields`，隔离这些名称；推荐新示例使用此模式。
+
+`on_batch` 在定义后始终优先于 `on_frame`，即使批回调报错也不会回退重复调用 `on_frame`。解析事件保持输入顺序；错误会切开连续成功帧段，先回调错误前的帧，再调用 `on_error`，之后继续后续帧，因此同一批输入可能拆成多个 `on_batch` 调用。普通回调错误仅记录日志，不回滚之前产生的副作用。
+
 补充约定：
 
-- Lua `buffer.capacity` 是初始环形缓冲容量；默认不丢弃，容量不足时会在 `buffer.max_capacity`（默认 256MiB）内自动扩容。
-- 只有显式写 `overflow = "drop_oldest"` 时，parser 才会在容量超限时丢弃最旧字节。
+- Lua `buffer.capacity` 同时定义初始环形缓冲容量和单帧解析长度上限；解析出的固定/变长/runtime profile 帧长度超过它会报错。它不是 `max_capacity` 的别名。
+- `buffer.max_capacity`（默认 256MiB）限制无损模式为累计输入保留的环形缓冲最大容量；容量不足时 parser 可在此上限内扩容，但扩容不会放宽单帧长度上限。
+- 只有显式写 `overflow = "drop_oldest"` 时，parser 才会在累计缓冲输入超限时丢弃最旧字节；超限产生的解析错误会参与帧/错误有序派发。
 - 宿主 YAML `receive.stream_buffer.near_overflow_threshold` 与 `receive.stream_buffer.popup_enabled` 只控制“接近溢出”告警阈值和弹窗，不会改写协议 schema 的缓冲容量。
 - 高速协议推荐组合：`on_batch` + `raw_output = "omit"` + `low_overhead = true`；如果脚本只读 `frame.fields`，可进一步加 `field_output = "fields_only"`。
 
 ### 运行时长度 / 通道映射
 
-当某个帧的真实长度、业务通道顺序需要在运行时由脚本先探测、再持续生效时，可以这样声明：
+当某个帧的真实长度、业务通道顺序需要在运行时由脚本先探测、再持续生效时，可以这样声明。运行期的 `set_profile/clear_profile` 返回 `ok, err`；在脚本顶层、`stream()` / `ui()` 声明等加载阶段调用会返回 `false, error`，应等加载成功后在 `on_open` 或握手响应回调中设置：
 
 ```lua
 {
@@ -700,6 +709,8 @@ count = {
 ```
 
 ## `on_bytes()` 仍然可用，但只建议用于两类场景
+
+`on_bytes(ctx, bytes)` 的 `bytes` 是宿主按原始接收顺序传入的 1-based Lua `integer[]`，不是 `ProtoBuffer`；使用 `ipairs(bytes)` 逐字节遍历。`ProtoBuffer` 是文件/数据 API 中传递的缓冲对象，其 `size()`、`slice()` 等方法不适用于此回调参数。
 
 - 协议不是标准帧流，而是纯文本、终止符协议或临时调试输入。
 - 你还在做最初的抓包验证，暂时不想先写 schema。
@@ -797,6 +808,8 @@ proto.plot.push(2, {
   },
 })
 ```
+
+导入波形后，普通 Lua `proto.plot.setup()` 按 `channels` 数组位置更新已有共有通道的非名称显示规格：`unit`、`ratio`、`scale`、`offset`、`color`、`line_width` 及完整 `bit_display`（`enabled`、`first_bit`、`bit_count`、`y_offset`、`hover_readout`）。实际波形名称和默认名称分别保持原名，已有用户显示覆盖继续优先于新的 Lua 默认基线；恢复默认采用最新 Lua 非名称规格但不会改名。省略字段沿用 API 默认值，不是增量 patch；未声明的尾部通道不变，多余通道不会新增，非法配置仍整份拒绝。普通导入配置不会应用 `source`、`reset_history`、历史或视窗字段，也不接受普通 `push()` 追加导入数据；明确切换到实时来源后恢复通常行为。Bit 子项显示由位索引生成，不属于父通道 `label` 的名称保护。
 
 `bit_display` 读取同一通道 `push()` 的原始 `y` 作为非负整数 bitfield；
 这些 bit 不会套用 `ratio`、`scale` 或 `offset`。

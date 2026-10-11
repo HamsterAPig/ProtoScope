@@ -55,6 +55,7 @@ namespace {
     };
 
     struct ClearRealtimeOutputsCommand {
+        RealtimeOutputDiscardCounts alreadyDiscarded{};
         std::shared_ptr<std::promise<RealtimeOutputDiscardCounts>> result;
     };
 
@@ -110,6 +111,10 @@ namespace {
         TxEvent event;
     };
 
+    struct TxCallbackTestHookCommand {
+        std::function<void()> hook;
+    };
+
     struct DialogEventCommand {
         transport::ConnectionContext context;
         DialogEvent event;
@@ -145,6 +150,7 @@ namespace {
                                        DataTableCommand,
                                        TickCommand,
                                        TxEventCommand,
+                                       TxCallbackTestHookCommand,
                                        DialogEventCommand,
                                        FileDialogEventCommand,
                                        RequestAwaitingCompletionCommand,
@@ -277,6 +283,7 @@ struct ScriptRuntimeWorker::Impl {
     ScriptRuntimeWorkerConfig config{};
     ScriptRuntimeSnapshot snapshot{};
     std::size_t pendingRxBytes{0};
+    std::size_t executingRxBytes{0};
     bool rxBackpressureWarningActive{false};
     bool stopping{false};
     bool executing{false};
@@ -339,16 +346,12 @@ struct ScriptRuntimeWorker::Impl {
 
     void pushBytes(transport::TransportBytesEvent event, bool mergeAdjacent)
     {
-        if (event.bytes.empty()) {
-            return;
-        }
+        if (event.bytes.empty()) return;
         bool syncMode = false;
         bool merged = false;
         {
             std::lock_guard lock(mutex);
-            if (stopping) {
-                return;
-            }
+            if (stopping) return;
             pendingRxBytes += event.bytes.size();
             syncMode = !config.enabled;
             if (mergeAdjacent && !commands.empty()) {
@@ -362,16 +365,88 @@ struct ScriptRuntimeWorker::Impl {
                     merged = true;
                 }
             }
-            if (!merged) {
-                commands.emplace_back(BytesCommand{.event = std::move(event)});
-            }
+            if (!merged) commands.emplace_back(BytesCommand{.event = std::move(event)});
         }
         signalCommandAvailable();
-        if (syncMode) {
-            waitIdle();
-        } else if (config.backpressureEnabled) {
-            waitUntilRxQueueBelowLowWatermark();
+        if (syncMode) waitIdle();
+        else if (config.backpressureEnabled) waitUntilRxQueueBelowLowWatermark();
+    }
+
+    std::size_t tryPushBytes(const transport::TransportBytesEvent& event, std::size_t maxBytes, bool mergeAdjacent)
+    {
+        if (event.bytes.empty()) return 0U;
+        std::size_t accepted = 0U;
+        bool warningAdded = false;
+        {
+            std::lock_guard lock(mutex);
+            if (!stopping && config.enabled && maxBytes > 0U) {
+                const auto budget = rxQueueBudgetBytes(config);
+                const auto configuredHighWater = config.backpressureEnabled && budget > 0U
+                                                     ? watermarkBytes(budget, config.backpressureHighWatermark)
+                                                     : budget;
+                const auto highWater = budget > 0U && config.backpressureEnabled &&
+                                               config.backpressureHighWatermark > 0.0
+                                           ? (std::max)(configuredHighWater, std::size_t{1U})
+                                           : configuredHighWater;
+                const auto acceptanceLimit = highWater;
+                const auto lowWater = config.backpressureEnabled
+                                          ? (std::min)(highWater, watermarkBytes(budget,
+                                                                               config.backpressureLowWatermark))
+                                          : highWater;
+                if (acceptanceLimit > 0U || budget == 0U) {
+                    if (pendingRxBytes <= lowWater) rxBackpressureWarningActive = false;
+                    if (pendingRxBytes < acceptanceLimit &&
+                        !(rxBackpressureWarningActive && pendingRxBytes > lowWater)) {
+                        auto availableBytes = acceptanceLimit - pendingRxBytes;
+                        // 高水位是允许的队列上限；在本锁内只接受到该上限，后续投递将被拒绝。
+                        const auto count = (std::min)({event.bytes.size(), maxBytes, availableBytes});
+                        if (count > 0U) {
+                            transport::TransportBytesEvent acceptedEvent{
+                                .context = event.context,
+                                .bytes = std::vector<std::uint8_t>(event.bytes.begin(),
+                                                                   event.bytes.begin() +
+                                                                       static_cast<std::ptrdiff_t>(count))};
+                            bool merged = false;
+                            if (mergeAdjacent && !commands.empty()) {
+                                auto* previous = std::get_if<BytesCommand>(&commands.back());
+                                if (previous != nullptr &&
+                                    previous->event.context.connectionId == event.context.connectionId &&
+                                    previous->event.context.readyForIo == event.context.readyForIo &&
+                                    previous->event.context.endpoint == event.context.endpoint &&
+                                    previous->event.bytes.size() + count <= config.batchBytes) {
+                                    previous->event.bytes.insert(previous->event.bytes.end(),
+                                                                  acceptedEvent.bytes.begin(),
+                                                                  acceptedEvent.bytes.end());
+                                    previous->event.context.timestampMs = event.context.timestampMs;
+                                    merged = true;
+                                }
+                            }
+                            if (!merged) commands.emplace_back(BytesCommand{.event = std::move(acceptedEvent)});
+                            pendingRxBytes += count;
+                            accepted = count;
+                            if (config.backpressureEnabled && pendingRxBytes >= highWater) {
+                                if (!rxBackpressureWarningActive) {
+                                    rxBackpressureWarningActive = true;
+                                    if (config.outputQueueLimit == 0U || outputs.size() < config.outputQueueLimit) {
+                                        pushRxBackpressureWarningLocked(pendingRxBytes, highWater);
+                                        warningAdded = true;
+                                    }
+                                }
+                            }
+                        }
+                    } else if (config.backpressureEnabled && !rxBackpressureWarningActive &&
+                               pendingRxBytes >= highWater) {
+                        rxBackpressureWarningActive = true;
+                        if (config.outputQueueLimit == 0U || outputs.size() < config.outputQueueLimit) {
+                            pushRxBackpressureWarningLocked(pendingRxBytes, highWater);
+                            warningAdded = true;
+                        }
+                    }
+                }
+            }
         }
+        if (accepted > 0U || warningAdded) signalCommandAvailable();
+        return accepted;
     }
 
     void signalCommandAvailable()
@@ -426,6 +501,12 @@ struct ScriptRuntimeWorker::Impl {
         return pendingRxBytes;
     }
 
+    std::size_t executingRxBytesCount() const
+    {
+        std::lock_guard lock(mutex);
+        return executingRxBytes;
+    }
+
     std::vector<ScriptRuntimeOutputBatch> drainOutputs()
     {
         std::vector<ScriptRuntimeOutputBatch> drained;
@@ -456,7 +537,13 @@ struct ScriptRuntimeWorker::Impl {
     ScriptRuntimeSnapshot currentSnapshot() const
     {
         std::lock_guard lock(mutex);
-        return snapshot;
+        auto current = snapshot;
+        // Host 内容仍是最近发布的缓存；队列状态必须同锁读取，不能漏掉刚入队的 ACK。
+        current.pendingWorkerRxBytes = pendingRxBytes;
+        current.executingRxBytes = executingRxBytes;
+        current.inputQueueSize = commands.size();
+        current.outputQueueSize = outputs.size();
+        return current;
     }
 
     void publishOutputs(ScriptRuntimeOutputBatch batch)
@@ -485,9 +572,18 @@ struct ScriptRuntimeWorker::Impl {
         std::lock_guard lock(mutex);
         const auto before = pendingRxBytes;
         pendingRxBytes -= (std::min)(pendingRxBytes, bytes);
-        if (pendingRxBytes < before) {
-            rxBackpressureChanged.notify_all();
-        }
+        const auto budget = rxQueueBudgetBytes(config);
+        const auto highWater = config.backpressureEnabled
+                                   ? (budget > 0U && config.backpressureHighWatermark > 0.0
+                                          ? (std::max)(watermarkBytes(budget, config.backpressureHighWatermark),
+                                                       std::size_t{1U})
+                                          : 0U)
+                                   : budget;
+        const auto lowWater = config.backpressureEnabled
+                                  ? (std::min)(highWater, watermarkBytes(budget, config.backpressureLowWatermark))
+                                  : budget;
+        if (pendingRxBytes <= lowWater) rxBackpressureWarningActive = false;
+        if (pendingRxBytes < before) rxBackpressureChanged.notify_all();
     }
 
     void clearQueuedRxLocked()
@@ -523,7 +619,10 @@ struct ScriptRuntimeWorker::Impl {
     {
         std::unique_lock lock(mutex);
         const auto budgetBytes = rxQueueBudgetBytes(config);
-        const auto highWaterBytes = watermarkBytes(budgetBytes, config.backpressureHighWatermark);
+        const auto highWaterBytes = config.backpressureHighWatermark > 0.0 && budgetBytes > 0U
+                                        ? (std::max)(watermarkBytes(budgetBytes, config.backpressureHighWatermark),
+                                                     std::size_t{1U})
+                                        : 0U;
         if (budgetBytes == 0U || highWaterBytes == 0U || pendingRxBytes <= highWaterBytes) {
             return;
         }
@@ -532,8 +631,10 @@ struct ScriptRuntimeWorker::Impl {
             // 核心流程：预算耗尽时暂停投递并显式告警，不再静默丢弃已排队 RX。
             pushRxBackpressureWarningLocked(pendingRxBytes, highWaterBytes);
         }
-        const auto lowWaterBytes =
-            (std::min)(highWaterBytes, watermarkBytes(budgetBytes, config.backpressureLowWatermark));
+        const auto lowWaterBytes = config.backpressureEnabled
+                                       ? (std::min)(highWaterBytes,
+                                                    watermarkBytes(budgetBytes, config.backpressureLowWatermark))
+                                       : highWaterBytes;
         rxBackpressureChanged.wait(lock,
                                    [this, lowWaterBytes]() { return stopping || pendingRxBytes <= lowWaterBytes; });
         if (pendingRxBytes <= lowWaterBytes) {
@@ -567,6 +668,9 @@ struct ScriptRuntimeWorker::Impl {
                 } else {
                     command = std::move(commands.front());
                     commands.pop_front();
+                    if (const auto* bytes = std::get_if<BytesCommand>(&command); bytes != nullptr) {
+                        executingRxBytes += bytes->event.bytes.size();
+                    }
                     executing = true;
                     hasCommand = true;
                 }
@@ -611,9 +715,12 @@ struct ScriptRuntimeWorker::Impl {
         };
     }
 
-    RealtimeOutputDiscardCounts clearHostRealtimeOutputs(ScriptHost& host)
+    RealtimeOutputDiscardCounts clearHostRealtimeOutputs(ScriptHost& host, RealtimeOutputDiscardCounts counts = {})
     {
-        auto counts = host.clearPendingRealtimeOutputs();
+        const auto hostCounts = host.clearPendingRealtimeOutputs();
+        counts.logs += hostCounts.logs;
+        counts.events += hostCounts.events;
+        counts.plotAppends += hostCounts.plotAppends;
         {
             std::lock_guard lock(mutex);
             for (const auto& batch : outputs) {
@@ -622,6 +729,7 @@ struct ScriptRuntimeWorker::Impl {
                 counts.plotAppends += batch.plotAppends.size();
             }
             outputs.clear();
+            snapshot.outputQueueSize = 0U;
             outputBackpressureChanged.notify_all();
         }
         return counts;
@@ -696,7 +804,7 @@ struct ScriptRuntimeWorker::Impl {
                                               std::optional<std::uint64_t>&,
                                               ClearRealtimeOutputsCommand& command)
     {
-        command.result->set_value(clearHostRealtimeOutputs(host));
+        command.result->set_value(clearHostRealtimeOutputs(host, command.alreadyDiscarded));
         return {};
     }
 
@@ -793,6 +901,14 @@ struct ScriptRuntimeWorker::Impl {
 
     CommandExecutionResult executeCommandItem(ScriptHost& host,
                                               std::optional<std::uint64_t>&,
+                                              TxCallbackTestHookCommand& command)
+    {
+        host.setTxCallbackTestHookForTest(std::move(command.hook));
+        return {};
+    }
+
+    CommandExecutionResult executeCommandItem(ScriptHost& host,
+                                              std::optional<std::uint64_t>&,
                                               DialogEventCommand& command)
     {
         host.onDialogEvent(command.context, command.event);
@@ -848,6 +964,11 @@ struct ScriptRuntimeWorker::Impl {
 
             const auto execution = executeCommand(host, activeConnectionId, *command);
             publishOutputs(drainHostOutputs(host, execution.includeTransportStats));
+            if (const auto* bytes = std::get_if<BytesCommand>(&*command); bytes != nullptr) {
+                // RX未发布的回调输出计数覆盖callback执行及输出发布，供请求超时判断准确等待ACK结果。
+                std::lock_guard lock(mutex);
+                executingRxBytes -= (std::min)(executingRxBytes, bytes->event.bytes.size());
+            }
             publishSnapshot(host);
             {
                 std::lock_guard lock(mutex);
@@ -944,7 +1065,39 @@ bool ScriptRuntimeWorker::requestOscilloscopeToggle(transport::ConnectionContext
 RealtimeOutputDiscardCounts ScriptRuntimeWorker::clearPendingRealtimeOutputs()
 {
     auto promise = std::make_shared<std::promise<RealtimeOutputDiscardCounts>>();
-    return impl_->runSync<RealtimeOutputDiscardCounts>(ClearRealtimeOutputsCommand{.result = promise}, promise);
+    auto future = promise->get_future();
+    RealtimeOutputDiscardCounts discarded;
+    {
+        std::lock_guard lock(impl_->mutex);
+        if (impl_->stopping) {
+            for (const auto& batch : impl_->outputs) {
+                discarded.logs += batch.logs.size();
+                discarded.events += batch.events.size();
+                discarded.plotAppends += batch.plotAppends.size();
+            }
+            impl_->outputs.clear();
+            impl_->snapshot.outputQueueSize = 0U;
+            return discarded;
+        }
+        impl_->commands.emplace_back(ClearRealtimeOutputsCommand{.result = promise});
+    }
+    impl_->signalCommandAvailable();
+    // 输出队列满时worker可能正卡在发布中，不能只等待排在它后面的清理命令。
+    // 调用方持续消费队列直至命令完成，保持硬上限并解除发布者互等。
+    while (future.wait_for(std::chrono::milliseconds(1)) != std::future_status::ready) {
+        auto batches = impl_->drainOutputs();
+        for (const auto& batch : batches) {
+            discarded.logs += batch.logs.size();
+            discarded.events += batch.events.size();
+            discarded.plotAppends += batch.plotAppends.size();
+        }
+        if (impl_->failed) throw std::runtime_error("ScriptRuntimeWorker 线程已异常退出");
+    }
+    auto result = future.get();
+    result.logs += discarded.logs;
+    result.events += discarded.events;
+    result.plotAppends += discarded.plotAppends;
+    return result;
 }
 
 void ScriptRuntimeWorker::postTransportOpen(transport::TransportOpenEvent event)
@@ -965,6 +1118,12 @@ void ScriptRuntimeWorker::postTransportError(transport::TransportErrorEvent even
 void ScriptRuntimeWorker::postTransportBytes(transport::TransportBytesEvent event, bool mergeAdjacent)
 {
     impl_->pushBytes(std::move(event), mergeAdjacent);
+}
+
+std::size_t ScriptRuntimeWorker::tryPostTransportBytes(const transport::TransportBytesEvent& event,
+                                                        std::size_t maxBytes, bool mergeAdjacent)
+{
+    return impl_->tryPushBytes(event, maxBytes, mergeAdjacent);
 }
 
 void ScriptRuntimeWorker::postControl(transport::ConnectionContext context, std::string id, ControlValue value,
@@ -992,6 +1151,11 @@ void ScriptRuntimeWorker::postDataTable(transport::ConnectionContext context,Dat
 void ScriptRuntimeWorker::postTxEvent(transport::ConnectionContext context, TxEvent event)
 {
     impl_->pushCommand(TxEventCommand{.context = std::move(context), .event = std::move(event)});
+}
+
+void ScriptRuntimeWorker::setTxCallbackTestHookForTest(std::function<void()> hook)
+{
+    impl_->pushCommand(TxCallbackTestHookCommand{.hook = std::move(hook)});
 }
 
 void ScriptRuntimeWorker::postDialogEvent(transport::ConnectionContext context, DialogEvent event)
@@ -1034,6 +1198,11 @@ void ScriptRuntimeWorker::waitIdle()
 std::size_t ScriptRuntimeWorker::pendingRxBytes() const
 {
     return impl_->pendingRxBytesCount();
+}
+
+std::size_t ScriptRuntimeWorker::executingRxBytes() const
+{
+    return impl_->executingRxBytesCount();
 }
 
 std::vector<ScriptRuntimeOutputBatch> ScriptRuntimeWorker::drainOutputs()

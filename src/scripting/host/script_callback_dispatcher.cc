@@ -113,7 +113,7 @@ void ScriptHost::callbackOnBytes(const ScriptHostContext& ctx, const std::vector
     }
 }
 
-bool ScriptHost::callbackOnStreamBatch(const ScriptHostContext& ctx, const std::vector<StreamParsedFrame>& frames)
+bool ScriptHost::callbackOnStreamBatch(const ScriptHostContext& ctx, std::span<const StreamParsedFrame> frames)
 {
     if (executionFaulted()) {
         return true;

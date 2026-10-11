@@ -63,7 +63,7 @@ inline float wavePhosphorDepositionAlpha(ImVec4 color)
 
 inline ImU32 cursorGuardColor(ImVec4 color)
 {
-    if (activeThemeDefinition().id == "professional_dark") {
+    if (activeThemeDefinition().base == "professional_dark") {
         // 可读身份色用炭灰护线隔开波形；暗手动色仍需要可读灰护线，不能直接隐去。
         const auto background = activeWaveStyleTokens().plotBackground;
         const auto guard = plot::overviewContrast(cursorOverviewColor(color), cursorOverviewColor(background)) >= 3
@@ -90,9 +90,7 @@ inline ImVec4 cursorLabelBackground(const plot::WaveViewState& view)
 inline ImVec4 cursorLabelText(const plot::WaveViewState& view, std::uint64_t identity, std::size_t manualIndex)
 {
     const auto choice = view.cursorColors.resolve(identity, manualIndex);
-    const bool highContrast = activeThemeDefinition().base == "debug_high_contrast";
-    const bool readable = choice.textPass && (!view.cursorColors.key.automatic || !highContrast || choice.textContrast >= 12);
-    return cursorImVec(readable ? choice.color : view.cursorColors.labelText);
+    return cursorImVec(choice.textPass ? choice.color : view.cursorColors.labelText);
 }
 
 // 不使用 ImPlot::Annotation 的身份色填充/经验黑白正文；所有读数共享可验收的表面。
@@ -112,7 +110,7 @@ inline ImRect drawCursorReadoutLabel(const plot::WaveViewState& view, ImVec4 ide
     const ImVec2 min(std::clamp(anchor.x+offset.x, pos.x, (std::max)(pos.x, pos.x+size.x-boxSize.x)),
                      std::clamp(anchor.y+offset.y-boxSize.y, pos.y, (std::max)(pos.y, pos.y+size.y-boxSize.y)));
     const ImRect bounds(min, ImVec2(min.x+boxSize.x, min.y+boxSize.y));
-    // 读数是正文，不因手动游标身份色降低高对比主题12:1目标。
+    // 读数正文忠实使用主题文字；游标身份仅用于边框，不对正文施加波形校色。
     const auto background = cursorLabelBackground(view);
     const auto foreground = cursorImVec(view.cursorColors.labelText);
     ImPlot::PushPlotClipRect();

@@ -1,6 +1,8 @@
 #include "../src/ui/wave/wave_render_service.hpp"
 #include "protoscope/app/application.hpp"
 #include "protoscope/ui/gui_runtime.hpp"
+#include "theme_test_contract.hpp"
+#include <functional>
 
 namespace protoscope::ui {
 // 使用真实业务 Dock，不以控件样板冒充完整界面截图。
@@ -56,33 +58,93 @@ std::vector<unsigned char> capture(const std::filesystem::path& directory, const
     return pixels;
 }
 
-std::size_t matchingPixels(const std::vector<unsigned char>& pixels, ImVec4 color, ImVec2 min, ImVec2 max)
+std::size_t matchingPixels(const std::vector<unsigned char>& pixels, ImVec4 color, ImVec2 min, ImVec2 max,
+                           int tolerance = 2)
 {
     std::size_t count = 0;
     for (int y = (std::max)(0, int(min.y)); y < (std::min)(height, int(max.y)); ++y)
         for (int x = (std::max)(0, int(min.x)); x < (std::min)(width, int(max.x)); ++x) {
             const auto i = ((height-1-y)*width+x)*3;
-            if (std::abs(pixels[i] - color.x*255) <= 2 &&
-                std::abs(pixels[i+1] - color.y*255) <= 2 &&
-                std::abs(pixels[i+2] - color.z*255) <= 2) ++count;
+            if (std::abs(pixels[i] - color.x*255) <= tolerance &&
+                std::abs(pixels[i+1] - color.y*255) <= tolerance &&
+                std::abs(pixels[i+2] - color.z*255) <= tolerance) ++count;
         }
     return count;
 }
 
-std::size_t readableTextPixels(const std::vector<unsigned char>& pixels, ImVec2 min, ImVec2 max, double target)
+void verifyOpaqueTextCore(const std::vector<unsigned char>& pixels, ImRect bounds, ImVec4 expected,
+                          const ImDrawList* drawList, const std::string& scene)
 {
-    const auto read = [&](int x, int y) {
-        const auto i = ((height-1-y)*width+x)*3;
-        return plot::OverviewColor{pixels[i]/255.,pixels[i+1]/255.,pixels[i+2]/255.,1};
-    };
-    // 字体抗锯齿会改变字形像素 RGB，按实测背景统计满足对比度的核心像素。
-    const auto background = read((std::max)(0,int(min.x)-2), int(min.y));
-    std::size_t count = 0;
-    for (int y = int(min.y); y < int(max.y); ++y)
-        for (int x = int(min.x); x < int(max.x); ++x)
-            count += plot::overviewContrast(read(x,y),background) >= target;
-    return count;
+    unsigned char* atlas{}; int atlasWidth{}, atlasHeight{};
+    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&atlas,&atlasWidth,&atlasHeight);
+    if(!atlas || atlasWidth<=0 || atlasHeight<=0)
+        throw std::runtime_error("text sampler font atlas missing; scene="+scene);
+    const auto texel=[&](int x,int y) { return atlas[((std::clamp)(y,0,atlasHeight-1)*atlasWidth+
+        (std::clamp)(x,0,atlasWidth-1))*4+3]/255.; };
+    const ImU32 expectedInk=ImGui::ColorConvertFloat4ToU32(expected);
+    std::map<unsigned,std::size_t> colors;
+    for(int y=int(bounds.Min.y)+2;y<int(bounds.Max.y)-2;++y)
+        for(int x=int(bounds.Min.x)+2;x<int(bounds.Max.x)-2;++x) {
+            const auto i=((height-1-y)*width+x)*3;
+            ++colors[(unsigned(pixels[i])<<16)|(unsigned(pixels[i+1])<<8)|pixels[i+2]];
+        }
+    if(colors.empty()) throw std::runtime_error("text sampler empty region; scene="+scene);
+    const auto background=std::max_element(colors.begin(),colors.end(),
+        [](const auto& a,const auto& b){return a.second<b.second;});
+    const plot::OverviewColor bg{((background->first>>16)&0xff)/255.,((background->first>>8)&0xff)/255.,
+                                  (background->first&0xff)/255.,1};
+    std::size_t sampled=0, matched=0;
+    for(const auto* list:ImGui::GetDrawData()->CmdLists) {
+        if(list!=drawList) continue;
+        for(const auto& cmd:list->CmdBuffer) {
+            if(cmd.UserCallback) continue;
+            for(unsigned j=cmd.IdxOffset;j+2<cmd.IdxOffset+cmd.ElemCount;j+=3) {
+                const auto& a=list->VtxBuffer[cmd.VtxOffset+list->IdxBuffer[j]];
+                const auto& b=list->VtxBuffer[cmd.VtxOffset+list->IdxBuffer[j+1]];
+                const auto& c=list->VtxBuffer[cmd.VtxOffset+list->IdxBuffer[j+2]];
+                if(!bounds.Contains(a.pos)||!bounds.Contains(b.pos)||!bounds.Contains(c.pos)||
+                   a.col!=expectedInk||b.col!=expectedInk||c.col!=expectedInk) continue;
+                const float area=(b.pos.x-a.pos.x)*(c.pos.y-a.pos.y)-(b.pos.y-a.pos.y)*(c.pos.x-a.pos.x);
+                if(std::abs(area)<1e-5F) continue;
+                const int minX=(std::max)(0,int(std::floor((std::min)({a.pos.x,b.pos.x,c.pos.x}))));
+                const int maxX=(std::min)(width,int(std::ceil((std::max)({a.pos.x,b.pos.x,c.pos.x}))));
+                const int minY=(std::max)(0,int(std::floor((std::min)({a.pos.y,b.pos.y,c.pos.y}))));
+                const int maxY=(std::min)(height,int(std::ceil((std::max)({a.pos.y,b.pos.y,c.pos.y}))));
+                for(int y=minY;y<maxY;++y) for(int x=minX;x<maxX;++x) {
+                    const float px=x+.5F,py=y+.5F;
+                    if(px<cmd.ClipRect.x||px>=cmd.ClipRect.z||py<cmd.ClipRect.y||py>=cmd.ClipRect.w) continue;
+                    const float wb=((px-a.pos.x)*(c.pos.y-a.pos.y)-(py-a.pos.y)*(c.pos.x-a.pos.x))/area;
+                    const float wc=((b.pos.x-a.pos.x)*(py-a.pos.y)-(b.pos.y-a.pos.y)*(px-a.pos.x))/area;
+                    const float wa=1-wb-wc;
+                    if(wa<0||wb<0||wc<0) continue;
+                    const double u=(wa*a.uv.x+wb*b.uv.x+wc*c.uv.x)*atlasWidth-.5;
+                    const double v=(wa*a.uv.y+wb*b.uv.y+wc*c.uv.y)*atlasHeight-.5;
+                    const int ix=int(std::floor(u)),iy=int(std::floor(v));
+                    const double fx=u-ix,fy=v-iy;
+                    const double alpha=(texel(ix,iy)*(1-fx)+texel(ix+1,iy)*fx)*(1-fy)+
+                                        (texel(ix,iy+1)*(1-fx)+texel(ix+1,iy+1)*fx)*fy;
+                    if(alpha<.9) continue;
+                    ++sampled;
+                    const auto ink=ImGui::ColorConvertU32ToFloat4(expectedInk);
+                    const auto wanted=plot::compositeOverviewColor({ink.x,ink.y,ink.z,ink.w*alpha},bg);
+                    const auto i=((height-1-y)*width+x)*3;
+                    if(std::abs(pixels[i]/255.-wanted.r)<=2./255 &&
+                       std::abs(pixels[i+1]/255.-wanted.g)<=2./255 &&
+                       std::abs(pixels[i+2]/255.-wanted.b)<=2./255) ++matched;
+                }
+            }
+        }
+    }
+    if(sampled<=20 || matched!=sampled) {
+        std::ostringstream message;
+        message<<"text glyph core RGB mismatch; scene="<<scene<<"; rect=("<<bounds.Min.x<<','<<bounds.Min.y
+               <<")-("<<bounds.Max.x<<','<<bounds.Max.y<<"); expected="<<std::hex<<expectedInk<<std::dec
+               <<"; sampled="<<sampled<<"; matched="<<matched;
+        throw std::runtime_error(message.str());
+    }
 }
+
+// 文本采样依据 ImGui 字体图集核心覆盖与顶点色，不用扩大 RGB 容差接受错色。
 
 // 新场景的参考图使用旧 UI 令牌 + 当前渲染器，绝不冒充旧版本截图。
 ui::UiThemeDefinition baselineTokens(config::GuiTheme theme)
@@ -105,13 +167,14 @@ ui::UiThemeDefinition baselineTokens(config::GuiTheme theme)
     return d;
 }
 
-void verifyControls(const std::filesystem::path& directory, bool baseline)
+void verifyControls(const std::filesystem::path& directory, bool baseline,
+                    const ui::UiThemeDefinition* custom = nullptr)
 {
     struct Region {
-        ImRect bounds; ImVec4 text; double threshold; std::string control; ImU32 ink;
+        ImRect bounds; ImVec4 text; std::string control; ImU32 ink;
         const ImDrawList* drawList;
     };
-    const auto actualContrast = [&](const std::vector<unsigned char>& pixels, const Region& region, const std::string& scene,
+    const auto actualTextPixels = [&](const std::vector<unsigned char>& pixels, const Region& region, const std::string& scene,
                                     ImVec2* corePosition = nullptr) {
         const auto r=region.bounds;
         const auto* data=ImGui::GetDrawData();
@@ -129,13 +192,10 @@ void verifyControls(const std::filesystem::path& directory, bool baseline)
             [](const auto& a,const auto& b){return a.second<b.second;});
         const auto bg=plot::overviewRgb(background->first);
         std::size_t core=0;
-        double minimumContrast=21;
         for (int y=int(r.Min.y)+2;y<int(r.Max.y)-2;++y) for (int x=int(r.Min.x)+2;x<int(r.Max.x)-2;++x) {
             const auto i=((height-1-y)*width+x)*3;
             if (std::abs(pixels[i]-region.text.x*255)<=2 && std::abs(pixels[i+1]-region.text.y*255)<=2 &&
                 std::abs(pixels[i+2]-region.text.z*255)<=2) {
-                const plot::OverviewColor pixel{pixels[i]/255.,pixels[i+1]/255.,pixels[i+2]/255.,1};
-                minimumContrast=(std::min)(minimumContrast,plot::overviewContrast(pixel,bg));
                 ++core;
             }
         }
@@ -143,12 +203,12 @@ void verifyControls(const std::filesystem::path& directory, bool baseline)
         // 按实际索引、裁剪与字体 UV 采样覆盖率，限定真正字形内部，不能以边框冒充文字。
         unsigned char* atlas; int atlasWidth,atlasHeight;
         ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&atlas,&atlasWidth,&atlasHeight);
-        std::size_t readableCore=0, sampledCore=0, renderedCore=0;
+        std::size_t sampledCore=0, renderedCore=0;
         double maxCoverage=0;
         const auto texel=[&](int x,int y) { return atlas[((std::clamp)(y,0,atlasHeight-1)*atlasWidth+
             (std::clamp)(x,0,atlasWidth-1))*4+3]/255.; };
         // 模态窗口会覆盖宿主控件；只采样目标所在绘制列表，避免把被遮挡的宿主字形当作模态正文。
-        // 字体覆盖率、实际核心颜色与正文对比度仍逐像素严格验收。
+        // 字体覆盖率和实际核心颜色仍逐像素严格验收。
         for (const auto* list : ImGui::GetDrawData()->CmdLists) {
             if (list != region.drawList) continue;
             for (const auto& cmd : list->CmdBuffer)
@@ -172,29 +232,26 @@ void verifyControls(const std::filesystem::path& directory, bool baseline)
                         if(alpha<.9) continue; // 仅字体内部，不用抗锯齿边缘验收正文。
                         ++sampledCore;
                         if(corePosition && sampledCore==1) *corePosition=ImVec2(float(x),float(y));
-                        const auto expected=plot::compositeOverviewColor({region.text.x,region.text.y,region.text.z,alpha},bg);
+                        // 顶点 ink 已含字段 alpha、全局 Alpha 和8位量化；再乘实际纹理覆盖。
+                        const auto ink=ImGui::ColorConvertU32ToFloat4(region.ink);
+                        const auto expected=plot::compositeOverviewColor({ink.x,ink.y,ink.z,ink.w*alpha},bg);
                         const auto i=((height-1-y)*width+x)*3;
                         const plot::OverviewColor pixel{pixels[i]/255.,pixels[i+1]/255.,pixels[i+2]/255.,1};
-                        const double contrast=plot::overviewContrast(pixel,bg);
-                        minimumContrast=(std::min)(minimumContrast,contrast);
-                        readableCore+=contrast>=region.threshold;
                         if(std::abs(pixel.r-expected.r)<=2./255 && std::abs(pixel.g-expected.g)<=2./255 &&
                             std::abs(pixel.b-expected.b)<=2./255) ++renderedCore;
                     }
             }
         }
-        // 同时验证设计正文与实际可读核心；4.5/12 均不因抗锯齿而放宽。
-        if (sampledCore<=3 || readableCore!=sampledCore || renderedCore!=sampledCore || minimumContrast<region.threshold ||
-            plot::overviewContrast(ui::cursorOverviewColor(region.text),bg)<region.threshold) {
+        // 逐核心检查颜色忠实应用；不以亮度比例拒绝合法自定义色。
+        if (sampledCore<=3 || renderedCore!=sampledCore) {
             std::ostringstream message;
-            message<<(core<=3 ? "control text core missing" : "control actual core pixel contrast")
+            message<<(core<=3 ? "control text core missing" : "control actual core pixel color")
                    <<"; scene="<<scene<<"; control="<<region.control
                    <<"; rect=("<<r.Min.x<<','<<r.Min.y<<")-("<<r.Max.x<<','<<r.Max.y<<')'
                    <<"; expectedRGB=("<<region.text.x*255<<','<<region.text.y*255<<','<<region.text.z*255<<')'
                    <<"; matches="<<core<<"; backgroundRGB="<<background->first
-                   <<"; minimumContrast="<<minimumContrast<<"; required="<<region.threshold
                    <<"; sampledCore="<<sampledCore<<"; renderedCore="<<renderedCore
-                   <<"; readableCore="<<readableCore<<"; maxCoverage="<<maxCoverage;
+                   <<"; maxCoverage="<<maxCoverage;
             throw std::runtime_error(message.str());
         }
     };
@@ -203,9 +260,9 @@ void verifyControls(const std::filesystem::path& directory, bool baseline)
     io.ConfigInputTextCursorBlink = false;
     for (auto theme : {config::GuiTheme::ProfessionalDark, config::GuiTheme::ProfessionalLight,
                        config::GuiTheme::DebugHighContrast}) {
-        ui::applyUiTheme(baseline ? baselineTokens(theme) : ui::uiThemeDefinition(theme));
+        if (custom && theme!=config::GuiTheme::ProfessionalDark) continue;
+        ui::applyUiTheme(custom ? *custom : baseline ? baselineTokens(theme) : ui::uiThemeDefinition(theme));
         const auto& t = ui::activeUiStyleTokens();
-        const double threshold = theme == config::GuiTheme::DebugHighContrast ? 12 : 4.5;
         ImRect button, danger, input, enabledButton, disabledButton, toolbar, ghost;
         for (int scene=0; scene<12; ++scene) {
             // 截图前 CloseCurrentPopup 会恢复宿主焦点并改变同帧窗口层序，菜单实际被宿主覆盖。
@@ -237,7 +294,8 @@ void verifyControls(const std::filesystem::path& directory, bool baseline)
                 ImGui::SetNextWindowPos({0,0}); ImGui::SetNextWindowSize({width,height});
                 ImGui::Begin("Control state verification", nullptr, ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_MenuBar);
                 const auto record = [&](const std::string& control) {
-                    regions.push_back({ImRect(ImGui::GetItemRectMin(),ImGui::GetItemRectMax()),t.textStrong,threshold,control,
+                    tests::theme::color(ImGui::GetStyleColorVec4(ImGuiCol_Text),t.textStrong,"控件正文不得二次校色");
+                    regions.push_back({ImRect(ImGui::GetItemRectMin(),ImGui::GetItemRectMax()),t.textStrong,control,
                         ImGui::GetColorU32(ImGuiCol_Text),ImGui::GetWindowDrawList()});
                 };
                 if (ImGui::BeginMenuBar()) {
@@ -292,7 +350,7 @@ void verifyControls(const std::filesystem::path& directory, bool baseline)
                 auto fill=ui::cursorOverviewColor(ImGui::GetStyleColorVec4(ImGuiCol_Button)); fill.a*=alpha;
                 const auto disabledBg=plot::compositeOverviewColor(fill,ui::cursorOverviewColor(t.appBackground));
                 auto text=ui::cursorOverviewColor(ImGui::GetStyleColorVec4(ImGuiCol_Text)); text.a*=alpha;
-                regions.push_back({disabledButton,ui::cursorImVec(plot::compositeOverviewColor(text,disabledBg)),threshold,
+                regions.push_back({disabledButton,ui::cursorImVec(plot::compositeOverviewColor(text,disabledBg)),
                     "Unavailable disabled",ImGui::GetColorU32(ImGuiCol_Text),ImGui::GetWindowDrawList()});
                 check(!ImGui::IsItemActive(),"disabled button became active");
                 ui::endDisabled();
@@ -316,12 +374,12 @@ void verifyControls(const std::filesystem::path& directory, bool baseline)
                 glViewport(0,0,width,height); glClearColor(t.appBackground.x,t.appBackground.y,t.appBackground.z,1);
                 glClear(GL_COLOR_BUFFER_BIT); ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData()); glFinish();
             }
-            const auto name=std::string(config::guiThemeId(theme))+"-controls-"+std::to_string(scene)+
+            const auto name=(custom ? custom->id : std::string(config::guiThemeId(theme)))+"-controls-"+std::to_string(scene)+
                 (baseline ? "-baseline-tokens-current-renderer" : "-current");
             const auto pixels=capture(directory,name);
             if (baseline) continue; // 参考令牌图只作比较，不伪装成通过新标准。
-            for (const auto& region : regions) actualContrast(pixels,region,name);
-            if (scene==0) {
+            for (const auto& region : regions) actualTextPixels(pixels,region,name);
+            if (scene==0 && !custom) {
                 // 反向回归：抹去按钮内部文字但保留边框，采样器必须拒绝，不能靠放宽RGB或边框通过。
                 auto missingText=pixels;
                 const auto r=regions.front().bounds;
@@ -331,26 +389,27 @@ void verifyControls(const std::filesystem::path& directory, bool baseline)
                     for(int channel=0;channel<3;++channel) missingText[i+channel]=pixels[sample+channel];
                 }
                 bool rejected=false;
-                try { actualContrast(missingText,regions.front(),name); }
+                try { actualTextPixels(missingText,regions.front(),name); }
                 catch(const std::runtime_error& error) {
                     rejected=std::string(error.what()).find("control=Acquire signal")!=std::string::npos;
                 }
                 check(rejected,"control sampler accepted missing text");
                 // 单一已确认核心不达标也必须失败，其他大量达标核心不能掩盖它。
                 ImVec2 corePosition;
-                actualContrast(pixels,regions.front(),name,&corePosition);
+                actualTextPixels(pixels,regions.front(),name,&corePosition);
                 auto oneBadCore=pixels;
                 const auto bad=((height-1-int(corePosition.y))*width+int(corePosition.x))*3;
                 for(int channel=0;channel<3;++channel) oneBadCore[bad+channel]=pixels[sample+channel];
                 rejected=false;
-                try { actualContrast(oneBadCore,regions.front(),name); }
+                try { actualTextPixels(oneBadCore,regions.front(),name); }
                 catch(const std::runtime_error&) { rejected=true; }
                 check(rejected,"control sampler accepted one unreadable core among readable cores");
             }
             if (scene==2) check(activeButton,"pressed button state missing");
             if (scene==3) {
                 check(activeInput,"keyboard focused input state missing");
-                check(matchingPixels(pixels,ImGui::GetStyleColorVec4(ImGuiCol_InputTextCursor),input.Min,
+                const auto cursor=tests::theme::over(ImGui::GetStyleColorVec4(ImGuiCol_InputTextCursor),t.panelBackgroundAlt);
+                check(custom && custom->ui.textStrong.w==0 ? true : matchingPixels(pixels,cursor,input.Min,
                     ImVec2(input.Min.x+290,input.Max.y))>5,
                       "input cursor/text pixels missing");
             }
@@ -363,10 +422,10 @@ void verifyControls(const std::filesystem::path& directory, bool baseline)
                                  std::abs(int(pixels[a+1])-int(pixels[b+1]))>=20 ||
                                  std::abs(int(pixels[a+2])-int(pixels[b+2]))>=20;
                 }
-                check(different>30,"enabled/disabled buttons visually identical");
+                if (!custom) check(different>30,"内置款启用/禁用状态不可辨");
                 const auto border=ImGui::GetStyleColorVec4(ImGuiCol_Border);
                 check(matchingPixels(pixels,border,input.Min,input.Max)>10,"necessary input boundary pixels missing");
-                if (theme != config::GuiTheme::DebugHighContrast) {
+                if (!custom) {
                     // 仅采样边缘带，避免把正文或状态填充误认为常驻边框。
                     check(matchingPixels(pixels,border,button.Min,ImVec2(button.Max.x,button.Min.y+2))==0,
                           "ordinary button retained permanent contrast border");
@@ -377,16 +436,7 @@ void verifyControls(const std::filesystem::path& directory, bool baseline)
                     check(matchingPixels(pixels,ImGui::GetStyleColorVec4(ImGuiCol_NavCursor),
                         ImVec2(toolbar.Min.x-4,toolbar.Min.y-4),ImVec2(toolbar.Max.x+4,toolbar.Max.y+4))>10,
                           "toolbar keyboard focus pixels missing");
-                const int x=int(input.Min.x+12), y=int(input.Min.y+4);
-                const auto i=((height-1-y)*width+x)*3;
-                const plot::OverviewColor bg{pixels[i]/255.,pixels[i+1]/255.,pixels[i+2]/255.,1};
-                check(plot::overviewContrast(ui::cursorOverviewColor(border),bg)>=3,"control border/background contrast");
-                if (theme == config::GuiTheme::ProfessionalDark) {
-                    check(plot::overviewLuminance(ui::cursorOverviewColor(border)) <
-                          plot::overviewLuminance(ui::cursorOverviewColor(t.textMuted)) * .75,
-                          "professional dark border regressed to bright text color");
-                    check(std::abs(border.x-border.z)<.04F,"professional dark control border is not neutral grey");
-                }
+                tests::theme::color(border,t.controlBorder,"输入边框必须独立于正文与浮层边框");
             }
             std::cout<<name<<" per-control pixels verified\n";
         }
@@ -458,7 +508,8 @@ void verifyReadoutLabels(const std::filesystem::path& directory)
         }
         const auto pixels=capture(directory,std::string(config::guiThemeId(theme))+"-readout-labels");
         const auto expected=wave.view.cursorColors.labelText;
-        const double threshold=theme==config::GuiTheme::DebugHighContrast?12:4.5;
+        tests::theme::color(ui::cursorImVec(expected),ui::activeUiStyleTokens().textStrong,"读数正文不再校色");
+        tests::theme::color(ui::cursorImVec(wave.view.cursorColors.labelBackground),ui::activeUiStyleTokens().panelBackgroundAlt,"读数背景保留 RGBA");
         check(labels.size()==4,"readout label geometry missing");
         std::size_t labelIndex=0;
         const std::array<unsigned,4> identityColors{0xCCBB44,0xBBBBBB,0x009E73,0xD55E00};
@@ -471,12 +522,15 @@ void verifyReadoutLabels(const std::filesystem::path& directory)
                 return plot::OverviewColor{pixels[i]/255.,pixels[i+1]/255.,pixels[i+2]/255.,1};
             };
             const auto bg=sample(int(bounds.Min.x+4),int(bounds.Min.y+4));
+            const auto wantedBg=wave.view.cursorColors.labelBackground;
+            check(std::abs(bg.r-wantedBg.r)<2.1/255 && std::abs(bg.g-wantedBg.g)<2.1/255 &&
+                  std::abs(bg.b-wantedBg.b)<2.1/255,"读数实际背景色错误");
             std::size_t core=0;
             for (int y=int(bounds.Min.y+4);y<int(bounds.Max.y-4);++y)
                 for (int x=int(bounds.Min.x+6);x<int(bounds.Max.x-6);++x) {
                     const auto p=sample(x,y);
                     if (std::abs(p.r-expected.r)<2.1/255 && std::abs(p.g-expected.g)<2.1/255 && std::abs(p.b-expected.b)<2.1/255) {
-                        check(plot::overviewContrast(p,bg)>=threshold,"readout label actual text contrast"); ++core;
+                        ++core;
                     }
                 }
             check(core>10,"readout label expected text pixels missing");
@@ -521,10 +575,6 @@ void verify(const std::filesystem::path& directory)
         ImGui::SetNextWindowPos(ImVec2(0,0));
         ImGui::SetNextWindowSize(ImVec2(width,height));
         ImGui::Begin("Theme verification", nullptr, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoResize);
-        ImGui::TextUnformatted("Signal acquisition 0123456789");
-        textMin = ImGui::GetItemRectMin(); textMax = ImGui::GetItemRectMax();
-        ImGui::TextDisabled("Frequency / Cursor / Measurement");
-        mutedMin = ImGui::GetItemRectMin(); mutedMax = ImGui::GetItemRectMax();
         auto frame = ui::prepareWaveFrame(wave, width-40);
         ImGui::BeginChild("overview", ImVec2(0,100));
         ui::drawOverviewWindow(wave, frame.fullSnapshot->config, *frame.fullSnapshot, *frame.overviewDisplayData,
@@ -533,6 +583,19 @@ void verify(const std::filesystem::path& directory)
         if (view.fft.enabled) ui::drawWaveFftPlot(wave, frame, true, true);
         else ui::drawOscilloscopePlot(wave, frame, {.drawMeasurementOverlay = true, .drawLegendOverlay = true}, nullptr);
         ImGui::End();
+        // 使用后绘制的独立窗口采样正文，避免 ImPlot 绘图通道覆盖宿主窗口中的字形。
+        ImGui::SetNextWindowPos({12.F, float(height-90)});
+        ImGui::SetNextWindowSize({420.F, 60.F});
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ui::activeUiStyleTokens().panelBackground);
+        ImGui::Begin("Theme text color verification", nullptr,
+                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoInputs);
+        ImGui::TextUnformatted("Signal acquisition 0123456789");
+        textMin = ImGui::GetItemRectMin(); textMax = ImGui::GetItemRectMax();
+        ImGui::TextDisabled("Frequency / Cursor / Measurement");
+        mutedMin = ImGui::GetItemRectMin(); mutedMax = ImGui::GetItemRectMax();
+        ImGui::End();
+        ImGui::PopStyleColor();
         ImGui::Render();
         glViewport(0,0,width,height);
         const auto bg = ui::activeUiStyleTokens().appBackground;
@@ -571,10 +634,36 @@ void verify(const std::filesystem::path& directory)
                 (themePass==4 ? "-return" : "");
             const auto pixels = capture(directory, name);
             const auto& ui = ui::activeUiStyleTokens();
-            check(readableTextPixels(pixels, textMin, textMax,
-                theme == config::GuiTheme::DebugHighContrast ? 12 : 4.5) > 20, "primary text pixel contrast");
-            check(readableTextPixels(pixels, mutedMin, mutedMax,
-                theme == config::GuiTheme::DebugHighContrast ? 7 : 4.5) > 20, "secondary text pixel contrast");
+            ImGuiWindow* textWindow=nullptr;
+            for(auto* window:GImGui->Windows)
+                if(window->Active && std::string_view(window->Name).find("Theme text color verification")!=std::string_view::npos)
+                    textWindow=window;
+            if(textWindow==nullptr) throw std::runtime_error("text verification window missing; scene="+name);
+            verifyOpaqueTextCore(pixels,ImRect(textMin,textMax),ui.textStrong,textWindow->DrawList,name+" strong");
+            verifyOpaqueTextCore(pixels,ImRect(mutedMin,mutedMax),ui.textMuted,textWindow->DrawList,name+" muted");
+            if(themePass==1 && scenario==0) {
+                auto rejectMutation=[&](std::vector<unsigned char> candidate, const char* label) {
+                    bool rejected=false;
+                    try { verifyOpaqueTextCore(candidate,ImRect(textMin,textMax),ui.textStrong,textWindow->DrawList,name+label); }
+                    catch(const std::runtime_error&) { rejected=true; }
+                    if(!rejected) throw std::runtime_error(std::string("text core sampler accepted ")+label+" mutation");
+                };
+                auto missing=pixels;
+                for(int y=int(textMin.y);y<int(textMax.y);++y) for(int x=int(textMin.x);x<int(textMax.x);++x) {
+                    const auto i=((height-1-y)*width+x)*3;
+                    const auto bg=ui.panelBackground;
+                    missing[i]=static_cast<unsigned char>(std::lround(bg.x*255));
+                    missing[i+1]=static_cast<unsigned char>(std::lround(bg.y*255));
+                    missing[i+2]=static_cast<unsigned char>(std::lround(bg.z*255));
+                }
+                rejectMutation(std::move(missing),"missing glyph");
+                auto wrongColor=pixels;
+                for(int y=int(textMin.y);y<int(textMax.y);++y) for(int x=int(textMin.x);x<int(textMax.x);++x) {
+                    const auto i=((height-1-y)*width+x)*3;
+                    for(int c=0;c<3;++c) wrongColor[i+c]=static_cast<unsigned char>(255-wrongColor[i+c]);
+                }
+                rejectMutation(std::move(wrongColor),"wrong RGB");
+            }
             check(matchingPixels(pixels, ui.genericPlotBackground, {0,160}, {width,height}) > 1000, "plot background pixels missing");
             if (scenario >= 4) {
                 check(!view.autoFollowLatest, "theme change unfroze viewport");
@@ -597,6 +686,8 @@ void verify(const std::filesystem::path& directory)
         }
     }
 }
+
+#include "theme_render_scenarios.hpp"
 }
 
 int main(int argc, char** argv)
@@ -626,7 +717,18 @@ int main(int argc, char** argv)
         if (!controlsOnly) verifyReadoutLabels(directory);
         if (!controlsOnly) verifyBusinessDocks(directory);
         verifyControls(controlsOnly ? std::filesystem::path{} : directory,false);
-        if (!controlsOnly) verifyControls(directory,true);
+        if (!controlsOnly) {
+            auto translucent=ui::uiThemeDefinition(config::GuiTheme::ProfessionalDark);
+            translucent.id="custom-low-contrast-alpha";
+            translucent.ui.textStrong={.30F,.31F,.32F,.35F};
+            translucent.ui.textMuted=translucent.ui.textStrong;
+            verifyControls(directory,false,&translucent);
+            verifyControls(directory,true);
+            theme_scenarios::transparentSurfaces(directory);
+            theme_scenarios::docking(directory);
+            theme_scenarios::drawers(directory);
+            theme_scenarios::legend(directory);
+        }
     }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; status = 1; }
     ImGui_ImplOpenGL3_Shutdown();

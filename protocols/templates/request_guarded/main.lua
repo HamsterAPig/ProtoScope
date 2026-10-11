@@ -33,8 +33,7 @@ local function reset_rx_buffer()
 end
 
 local function append_rx_bytes(bytes)
-    local chunk = bytes:bytes(#bytes)
-    for _, value in ipairs(chunk) do
+    for _, value in ipairs(bytes) do
         rx_buffer[#rx_buffer + 1] = value
     end
     if #rx_buffer > 256 then

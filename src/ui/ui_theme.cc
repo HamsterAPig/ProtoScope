@@ -19,24 +19,21 @@ namespace {
     }
 
     plot::OverviewColor asColor(ImVec4 c) { return {c.x, c.y, c.z, c.w}; }
-    ImVec4 asVec(plot::OverviewColor c) { return {float(c.r), float(c.g), float(c.b), float(c.a)}; }
 
-    // UI 强调与填充单独验收；wave.correct_contrast 只控制波形/游标的显示修正。
-    ImVec4 surfaceTint(const UiThemeDefinition& d, ImVec4 accent, float alpha)
+    // 普通状态只做确定性叠色，不按文字对比度搜索；保留自定义透明表面的 alpha。
+    ImVec4 surfaceTint(const UiThemeDefinition& d, ImVec4 accent, float strength)
     {
-        const auto base = plot::compositeOverviewColor(asColor(d.ui.panelBackgroundAlt), asColor(d.ui.panelBackground));
-        const bool high = d.base == "debug_high_contrast";
-        // 为>=90%覆盖字体核心保留滤波和8位量化余量，不能只让少数近乎不透明核心达标。
-        auto coreText = asColor(d.ui.textStrong);
-        coreText.a *= .9;
-        for (;;) {
-            accent.w = alpha;
-            const auto mixed = plot::compositeOverviewColor(asColor(accent), base);
-            if (alpha <= 0 || (plot::overviewContrast(plot::compositeOverviewColor(coreText, mixed), mixed) >= (high ? 12.2 : 4.7) &&
-                plot::overviewContrast(plot::compositeOverviewColor(asColor(d.ui.textMuted), mixed), mixed) >= (high ? 7 : 4.5)))
-                return asVec(mixed);
-            alpha = (std::max)(0.F, alpha - .005F);
-        }
+        const auto composite = [](ImVec4 front, ImVec4 back) {
+            const float remaining = back.w * (1.F - front.w);
+            const float alpha = front.w + remaining;
+            if (alpha <= 0.F) return ImVec4(0, 0, 0, 0);
+            return ImVec4((front.x * front.w + back.x * remaining) / alpha,
+                          (front.y * front.w + back.y * remaining) / alpha,
+                          (front.z * front.w + back.z * remaining) / alpha, alpha);
+        };
+        const auto base = composite(d.ui.panelBackgroundAlt, d.ui.panelBackground);
+        accent.w *= strength;
+        return composite(accent, base);
     }
 
     void finishPreset(UiThemeDefinition& d, bool light)
@@ -61,9 +58,6 @@ namespace {
                                  rgb8(194, 43, 62), rgb8(0, 120, 117), rgb8(181, 79, 0), rgb8(50, 85, 167)}
             : std::vector<ImVec4>{rgb8(61, 222, 133), rgb8(57, 195, 246), rgb8(250, 197, 83), rgb8(190, 135, 250),
                                  rgb8(250, 112, 125), rgb8(65, 218, 200), rgb8(255, 156, 72), rgb8(126, 179, 255)};
-        if (d.base == "debug_high_contrast")
-            w.channelPalette = {rgb8(80, 255, 145), rgb8(72, 219, 255), rgb8(255, 218, 84), rgb8(213, 155, 255),
-                                rgb8(255, 132, 140), rgb8(80, 247, 219), rgb8(255, 176, 82), rgb8(151, 201, 255)};
         w.cursorPalette = light
             ? std::vector<ImVec4>{rgb8(137, 91, 0), rgb8(0, 99, 145), rgb8(44, 91, 153), rgb8(177, 48, 71),
                                  rgb8(22, 113, 54), rgb8(153, 41, 106), rgb8(79, 91, 108)}
@@ -75,19 +69,30 @@ namespace {
     {
         static const UiThemeDefinition definition = [] {
             UiThemeDefinition d;
-            // 中性炭灰避免大片蓝黑，正文与身份色保持可读但不再接近发光白。
-            d.ui.accent = rgb8(112, 166, 170);
-            d.ui.accentMuted = rgb8(112, 166, 170, .16F);
+            d.name = "石墨青绿";
+            // 石墨灰按宿主、内容、浮层分层，青绿仅用于操作与选中身份。
+            d.ui.accent = rgb8(85, 166, 155);
+            d.ui.accentMuted = rgb8(85, 166, 155, .16F);
             d.ui.success = rgb8(116, 180, 144);
             d.ui.warning = rgb8(202, 174, 112);
             d.ui.danger = rgb8(210, 139, 143);
-            d.ui.textStrong = rgb8(216, 219, 219);
-            d.ui.appBackground = rgb8(24, 25, 26);
-            d.ui.panelBackground = rgb8(30, 32, 33);
-            d.ui.panelBackgroundAlt = rgb8(38, 40, 41);
-            d.ui.panelBorder = rgb8(62, 66, 68);
-            d.ui.textMuted = rgb8(164, 170, 171);
-            d.ui.genericPlotBackground = d.wave.plotBackground = rgb8(20, 22, 23);
+            d.ui.textStrong = rgb8(216, 223, 225);
+            d.ui.appBackground = rgb8(25, 29, 32);
+            d.ui.panelBackground = rgb8(33, 38, 42);
+            d.ui.panelBackgroundAlt = rgb8(42, 48, 53);
+            d.ui.panelBorder = rgb8(65, 75, 81);
+            d.ui.controlBorder = rgb8(80, 92, 100);
+            d.ui.floatingBackground = rgb8(43, 50, 56);
+            d.ui.floatingBorder = rgb8(95, 109, 118);
+            d.ui.tabBackground = rgb8(36, 42, 46);
+            d.ui.tabHovered = rgb8(51, 71, 72);
+            d.ui.tabSelected = rgb8(43, 70, 68);
+            d.ui.tabDimmed = rgb8(29, 34, 38);
+            d.ui.tabDimmedSelected = rgb8(45, 55, 59);
+            d.ui.tabSelectedOverline = d.ui.accent;
+            d.ui.tabDimmedSelectedOverline = rgb8(102, 130, 130);
+            d.ui.textMuted = rgb8(158, 170, 177);
+            d.ui.genericPlotBackground = d.wave.plotBackground = rgb8(23, 28, 31);
             d.wave.gridMajor = rgb8(112, 118, 120, .16F);
             d.wave.gridMinorTick = rgb8(124, 130, 132, .24F);
             d.wave.gridCenter = rgb8(140, 148, 150, .28F);
@@ -106,30 +111,39 @@ namespace {
         static const UiThemeDefinition definition = [] {
             auto d = professionalDarkTheme();
             d.theme = config::GuiTheme::DebugHighContrast;
-            d.ui.accent = rgb8(46, 184, 250);
-            d.ui.accentMuted = rgb8(46, 184, 250, .24F);
-            // 高对比预设仍保留原来的高亮状态色，不继承低眩光版本的降饱和处理。
-            d.ui.success = rgb8(67, 202, 146);
-            d.ui.warning = rgb8(242, 192, 86);
-            d.ui.danger = rgb8(250, 127, 137);
-            d.ui.textStrong = rgb8(245, 250, 255);
+            d.id = d.base = "debug_high_contrast";
+            d.name = "石墨琥珀";
+            // 历史配置 ID 保留，外观不再承载高对比特判。
+            d.ui.accent = rgb8(213, 174, 99);
+            d.ui.accentMuted = rgb8(213, 174, 99, .16F);
+            d.ui.textStrong = rgb8(224, 224, 221);
             d.ui.windowRounding = 4.F;
             d.ui.frameRounding = d.ui.grabRounding = d.ui.tabRounding = 3.F;
             d.wave.gridMajorWidth = d.wave.gridMinorTickWidth = 1.2F;
             d.wave.gridCenterWidth = 1.8F;
             d.wave.gridMinorTickHalfLength = 2.5F;
-            d.id = d.base = "debug_high_contrast";
-            d.name = "仪器深黑（高对比）";
-            d.ui.appBackground = rgb8(5, 8, 12);
-            d.ui.panelBackground = rgb8(10, 15, 21);
-            d.ui.panelBackgroundAlt = rgb8(18, 26, 35);
-            d.ui.panelBorder = rgb8(58, 72, 87);
-            d.ui.textMuted = rgb8(200, 215, 230);
-            d.ui.genericPlotBackground = d.wave.plotBackground = rgb8(2, 5, 9);
-            d.wave.gridMajor = rgb8(103, 123, 145, .28F);
-            d.wave.gridMinorTick = rgb8(157, 179, 200, .42F);
-            d.wave.gridCenter = rgb8(188, 211, 231, .48F);
+            d.ui.appBackground = rgb8(29, 31, 33);
+            d.ui.panelBackground = rgb8(37, 40, 43);
+            d.ui.panelBackgroundAlt = rgb8(47, 51, 55);
+            d.ui.panelBorder = rgb8(70, 75, 80);
+            d.ui.controlBorder = rgb8(88, 94, 100);
+            d.ui.floatingBackground = rgb8(48, 53, 58);
+            d.ui.floatingBorder = rgb8(106, 115, 122);
+            d.ui.tabBackground = rgb8(40, 44, 48);
+            d.ui.tabHovered = rgb8(77, 70, 55);
+            d.ui.tabSelected = rgb8(79, 67, 45);
+            d.ui.tabDimmed = rgb8(33, 36, 39);
+            d.ui.tabDimmedSelected = rgb8(59, 57, 51);
+            d.ui.tabSelectedOverline = d.ui.accent;
+            d.ui.tabDimmedSelectedOverline = rgb8(151, 136, 105);
+            d.ui.textMuted = rgb8(168, 174, 177);
+            d.ui.genericPlotBackground = d.wave.plotBackground = rgb8(26, 30, 33);
+            d.wave.gridMajor = rgb8(120, 126, 130, .16F);
+            d.wave.gridMinorTick = rgb8(132, 138, 142, .24F);
+            d.wave.gridCenter = rgb8(148, 156, 160, .28F);
             finishPreset(d, false);
+            d.wave.channelPalette = professionalDarkTheme().wave.channelPalette;
+            d.wave.cursorPalette = professionalDarkTheme().wave.cursorPalette;
             return d;
         }();
         return definition;
@@ -141,13 +155,23 @@ namespace {
             auto d = professionalDarkTheme();
             d.theme = config::GuiTheme::ProfessionalLight;
             d.id = d.base = "professional_light";
-            d.name = "专业浅色";
-            d.ui.appBackground = rgb8(241, 246, 252);
-            d.ui.panelBackground = rgb8(255, 255, 255);
-            d.ui.panelBackgroundAlt = rgb8(246, 249, 253);
-            d.ui.panelBorder = rgb8(200, 213, 227);
-            d.ui.accent = rgb8(16, 92, 182);
-            d.ui.accentMuted = rgb8(16, 92, 182, .12F);
+            d.name = "冷白青蓝";
+            d.ui.appBackground = rgb8(232, 239, 244);
+            d.ui.panelBackground = rgb8(247, 250, 252);
+            d.ui.panelBackgroundAlt = rgb8(235, 242, 246);
+            d.ui.panelBorder = rgb8(204, 216, 224);
+            d.ui.controlBorder = rgb8(177, 195, 207);
+            d.ui.floatingBackground = rgb8(239, 246, 250);
+            d.ui.floatingBorder = rgb8(149, 172, 188);
+            d.ui.accent = rgb8(39, 126, 146);
+            d.ui.accentMuted = rgb8(39, 126, 146, .12F);
+            d.ui.tabBackground = rgb8(227, 235, 241);
+            d.ui.tabHovered = rgb8(203, 225, 234);
+            d.ui.tabSelected = rgb8(207, 230, 238);
+            d.ui.tabDimmed = rgb8(235, 241, 245);
+            d.ui.tabDimmedSelected = rgb8(222, 233, 240);
+            d.ui.tabSelectedOverline = d.ui.accent;
+            d.ui.tabDimmedSelectedOverline = rgb8(117, 153, 170);
             d.ui.success = rgb8(22, 112, 60);
             d.ui.warning = rgb8(131, 85, 0);
             d.ui.danger = rgb8(178, 35, 48);
@@ -170,24 +194,7 @@ namespace {
     {
         const auto& tokens = definition.ui;
         const auto interaction = [&](float alpha) { return surfaceTint(definition, tokens.accent, alpha); };
-        // 专业深色的必要边界从装饰灰派生，不再把辅助文字铺成一圈亮框。
-        // 验收最亮的交互表面并保留量化余量；浅色/高对比沿用已有边界行为。
-        auto controlBorder = tokens.textMuted;
-        if (definition.id == "professional_dark") {
-            controlBorder = tokens.panelBorder;
-            const auto original = controlBorder;
-            const auto selectedBackground = interaction(.22F);
-            // UI 边界不能受 wave.correct_contrast 开关影响。
-            for (int step = 0; step <= 200; ++step) {
-                const float tint = step / 200.F;
-                controlBorder = ImVec4(std::lerp(original.x, 1.F, tint), std::lerp(original.y, 1.F, tint),
-                                       std::lerp(original.z, 1.F, tint), 1.F);
-                bool readable = true;
-                for (const auto background : {tokens.panelBackground, tokens.panelBackgroundAlt, selectedBackground})
-                    readable &= plot::overviewContrast(asColor(controlBorder), asColor(background)) >= 3.2;
-                if (readable) break;
-            }
-        }
+        const auto controlBorder = tokens.controlBorder;
         ImGuiStyle& style = ImGui::GetStyle();
         // 每次从同一基准重建样式，防止旧主题颜色或重复缩放残留。
         style = ImGuiStyle{};
@@ -206,18 +213,19 @@ namespace {
         style.CellPadding = ImVec2(8.0F, 6.0F);
         style.WindowBorderSize = 0.0F;
         style.ChildBorderSize = 0.0F;
-        // 原生 BeginDisabled 不自动使用 TextDisabled；业务经 beginDisabled 分离高对比正文/表面。
-        // 此alpha只定义基础状态淡化，不能独自保证滤波后正文核心12:1。
-        style.DisabledAlpha = definition.base == "debug_high_contrast" ? .86F : .72F;
+        // 原生 Popup 与内部控件共用 Border；不在 ColorEdit 外压入浮层边框污染输入。
+        style.PopupBorderSize = 1.0F;
+        style.DisabledAlpha = .72F;
         style.FrameBorderSize = 1.0F;
         style.TabBorderSize = 0.0F;
+        style.TabBarOverlineSize = 1.0F;
 
         ImVec4* colors = style.Colors;
         colors[ImGuiCol_Text] = tokens.textStrong;
         colors[ImGuiCol_TextDisabled] = tokens.textMuted;
         colors[ImGuiCol_WindowBg] = tokens.appBackground;
         colors[ImGuiCol_ChildBg] = tokens.panelBackground;
-        colors[ImGuiCol_PopupBg] = tokens.panelBackground;
+        colors[ImGuiCol_PopupBg] = tokens.floatingBackground;
         colors[ImGuiCol_Border] = controlBorder;
         colors[ImGuiCol_BorderShadow] = ImVec4(0, 0, 0, 0);
         colors[ImGuiCol_FrameBg] = tokens.panelBackgroundAlt;
@@ -239,17 +247,17 @@ namespace {
         colors[ImGuiCol_HeaderHovered] = interaction(.10F);
         colors[ImGuiCol_HeaderActive] = interaction(.16F);
         colors[ImGuiCol_Separator] = tokens.panelBorder;
-        colors[ImGuiCol_Tab] = tokens.panelBackgroundAlt;
-        colors[ImGuiCol_TabHovered] = interaction(.10F);
-        colors[ImGuiCol_TabActive] = interaction(.16F);
-        colors[ImGuiCol_TabUnfocused] = tokens.panelBackground;
-        colors[ImGuiCol_TabUnfocusedActive] = tokens.panelBackgroundAlt;
-        colors[ImGuiCol_DockingPreview] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.45F);
+        colors[ImGuiCol_Tab] = tokens.tabBackground;
+        colors[ImGuiCol_TabHovered] = tokens.tabHovered;
+        colors[ImGuiCol_TabSelected] = tokens.tabSelected;
+        colors[ImGuiCol_TabDimmed] = tokens.tabDimmed;
+        colors[ImGuiCol_TabDimmedSelected] = tokens.tabDimmedSelected;
+        colors[ImGuiCol_DockingPreview] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, tokens.accent.w * .45F);
         colors[ImGuiCol_DockingEmptyBg] = tokens.appBackground;
         colors[ImGuiCol_TableHeaderBg] = tokens.panelBackgroundAlt;
         colors[ImGuiCol_TableBorderStrong] = tokens.panelBorder;
         colors[ImGuiCol_TableBorderLight] =
-            ImVec4(tokens.panelBorder.x, tokens.panelBorder.y, tokens.panelBorder.z, 0.55F);
+            ImVec4(tokens.panelBorder.x, tokens.panelBorder.y, tokens.panelBorder.z, tokens.panelBorder.w * .55F);
         colors[ImGuiCol_TitleBgCollapsed] = tokens.panelBackground;
         colors[ImGuiCol_SeparatorHovered] = tokens.accent;
         colors[ImGuiCol_SeparatorActive] = tokens.accent;
@@ -260,13 +268,13 @@ namespace {
         colors[ImGuiCol_NavHighlight] = tokens.accent;
         colors[ImGuiCol_InputTextCursor] = tokens.textStrong;
         colors[ImGuiCol_CheckboxSelectedBg] = interaction(.10F);
-        colors[ImGuiCol_TabSelectedOverline] = tokens.accent;
-        colors[ImGuiCol_TabDimmedSelectedOverline] = controlBorder;
+        colors[ImGuiCol_TabSelectedOverline] = tokens.tabSelectedOverline;
+        colors[ImGuiCol_TabDimmedSelectedOverline] = tokens.tabDimmedSelectedOverline;
         colors[ImGuiCol_TextLink] = tokens.textStrong;
         colors[ImGuiCol_TreeLines] = tokens.panelBorder;
         colors[ImGuiCol_UnsavedMarker] = tokens.textStrong;
         colors[ImGuiCol_DragDropTarget] = tokens.accent;
-        colors[ImGuiCol_DragDropTargetBg] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, .10F);
+        colors[ImGuiCol_DragDropTargetBg] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, tokens.accent.w * .10F);
         colors[ImGuiCol_NavWindowingHighlight] = tokens.accent;
         colors[ImGuiCol_NavWindowingDimBg] = rgb8(3, 9, 18, .20F);
         colors[ImGuiCol_ModalWindowDimBg] = rgb8(3, 9, 18, .42F);
@@ -298,10 +306,10 @@ namespace {
         colors[ImPlotCol_TitleText] = tokens.textStrong;
         colors[ImPlotCol_InlayText] = tokens.textMuted;
         colors[ImPlotCol_AxisText] = tokens.textMuted;
-        colors[ImPlotCol_AxisGrid] = ImVec4(tokens.panelBorder.x, tokens.panelBorder.y, tokens.panelBorder.z, 0.28F);
+        colors[ImPlotCol_AxisGrid] = ImVec4(tokens.panelBorder.x, tokens.panelBorder.y, tokens.panelBorder.z, tokens.panelBorder.w * .28F);
         colors[ImPlotCol_AxisTick] = tokens.textMuted;
         colors[ImPlotCol_Crosshairs] = tokens.accent;
-        colors[ImPlotCol_Selection] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.35F);
+        colors[ImPlotCol_Selection] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, tokens.accent.w * .35F);
     }
 
 } // namespace
@@ -442,6 +450,8 @@ bool beginToolbarGroup(const char* id, const char* title, float minHeight)
     ImGui::PushStyleColor(ImGuiCol_Border, tokens.panelBorder);
     // 这里沿用 ImGui::BeginChild() 的原生语义：高度为 0 时占满剩余空间，调用方需要显式传入紧凑高度。
     const bool opened = ImGui::BeginChild("##group", ImVec2(0.0F, minHeight), true);
+    // 容器装饰已完成；内部输入与原生弹窗恢复控件边框。
+    ImGui::PopStyleColor(2);
     if (opened && hasTitle) {
         ImGui::PushStyleColor(ImGuiCol_Text, tokens.textMuted);
         ImGui::TextUnformatted(title);
@@ -455,28 +465,25 @@ void endToolbarGroup()
 {
     ImGui::EndChild();
     ImGui::PopStyleVar();
-    ImGui::PopStyleColor(2);
     ImGui::PopID();
 }
 
 bool drawUiButton(const char* label, const ImVec2& size, UiButtonRole role, bool active)
 {
-    const bool high = activeDefinition.base == "debug_high_contrast";
     const auto& tokens = activeDefinition.ui;
     const auto identity = role == UiButtonRole::Danger ? tokens.danger : tokens.accent;
-    // 高对比按继承基底保留原生边界；普通主题只在按钮作用域去框，不污染后续输入。
+    // 角色只改变按钮局部填充与边界，所有主题共用原生交互与焦点路径。
     const bool disabled = (GImGui->CurrentItemFlags & ImGuiItemFlags_Disabled) != 0;
     const auto normal = disabled ? ImGui::GetStyleColorVec4(ImGuiCol_Button)
         : role == UiButtonRole::Toolbar && !active ? ImVec4(0, 0, 0, 0)
         : role == UiButtonRole::Primary || active || role == UiButtonRole::Danger
             ? surfaceTint(activeDefinition, identity, .16F)
             : ImGui::GetStyleColorVec4(ImGuiCol_Button);
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, high ? ImGui::GetStyle().FrameBorderSize : 0.F);
-    ImGui::PushStyleColor(ImGuiCol_Button, high
-        ? ImGui::GetStyleColorVec4(active ? ImGuiCol_HeaderActive : ImGuiCol_Button) : normal);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, high || role == UiButtonRole::Secondary
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.F);
+    ImGui::PushStyleColor(ImGuiCol_Button, normal);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, role == UiButtonRole::Secondary
         ? ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered) : surfaceTint(activeDefinition, identity, .18F));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, high || role == UiButtonRole::Secondary
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, role == UiButtonRole::Secondary
         ? ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive) : surfaceTint(activeDefinition, identity, .22F));
     const bool clicked = ImGui::ButtonEx(label, size,
         ImGui::GetStyle().FramePadding.y == 0.F ? ImGuiButtonFlags_AlignTextBaseLine : ImGuiButtonFlags_None);
@@ -509,17 +516,15 @@ void drawHeaderBadge(const char* label, const ImVec4& color, bool filled)
 {
     const auto& tokens = defaultUiStyleTokens();
     const ImVec4 background = surfaceTint(activeDefinition, color, filled ? .20F : .08F);
-    const ImVec4 border = color;
     const ImVec4 textColor = tokens.textStrong;
     ImGui::PushStyleColor(ImGuiCol_Button, background);
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, background);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, background);
-    ImGui::PushStyleColor(ImGuiCol_Border, border);
     ImGui::PushStyleColor(ImGuiCol_Text, textColor);
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, activeDefinition.base == "debug_high_contrast" ? 1.F : 0.F);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.F);
     ImGui::Button(label, ImVec2(0.0F, 0.0F));
     ImGui::PopStyleVar();
-    ImGui::PopStyleColor(5);
+    ImGui::PopStyleColor(4);
 }
 
 bool drawDangerIconButton(const char* label, const char* tooltip)
@@ -550,26 +555,10 @@ bool drawGhostIconButton(const char* label, const char* tooltip)
 void beginDisabled(bool disabled)
 {
     ImGui::BeginDisabled(disabled);
-    const bool high = activeDefinition.base == "debug_high_contrast" &&
-                      (GImGui->CurrentItemFlags & ImGuiItemFlags_Disabled);
-    auto text = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-    auto button = ImGui::GetStyleColorVec4(ImGuiCol_Button);
-    auto frame = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
-    if (high) {
-        // ImGui 在 GetColorU32 时才乘全局 Alpha：正文保留 .98，边框仍为 .86，
-        // 并将可操作填充改为空黑表面。不能仅把所有元素的禁用alpha提高到接近1。
-        text.w = .98F / ImGui::GetStyle().DisabledAlpha;
-        button = frame = ImVec4(0,0,0,1);
-    }
-    // 固定压栈数量支持条件及嵌套禁用；EndDisabled 对称恢复原样式。
-    ImGui::PushStyleColor(ImGuiCol_Text,text);
-    ImGui::PushStyleColor(ImGuiCol_Button,button);
-    ImGui::PushStyleColor(ImGuiCol_FrameBg,frame);
 }
 
 void endDisabled()
 {
-    ImGui::PopStyleColor(3);
     ImGui::EndDisabled();
 }
 

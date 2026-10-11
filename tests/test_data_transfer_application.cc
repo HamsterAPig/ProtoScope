@@ -63,6 +63,150 @@ static void waitFor(app::Application& app, const std::function<bool()>& ready, b
     }
 }
 
+static void testImportedSourceLabelsAfterReplay()
+{
+    app::Application application;
+    require(application.initialize(), "来源名称回归初始化失败");
+    const auto protocol = std::filesystem::path(__FILE__).parent_path() / "fixtures/protocols/import_source_label";
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true), "来源名称 fixture 加载失败");
+    plot::RawCaptureFileData capture;
+    capture.events = {
+        {.type = plot::RawCaptureEventType::RxBytes, .bytes = {77}, .sequence = 1},
+        {.type = plot::RawCaptureEventType::RxBytes, .bytes = {11, 12, 13}, .sequence = 2},
+    };
+    tests::ScopedTempPath file(tests::makeUniqueTempFile("protoscope-import-source-label", ".psraw"));
+    std::string error;
+    require(plot::writeRawCaptureFile(file.path(), capture, error), error);
+    require(application.startDataImport(file.path(), error), error);
+    waitFor(application, [&] { return application.dataTransferStatus().awaitingConfirmation; });
+    application.confirmDataImport(true);
+    waitFor(application, [&] {
+        const auto status = application.dataTransferStatus();
+        return status.complete && !status.active;
+    });
+
+    const auto assertWave = [&](const std::string& stage) {
+        const auto& wave = application.docks().waveState();
+        const auto snapshot = wave.buffer.snapshot(-1e9, 1e9, false);
+        require(snapshot.channels.size() == 2 && wave.defaultChannelSpecs.size() == 2,
+                stage + ": 内部解析必须建立两个通道及默认规格");
+        const std::array<std::string, 2> labels{"raw-original", "raw-second"};
+        for (std::size_t i = 0; i < labels.size(); ++i) {
+            require(wave.buffer.channelSpec(i)->label == labels[i] &&
+                        snapshot.channels[i].label == labels[i] && wave.defaultChannelSpecs[i].label == labels[i],
+                    stage + ": Lua setup 不得改变导入的实际或默认名称（通道 " + std::to_string(i) + "）");
+            require(snapshot.channels[i].totalSamples == 3,
+                    stage + ": 内部重建必须保留三个样本，用户 setup/push 不得清空或追加");
+            for (std::size_t j = 0; j < 3; ++j) {
+                require(snapshot.channels[i].samples[j].time == static_cast<double>(j + 1) &&
+                            snapshot.channels[i].samples[j].value == static_cast<double>(11 + j + i * 100),
+                        stage + ": 内部解析样本值或时间不正确");
+            }
+        }
+    };
+    const auto tryLuaRename = [&](const std::string& stage) {
+        assertWave(stage + "配置前");
+        application.docks().scriptState().rows.clear();
+        application.updateControlValue("rename", true);
+        waitFor(application, [&] {
+            require(application.docks().luaState().lastError.empty(), application.docks().luaState().lastError);
+            const auto& rows = application.docks().scriptState().rows;
+            return std::any_of(rows.begin(), rows.end(), [](const auto& row) {
+                return row.message.find("source-label-rename-consumed") != std::string::npos;
+            });
+        });
+        // 日志与真实 setup 同批消费后再核验，不能靠保护标记代替行为断言。
+        assertWave(stage);
+    };
+    const auto waitCompleted = [&] {
+        waitFor(application, [&] {
+            const auto status = application.rawCaptureReplayStatus();
+            require(status.error.empty(), status.error);
+            return status.phase == app::Application::OfflineReplayPhase::Completed &&
+                   status.inputBacklog == 0 && status.workerBacklog == 0 && status.outputBacklog == 0;
+        });
+    };
+
+    tryLuaRename("首次重解析完成后");
+    // 前缀中没有 setup，仅真实 Lua push(2) 隐式建立位置 0；不能用提前 setup 掩盖原名遗漏。
+    require(application.seekRawCaptureReplay(1, error), error);
+    waitFor(application, [&] {
+        const auto status = application.rawCaptureReplayStatus();
+        require(status.error.empty(), status.error);
+        // inputBacklog 是尚未播放的时间轴事件数，不是 worker 待处理输入。
+        return status.phase == app::Application::OfflineReplayPhase::Paused && status.eventIndex == 1 &&
+               status.eventCount == 2 && status.inputBacklog == status.eventCount - status.eventIndex &&
+               status.workerBacklog == 0 && status.outputBacklog == 0;
+    });
+    {
+        const auto& wave = application.docks().waveState();
+        const auto prefix = wave.buffer.snapshot(-1e9, 1e9, false);
+        require(prefix.channels.size() == 2 && wave.defaultChannelSpecs.size() == 2,
+                "高索引前缀必须隐式建立两个位置及默认规格");
+        const std::array<std::string, 2> labels{"raw-original", "raw-second"};
+        for (std::size_t i = 0; i < labels.size(); ++i)
+            require(wave.buffer.channelSpec(i)->label == labels[i] && prefix.channels[i].label == labels[i] &&
+                        wave.defaultChannelSpecs[i].label == labels[i],
+                    "高索引前缀不得丢失冻结实际/default 原名（通道 " + std::to_string(i) + "）");
+        require(prefix.channels[0].totalSamples == 0 && prefix.channels[1].totalSamples == 1 &&
+                    prefix.channels[1].samples[0].time == 1 && prefix.channels[1].samples[0].value == 77,
+                "无 setup 高索引前缀应只在第二通道产生准确样本");
+    }
+    require(application.playRawCaptureReplay(error), error);
+    waitCompleted();
+    tryLuaRename("短前缀继续完成后");
+    for (int repeat = 0; repeat < 2; ++repeat) {
+        require(application.seekRawCaptureReplay(application.rawCaptureReplayStatus().eventCount, error), error);
+        waitCompleted();
+        tryLuaRename("seek 完成后");
+        require(application.playRawCaptureReplay(error), error);
+        waitCompleted();
+        tryLuaRename("完成后再次播放");
+    }
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true), "导入后的普通 reload 失败");
+    tryLuaRename("普通 reload 后");
+    plot::WaveCsvData invalid;
+    error.clear();
+    require(!application.importWaveCsvData(invalid, error), "零通道导入应被拒绝");
+    tryLuaRename("失败导入后");
+    error.clear();
+    require(application.startDataImport(file.path(), error), error);
+    waitFor(application, [&] { return application.dataTransferStatus().awaitingConfirmation; });
+    application.cancelDataTransfer();
+    waitFor(application, [&] { return !application.dataTransferStatus().active; });
+    tryLuaRename("确认前取消后");
+    require(application.startDataImport(file.path(), error), error);
+    waitFor(application, [&] { return application.dataTransferStatus().awaitingConfirmation; });
+    application.confirmDataImport(true);
+    waitFor(application, [&] {
+        const auto status = application.dataTransferStatus();
+        return status.complete && !status.active;
+    });
+    tryLuaRename("重新导入后");
+
+    // 仅明确切换到实时来源后，同一 Lua label 配置才恢复普通写入行为。
+    application.unloadRawCaptureReplayTimeline();
+    application.setTransportFactoryForTest([](auto) { return std::make_unique<WriteProbe>(); });
+    application.openTransport();
+    application.pumpOnce();
+    application.docks().scriptState().rows.clear();
+    application.updateControlValue("rename", true);
+    waitFor(application, [&] {
+        const auto& rows = application.docks().scriptState().rows;
+        return std::any_of(rows.begin(), rows.end(), [](const auto& row) {
+            return row.message.find("source-label-rename-consumed") != std::string::npos;
+        });
+    });
+    const auto& live = application.docks().waveState();
+    require(live.buffer.channelSpec(0)->label == "lua-renamed" && live.defaultChannelSpecs[0].label == "lua-renamed" &&
+                live.buffer.channelSpec(1)->label == "lua-second" && live.defaultChannelSpecs[1].label == "lua-second",
+            "显式实时切换后 Lua label 必须恢复写入实际及默认名称");
+    const auto snapshot = live.buffer.snapshot(-1e9, 1e9, false);
+    require(snapshot.channels[0].totalSamples == 1 && snapshot.channels[0].samples[0].value == 999,
+            "显式实时切换后 Lua push 必须恢复");
+    application.shutdown();
+}
+
 static void testImportedLuaBitToggle()
 {
     app::Application application;
@@ -94,7 +238,25 @@ static void testImportedLuaBitToggle()
     const auto originalConfig = wave.buffer.viewConfig();
     const auto originalEpoch = wave.buffer.historyEpoch();
     const auto originalEvents = wave.rawCapture.events.size();
-    for (const std::string id : {"enable", "disable", "enable", "omit"}) {
+    // 两组名称刻意不同，不能把实际名称整份回写默认基线。
+    for (std::size_t i = 0; i < 2; ++i)
+        wave.defaultChannelSpecs[i].label = "default-import-" + std::to_string(i);
+    std::array<plot::ChannelSpec, 2> expectedSpecs;
+    for (std::size_t i = 0; i < expectedSpecs.size(); ++i) {
+        expectedSpecs[i] = data.channels[i].spec;
+        expectedSpecs[i].label = data.channels[i].label;
+        expectedSpecs[i].unit = data.channels[i].unit;
+    }
+    const auto assertDisplaySpec = [](const auto& actual, const plot::ChannelSpec& expected,
+                                      const std::string& stage) {
+        require(actual.label == expected.label && actual.unit == expected.unit &&
+                    actual.ratio == expected.ratio && actual.scale == expected.scale && actual.offset == expected.offset &&
+                    actual.color == expected.color && actual.lineWidth == expected.lineWidth &&
+                    actual.bitDisplay == expected.bitDisplay,
+                stage + ": Lua 非名称显示规格或原名不正确");
+    };
+    // 连续相同 setup 也不能解除导入保护或新增通道；短数组必须保留尾部最新规格。
+    for (const std::string id : {"enable", "enable", "disable", "disable", "enable", "omit", "omit"}) {
         application.updateControlValue(id, true);
         waitFor(application, [&] {
             require(application.docks().luaState().lastError.empty(), application.docks().luaState().lastError);
@@ -105,22 +267,35 @@ static void testImportedLuaBitToggle()
         });
         // 日志与 setup 在同一输出批次应用；清除日志保证下一次同名控件等待的是新回调。
         application.docks().scriptState().rows.clear();
+        // 首先核验具体非名称字段，旧 enabled-only 实现必须在这里产生行为红测。
+        require(wave.buffer.channelSpec(0)->bitDisplay.firstBit == (id == "omit" ? 0U : 6U),
+                "导入Lua first_bit未生效");
         require(wave.buffer.channelSpec(0)->bitDisplay.enabled == (id == "enable"), "Lua Bit toggle not applied");
         require(wave.buffer.channelSpec(1)->bitDisplay.enabled, "unmentioned imported channel changed");
+        expectedSpecs[0] = id == "omit" ? plot::ChannelSpec{} : plot::ChannelSpec{
+            .unit = "changed", .ratio = 99, .scale = 88, .offset = 77,
+            .color = std::array<float, 4>{1, 0, 0, 1}, .lineWidth = 4.0F,
+            .bitDisplay = {.enabled = id == "enable", .firstBit = 6, .bitCount = 3,
+                           .yOffset = 9, .hoverReadout = true}};
+        expectedSpecs[0].label = data.channels[0].label;
+        if (id == "enable") {
+            expectedSpecs[1] = plot::ChannelSpec{
+                .label = data.channels[1].label, .unit = "flags", .ratio = 5, .scale = 6, .offset = -7,
+                .color = std::array<float, 4>{0, 1, 0, 1}, .lineWidth = 3.5F,
+                .bitDisplay = {.enabled = true, .firstBit = 11, .bitCount = 2,
+                               .yOffset = -3, .hoverReadout = false}};
+        }
         const auto snapshot = wave.buffer.snapshot(-1e9, 1e9, false);
-        require(snapshot.channels.size() == 2, "Lua changed imported channel count");
+        require(snapshot.channels.size() == 2 && wave.defaultChannelSpecs.size() == 2,
+                "Lua changed imported channel count");
+        require(snapshot.source == data.source, "Lua changed imported source");
         for (std::size_t i = 0; i < 2; ++i) {
-            auto expected = data.channels[i].spec;
-            expected.label = data.channels[i].label;
-            expected.unit = data.channels[i].unit;
-            expected.bitDisplay.enabled = i == 1 || id == "enable";
-            const auto actual = *wave.buffer.channelSpec(i);
-            require(actual.label == expected.label && actual.unit == expected.unit &&
-                    actual.ratio == expected.ratio && actual.scale == expected.scale && actual.offset == expected.offset &&
-                    actual.color == expected.color && actual.lineWidth == expected.lineWidth &&
-                    actual.bitDisplay == expected.bitDisplay, "Lua modified protected channel metadata");
-            require(wave.defaultChannelSpecs[i].bitDisplay == expected.bitDisplay &&
-                    wave.defaultChannelSpecs[i].label == expected.label, "default Bit spec not synchronized");
+            const auto& expected = expectedSpecs[i];
+            assertDisplaySpec(*wave.buffer.channelSpec(i), expected, "actual");
+            auto expectedDefault = expected;
+            expectedDefault.label = "default-import-" + std::to_string(i);
+            assertDisplaySpec(wave.defaultChannelSpecs[i], expectedDefault, "default");
+            assertDisplaySpec(snapshot.channels[i], expected, "snapshot");
             require(snapshot.channels[i].totalSamples == 3 && snapshot.channels[i].sampleIndexOffset == 42,
                     "Lua reset history or appended samples");
             for (std::size_t j = 0; j < 3; ++j)
@@ -131,8 +306,12 @@ static void testImportedLuaBitToggle()
         require(wave.buffer.historyEpoch() == originalEpoch && wave.buffer.importedLabelsReadOnly(),
                 "Lua reset imported history protection");
         require(wave.buffer.viewConfig().timeScale == originalConfig.timeScale &&
+                wave.buffer.viewConfig().timeUnit == originalConfig.timeUnit &&
                 wave.buffer.viewConfig().historyLimit == originalConfig.historyLimit &&
-                wave.buffer.viewConfig().verticalMin == originalConfig.verticalMin,
+                wave.buffer.viewConfig().verticalMin == originalConfig.verticalMin &&
+                wave.buffer.viewConfig().verticalMax == originalConfig.verticalMax &&
+                wave.buffer.viewConfig().verticalUnit == originalConfig.verticalUnit &&
+                wave.buffer.viewConfig().displayFormula == originalConfig.displayFormula,
                 "Lua changed imported view config");
         require(wave.view.initialized && !wave.view.defaultViewportPending &&
                 wave.view.viewMinTime == 1.5 && wave.view.viewMaxTime == 2.5, "Lua reset viewport");
@@ -141,12 +320,153 @@ static void testImportedLuaBitToggle()
                 "Lua changed imported time axis");
         require(wave.rawCapture.events.size() == originalEvents, "unapplied Lua setup recorded in raw capture");
     }
+
+    const auto sendControl = [&](const std::string& id) {
+        application.docks().scriptState().rows.clear();
+        application.updateControlValue(id, true);
+        waitFor(application, [&] {
+            const auto& rows = application.docks().scriptState().rows;
+            return std::any_of(rows.begin(), rows.end(), [&](const auto& row) {
+                return row.message.find("bit-toggle-" + id) != std::string::npos;
+            });
+        });
+    };
+    const auto assertProtectedData = [&] {
+        const auto snapshot = wave.buffer.snapshot(-1e9, 1e9, false);
+        require(snapshot.source == data.source && snapshot.channels.size() == 2 &&
+                    wave.defaultChannelSpecs.size() == 2 && wave.buffer.historyEpoch() == originalEpoch &&
+                    wave.buffer.importedLabelsReadOnly(), "显示覆盖或恢复改变了导入结构");
+        require(wave.buffer.viewConfig().timeScale == originalConfig.timeScale &&
+                    wave.buffer.viewConfig().timeUnit == originalConfig.timeUnit &&
+                    wave.buffer.viewConfig().historyLimit == originalConfig.historyLimit &&
+                    wave.buffer.viewConfig().verticalMin == originalConfig.verticalMin &&
+                    wave.buffer.viewConfig().verticalMax == originalConfig.verticalMax &&
+                    wave.buffer.viewConfig().verticalUnit == originalConfig.verticalUnit &&
+                    wave.buffer.viewConfig().displayFormula == originalConfig.displayFormula &&
+                    wave.rawCapture.events.size() == originalEvents,
+                "显示覆盖或恢复改变了视窗配置或原始事件");
+        for (std::size_t i = 0; i < 2; ++i) {
+            require(snapshot.channels[i].label == data.channels[i].label &&
+                        wave.buffer.channelSpec(i)->label == data.channels[i].label &&
+                        wave.defaultChannelSpecs[i].label == "default-import-" + std::to_string(i) &&
+                        snapshot.channels[i].totalSamples == 3 && snapshot.channels[i].sampleIndexOffset == 42,
+                    "显示覆盖或恢复改变了原名或样本数");
+            for (std::size_t j = 0; j < 3; ++j)
+                require(snapshot.channels[i].samples[j].time == data.channels[i].samples[j].time &&
+                            snapshot.channels[i].samples[j].value == data.channels[i].samples[j].value,
+                        "显示覆盖或恢复改变了准确样本");
+        }
+    };
+    wave.channelOverrides.resize(2);
+    auto& overrides = wave.channelOverrides[0];
+    overrides.labelOverridden = true;
+    overrides.label = "forbidden-user-label";
+    overrides.ratioOverridden = overrides.scaleOverridden = overrides.offsetOverridden = true;
+    overrides.colorOverridden = overrides.bitYOffsetOverridden = true;
+    overrides.ratio = 12;
+    overrides.scale = 13;
+    overrides.offset = 14;
+    overrides.color = std::array<float, 4>{0, 0, 1, 1};
+    overrides.bitYOffset = 15;
+    auto userSpec = *wave.buffer.channelSpec(0);
+    userSpec.ratio = 12;
+    userSpec.scale = 13;
+    userSpec.offset = 14;
+    userSpec.color = overrides.color;
+    userSpec.bitDisplay.yOffset = 15;
+    wave.buffer.setChannelSpec(0, userSpec);
+    // 多次 setup 更新 Lua 默认值，用户显示覆盖不丢失，也不能污染默认基线。
+    for (const std::string id : {"enable", "disable", "enable"}) {
+        sendControl(id);
+        auto expectedDefault = plot::ChannelSpec{
+            .label = "default-import-0", .unit = "changed", .ratio = 99, .scale = 88, .offset = 77,
+            .color = std::array<float, 4>{1, 0, 0, 1}, .lineWidth = 4.0F,
+            .bitDisplay = {.enabled = id == "enable", .firstBit = 6, .bitCount = 3,
+                           .yOffset = 9, .hoverReadout = true}};
+        auto expectedEffective = expectedDefault;
+        expectedEffective.label = data.channels[0].label;
+        expectedEffective.ratio = 12;
+        expectedEffective.scale = 13;
+        expectedEffective.offset = 14;
+        expectedEffective.color = std::array<float, 4>{0, 0, 1, 1};
+        expectedEffective.bitDisplay.yOffset = 15;
+        assertDisplaySpec(wave.defaultChannelSpecs[0], expectedDefault, "覆盖后的默认基线");
+        assertDisplaySpec(*wave.buffer.channelSpec(0), expectedEffective, "覆盖后的实际规格");
+        assertDisplaySpec(wave.buffer.snapshot(-1e9, 1e9, false).channels[0], expectedEffective,
+                          "覆盖后的快照规格");
+        assertProtectedData();
+    }
+    require(plot::resetOneChannelViewSettings(wave, 0), "单通道恢复默认失败");
+    auto restored = wave.defaultChannelSpecs[0];
+    restored.label = data.channels[0].label;
+    assertDisplaySpec(*wave.buffer.channelSpec(0), restored, "恢复最新 Lua 默认");
+    assertProtectedData();
+    sendControl("omit");
+    auto omitted = plot::ChannelSpec{};
+    omitted.label = data.channels[0].label;
+    assertDisplaySpec(*wave.buffer.channelSpec(0), omitted, "恢复后省略配置");
+    // 第一通道合法但第二通道越界时，不得应用任何部分配置。
+    const auto beforeInvalidDefaults = wave.defaultChannelSpecs;
+    const auto beforeInvalidActual = std::array{*wave.buffer.channelSpec(0), *wave.buffer.channelSpec(1)};
+    sendControl("invalid");
+    const auto& invalidRows = application.docks().scriptState().rows;
+    require(std::any_of(invalidRows.begin(), invalidRows.end(), [](const auto& row) {
+        return row.message.find("first_bit + bit_count") != std::string::npos;
+    }), "非法 Bit 范围没有明确错误");
+    for (std::size_t i = 0; i < 2; ++i) {
+        assertDisplaySpec(*wave.buffer.channelSpec(i), beforeInvalidActual[i], "非法配置后的实际规格");
+        assertDisplaySpec(wave.defaultChannelSpecs[i], beforeInvalidDefaults[i], "非法配置后的默认规格");
+    }
+    require(plot::resetAllChannelViewSettings(wave), "全部通道恢复默认失败");
+    assertProtectedData();
+    sendControl("enable");
+    restored = wave.defaultChannelSpecs[0];
+    restored.label = data.channels[0].label;
+    assertDisplaySpec(*wave.buffer.channelSpec(0), restored, "全部恢复后再次 setup");
+    assertProtectedData();
+    application.docks().scriptState().rows.clear();
+
+    // 清内存不等于切换来源，明确实时请求之前仍须保留导入身份。
+    application.resetWaveHistory();
+    require(wave.buffer.dataSource() == plot::WaveDataSource::Imported,
+            "手动清空不得隐式切换导入来源");
+    // 明确切换到实时来源后，同一 Lua setup 必须恢复普通通道名称和参数行为。
+    application.setTransportFactoryForTest([](auto) { return std::make_unique<WriteProbe>(); });
+    application.openTransport();
+    application.pumpOnce();
+    require(!wave.buffer.importedLabelsReadOnly(), "实时来源应解除导入名称保护");
+    application.updateControlValue("enable", true);
+    waitFor(application, [&] {
+        require(application.docks().luaState().lastError.empty(), application.docks().luaState().lastError);
+        const auto& rows = application.docks().scriptState().rows;
+        return std::any_of(rows.begin(), rows.end(), [](const auto& row) {
+            return row.message.find("bit-toggle-enable") != std::string::npos;
+        });
+    });
+    require(wave.buffer.channelCount() == 3 && wave.defaultChannelSpecs.size() == 3,
+            "非导入 setup 应恢复其声明的全部通道");
+    const std::array<std::string, 3> labels{"renamed", "second", "extra"};
+    for (std::size_t i = 0; i < labels.size(); ++i) {
+        require(wave.buffer.channelSpec(i)->label == labels[i] && wave.defaultChannelSpecs[i].label == labels[i],
+                "非导入 Lua label 应按原顺序写入实际与默认通道名称");
+    }
+    const auto liveSpec = *wave.buffer.channelSpec(0);
+    require(liveSpec.unit == "changed" && liveSpec.ratio == 99 && liveSpec.scale == 88 && liveSpec.offset == 77 &&
+                liveSpec.color == std::optional<std::array<float, 4>>{std::array<float, 4>{1, 0, 0, 1}} &&
+                liveSpec.lineWidth == 4.0F &&
+                liveSpec.bitDisplay.enabled && liveSpec.bitDisplay.firstBit == 6 && liveSpec.bitDisplay.bitCount == 3 &&
+                liveSpec.bitDisplay.yOffset == 9 && liveSpec.bitDisplay.hoverReadout,
+            "非导入 Lua 通道参数行为不应受名称保护影响");
+    const auto liveSnapshot = wave.buffer.snapshot(-1e9, 1e9, false);
+    require(liveSnapshot.channels[0].totalSamples == 1 && liveSnapshot.channels[0].samples[0].value == 999,
+            "非导入 Lua push 应仍可向原位置通道追加样本");
     application.shutdown();
 }
 
 int main(int argc, char**)
 {
     try {
+        testImportedSourceLabelsAfterReplay();
         testImportedLuaBitToggle();
         const bool benchmark = argc > 1;
         const std::size_t sampleCount = benchmark ? 1000000 : 25000;

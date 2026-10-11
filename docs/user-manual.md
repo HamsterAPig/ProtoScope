@@ -250,7 +250,7 @@ Lua 脚本通过 `proto.plot.setup()` 创建通道，再通过 `proto.plot.push(
 常用操作：
 
 - 点击波形工具栏最左侧的播放/暂停按钮会调用 `on_oscilloscope_toggle(ctx, current_running, target_running)`；纯 Lua 演示可直接调用 `proto.oscilloscope.set_running(target_running)` 并返回 `true`，真实设备建议先发送启停请求并返回 `false`，等 ACK 到达后再调用 `proto.oscilloscope.set_running(running)`。
-- Lua Dock 可以把 `history_limit` 做成控件，并通过重新调用 `proto.plot.setup({ history_limit = ... })` 调整历史保留；`reset_history = true` 可用于清空当前历史。
+- 实时来源下，Lua Dock 可以把 `history_limit` 做成控件，并通过重新调用 `proto.plot.setup({ channels = ..., history_limit = ... })` 调整历史保留；`reset_history = true` 可用于清空当前历史。导入来源下，普通 Lua setup 只按位置更新共有通道的非名称显示参数（包括完整 Bit 配置、颜色、线宽及显示变换），实际/default 波形原名保持不变；既有用户显示覆盖仍优先，恢复默认使用最新 Lua 非名称基线。导入时普通 setup 不清历史、不改变视窗或通道数，普通 push 也不会追加样本。
 - 通过通道卡片查看通道状态，设置激活通道。
 - 通道卡片悬浮提示和右键设置继续使用原始 Scale；展开图内通道图例后，Scale 列固定显示和编辑“实际值/格”，换算为当前 Y 显示范围除以 `8 × abs(Scale)`。Bit 通道不支持该列，仍使用 Bit Offset。
 - “精调”/“滚轮精细调节”开关按当前协议保存。开启后，Y 轴热区调整激活模拟通道及主视图滚轮缩放都使用连续 1% 步幅；关闭后恢复工程刻度和原主视图缩放速度。主图或主图坐标轴悬停时可按 `Shift+中键` 切换，概览滚轮不受影响。

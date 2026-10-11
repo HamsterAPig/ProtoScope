@@ -1222,6 +1222,36 @@ void test_script_crc_bridge()
     require(found, "CRC 桥接结果不正确");
 }
 
+void test_lua_contract_template_guarded_request_accepts_integer_array_and_completes_once()
+{
+    protoscope::scripting::ScriptHost host;
+    requireProtocolLoaded(host, templateProtocolDir("request_guarded").generic_string().c_str());
+
+    const auto ctx = sampleCtx();
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
+    host.onControl(ctx, "timeout_ms", 500);
+    host.onControl(ctx, "max_attempts", 2);
+    host.onControl(ctx, "send_guarded", true);
+    const auto requests = host.drainTxRequests();
+    require(requests.size() == 1U && requests.front().guarded &&
+                requests.front().payload == std::vector<std::uint8_t>({0xAA, 0x55, 0x01, 0x0D}),
+            "真实请求模板必须生成预期guarded请求帧");
+    host.setRequestAwaitingCompletion(true);
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, {0x99, 0xAA}});
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, {0x55, 0x01}});
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, {0x02, 0x0D}});
+    const auto completed = host.drainRequestDoneResults();
+    require(completed.size() == 1U && completed.front().ok,
+            "真实模板应将分片、带噪声integer[]响应转为一次成功request_done");
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, {0xAA, 0x55, 0x03, 0x0D}});
+    require(host.drainRequestDoneResults().empty(), "完成后的迟到帧不得再次request_done");
+    const auto logs = host.drainLogs();
+    require(std::none_of(logs.begin(), logs.end(), [](const auto& log) {
+                return log.message.find("on_bytes 执行失败") != std::string::npos;
+            }),
+            "integer[]响应处理不应因ProtoBuffer方法调用产生脚本错误");
+}
+
 void test_script_read_version_flow()
 {
     protoscope::scripting::ScriptHost host;
@@ -1277,6 +1307,369 @@ void test_script_read_version_split_flow()
         }
     }
     require(foundFrame, "分包收到 OK 后仍应产出 frame");
+}
+
+void test_lua_contract_order_crc_between_acks()
+{
+    const auto run = [](bool useBatch, bool includeError) {
+        const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-order-crc-regression"));
+        std::string script = R"lua(
+local state = "waiting"
+local function ack(ctx, frame)
+    proto.emit("order", "F:" .. frame.fields.value .. ":" .. state)
+    state = "ack"
+end
+function stream()
+    return {
+        buffer = {capacity = 256},
+        frames = {{name = "ack", header = {0xAA, 0x55},
+            len = {offset = 3, type = "u8", means = "payload", extra = 5},
+            crc = {type = "crc16_modbus", order = "lo_hi"},
+            fields = {{name = "value", type = "u8", offset = 4}}, on_frame = ack}},
+        on_error = function(ctx, err)
+            if err.code == "crc_mismatch" then
+                proto.emit("order", "E:" .. state)
+                state = "error"
+            end
+        end,
+)lua";
+        if (useBatch) {
+            script += R"lua(        on_batch = function(ctx, frames)
+            proto.emit("order", "B:" .. #frames)
+            for _, frame in ipairs(frames) do ack(ctx, frame) end
+        end,
+)lua";
+        }
+        script += "    }\nend\n";
+        writeMainLua(protocolDir.path(), script.c_str());
+
+        auto bytes = makeStreamFixtureFrame(17);
+        if (includeError) {
+            auto broken = makeStreamFixtureFrame(51);
+            broken.back() ^= 0xFFU;
+            appendBytes(bytes, broken);
+        }
+        appendBytes(bytes, makeStreamFixtureFrame(34));
+
+        protoscope::scripting::ScriptHost host;
+        require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "顺序回归协议应成功加载");
+        host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), bytes});
+
+        std::vector<std::string> events;
+        for (const auto& event : host.drainEvents()) {
+            if (event.name == "order") {
+                events.push_back(event.payload);
+            }
+        }
+        return events;
+    };
+
+    require(run(false, true) == std::vector<std::string>{"F:17:waiting", "E:ack", "F:34:error"},
+            "CRC错误应位于前后ACK之间，后续ACK不得提前应用前帧value/state");
+    require(run(true, true) ==
+                std::vector<std::string>{"B:1", "F:17:waiting", "E:ack", "B:1", "F:34:error"},
+            "on_batch必须只覆盖错误边界内连续成功帧，错误前后的ACK不得合批");
+    require(run(true, false) ==
+                std::vector<std::string>{"B:2", "F:17:waiting", "F:34:ack"},
+            "无错误连续ACK应保持一次on_batch，且不得重复回调on_frame");
+}
+
+namespace {
+
+// 固定 profile、无容量丢弃的单一 schema：只比较业务事件，不要求不同分块的批次数相同。
+std::vector<std::string> runLuaContractOrder(const std::vector<std::uint8_t>& bytes,
+                                           const std::vector<std::size_t>& chunkSizes, bool useBatch,
+                                           bool throwCallbacks = false)
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-lua-contract-order"));
+    std::string script = R"lua(
+local state = "waiting"
+local function ack(ctx, frame)
+    proto.emit("order", "F:" .. frame.fields.value .. ":" .. state)
+    state = "ack"
+end
+local function batch(ctx, frames)
+    proto.emit("batch_size", tostring(#frames))
+    for _, frame in ipairs(frames) do ack(ctx, frame) end
+end
+local function parse_error(ctx, err)
+    if err.code == "crc_mismatch" then
+        proto.emit("order", "E:" .. state)
+        state = "error"
+    end
+end
+function stream()
+    return {
+        buffer = { capacity = 256 },
+        frames = {{
+            name = "ack", header = {0xAA, 0x55},
+            len = {offset = 3, type = "u8", means = "payload", extra = 5},
+            crc = {type = "crc16_modbus", order = "lo_hi"},
+            fields = {{name = "value", type = "u8", offset = 4}},
+            on_frame = ack,
+        }},
+        on_error = parse_error,
+)lua";
+    if (useBatch) {
+        script += "        on_batch = batch,\n";
+    }
+    script += "    }\nend\n";
+    if (throwCallbacks) {
+        script += R"lua(
+local original_stream = stream
+function stream()
+    local schema = original_stream()
+    local original_batch = schema.on_batch
+    schema.on_batch = function(ctx, frames)
+        original_batch(ctx, frames)
+        error("batch ordinary error")
+    end
+    local original_error = schema.on_error
+    schema.on_error = function(ctx, err)
+        original_error(ctx, err)
+        error("parse ordinary error")
+    end
+    return schema
+end
+)lua";
+    }
+    writeMainLua(protocolDir.path(), script.c_str());
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "顺序回归协议应成功加载");
+    std::size_t offset = 0;
+    for (const auto size : chunkSizes) {
+        require(size > 0 && size <= bytes.size() - offset, "顺序回归分块必须在输入范围内");
+        const std::vector<std::uint8_t> chunk(bytes.begin() + offset, bytes.begin() + offset + size);
+        host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), chunk});
+        offset += size;
+    }
+    require(offset == bytes.size(), "顺序回归必须投递全部字节");
+    std::vector<std::string> result;
+    for (const auto& event : host.drainEvents()) {
+        if (event.name == "order" || event.name == "batch_size") {
+            result.push_back(event.name + "=" + event.payload);
+        }
+    }
+    return result;
+}
+
+void requireLuaContractOrderPartitions(bool useBatch)
+{
+    const auto first = makeStreamFixtureFrame(17);
+    const auto second = makeStreamFixtureFrame(34);
+    auto broken = makeStreamFixtureFrame(51);
+    broken.back() ^= 0xFFU;
+    // CRC 重同步还会报告噪声；此处只关注已定位的 CRC 与 ACK 业务事件。
+    const std::vector<std::vector<std::vector<std::uint8_t>>> cases{
+        {first, broken}, {broken, first}, {first, broken, second, broken, first},
+    };
+    const std::vector<std::vector<std::string>> expected{
+        {"order=F:17:waiting", "order=E:ack"},
+        {"order=E:waiting", "order=F:17:error"},
+        {"order=F:17:waiting", "order=E:ack", "order=F:34:error", "order=E:ack", "order=F:17:error"},
+    };
+    for (std::size_t index = 0; index < cases.size(); ++index) {
+        std::vector<std::uint8_t> bytes;
+        for (const auto& frame : cases[index]) {
+            appendBytes(bytes, frame);
+        }
+        auto check = [&](const std::vector<std::size_t>& sizes) {
+            auto events = runLuaContractOrder(bytes, sizes, useBatch);
+            std::erase_if(events, [](const std::string& event) { return event.starts_with("batch_size="); });
+            require(events == expected[index], "CRC 与 ACK 顺序及回调业务状态不应随输入分块改变");
+        };
+        check({bytes.size()});
+        for (std::size_t split = 1; split < bytes.size(); ++split) {
+            check({split, bytes.size() - split});
+        }
+        check(std::vector<std::size_t>(bytes.size(), 1));
+    }
+}
+
+} // namespace
+
+void test_lua_contract_order_frame_crc_partitions()
+{
+    requireLuaContractOrderPartitions(false);
+}
+
+void test_lua_contract_order_batch_crc_partitions()
+{
+    requireLuaContractOrderPartitions(true);
+}
+
+void test_lua_contract_order_batch_success_segments()
+{
+    auto bytes = makeStreamFixtureFrame(17);
+    appendBytes(bytes, makeStreamFixtureFrame(34));
+    require(runLuaContractOrder(bytes, {bytes.size()}, true) ==
+                std::vector<std::string>{"batch_size=2", "order=F:17:waiting", "order=F:34:ack"},
+            "无错误时应保留合批，且 on_batch 优先于 on_frame 不重复派发");
+    auto broken = makeStreamFixtureFrame(51);
+    broken.back() ^= 0xFFU;
+    appendBytes(bytes, broken);
+    appendBytes(bytes, makeStreamFixtureFrame(68));
+    require(runLuaContractOrder(bytes, {bytes.size()}, true) ==
+                std::vector<std::string>{"batch_size=2", "order=F:17:waiting", "order=F:34:ack",
+                                         "order=E:ack", "batch_size=1", "order=F:68:error"},
+            "错误应切断成功帧批次，不能把错误后的 ACK 提前应用");
+}
+
+void test_lua_contract_order_callback_errors_keep_priority()
+{
+    auto bytes = makeStreamFixtureFrame(17);
+    auto broken = makeStreamFixtureFrame(51);
+    broken.back() ^= 0xFFU;
+    appendBytes(bytes, broken);
+    appendBytes(bytes, makeStreamFixtureFrame(34));
+    require(runLuaContractOrder(bytes, {bytes.size()}, true, true) ==
+                std::vector<std::string>{"batch_size=1", "order=F:17:waiting", "order=E:ack",
+                                         "batch_size=1", "order=F:34:error"},
+            "普通 batch/error 异常应继续后续事件，batch 失败不能降级重复调用 on_frame");
+}
+
+void test_lua_contract_order_budget_fault_and_snapshot()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-order-budget"));
+    writeMainLua(protocolDir.path(), R"lua(
+function stream()
+    return {low_overhead = true, buffer = {capacity = 256}, frames = {{
+        name = "ack", header = {0xAA, 0x55},
+        len = {offset = 3, type = "u8", means = "payload", extra = 5},
+        crc = {type = "crc16_modbus", order = "lo_hi"},
+        fields = {{name = "value", type = "u8", offset = 4}},
+        on_frame = function() proto.emit("unexpected", "frame") end,
+    }},
+    on_batch = function()
+        proto.emit("entered", "batch")
+        while true do end
+    end,
+    on_error = function() proto.emit("unexpected", "error") end}
+end
+)lua");
+    protoscope::scripting::ScriptHost host;
+    host.setExecutionConfig({.loadTimeoutMs = 1000, .callbackTimeoutMs = 20});
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "预算顺序协议应加载");
+    auto bytes = makeStreamFixtureFrame(17);
+    auto broken = makeStreamFixtureFrame(51);
+    broken.back() ^= 0xFFU;
+    appendBytes(bytes, broken);
+    appendBytes(bytes, makeStreamFixtureFrame(34));
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), bytes});
+    require(host.executionFaulted(), "批回调超时应保留预算故障边界");
+    std::size_t entered = 0;
+    for (const auto& event : host.drainEvents()) {
+        require(event.name != "unexpected", "预算故障后不得继续错误/帧回调或降级 on_frame");
+        entered += event.name == "entered" ? 1U : 0U;
+    }
+    require(entered == 1, "预算故障后不得再次调用后续成功段");
+    const auto snapshot = host.lastStreamParseBatch();
+    require(snapshot.has_value() && snapshot->frames.empty() && !snapshot->errors.empty(),
+            "低开销快照应保留错误而移除成功帧");
+    require(snapshot->events.size() == snapshot->errors.size(), "低开销快照不应留下帧事件");
+    for (const auto& event : snapshot->events) {
+        require(event.kind == protoscope::scripting::StreamParseEventKind::Error && event.index < snapshot->errors.size(),
+                "低开销快照事件不能留下悬空帧索引");
+    }
+}
+
+void test_lua_contract_order_error_boundary_positions()
+{
+    const auto run = [](const std::vector<std::uint8_t>& bytes, std::size_t capacity) {
+        const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-order-error-boundaries"));
+        std::string script = R"lua(
+local state = "waiting"
+function stream()
+    return {
+        buffer = {capacity = )lua" + std::to_string(capacity) + R"lua(, overflow = "drop_oldest"},
+        frames = {{
+            name = "ack", header = {0xAA, 0x55},
+            len = {offset = 3, type = "u8", means = "payload", extra = 5},
+            crc = {type = "crc16_modbus", order = "lo_hi"},
+            fields = {{name = "value", type = "u8", offset = 4}},
+            on_frame = function(ctx, frame)
+                proto.emit("order", "F:" .. frame.fields.value .. ":" .. state)
+                state = "frame"
+            end,
+        }},
+        on_error = function(ctx, err)
+            proto.emit("order", "E:" .. err.code .. ":" .. state)
+            state = err.code
+        end,
+    }
+end
+)lua";
+        writeMainLua(protocolDir.path(), script.c_str());
+        protoscope::scripting::ScriptHost host;
+        require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "边界顺序协议应成功加载");
+        host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), bytes});
+        std::vector<std::string> events;
+        for (const auto& event : host.drainEvents()) {
+            if (event.name == "order") {
+                events.push_back(event.payload);
+            }
+        }
+        return events;
+    };
+
+    const auto first = makeStreamFixtureFrame(17);
+    auto withTrailingNoise = first;
+    appendBytes(withTrailingNoise, {0x10, 0x20, 0x30});
+    require(run(withTrailingNoise, 64) ==
+                std::vector<std::string>{"F:17:waiting", "E:noise_discarded:frame"},
+            "成功帧后的噪声错误必须保留在该帧之后，且观察到已更新的帧状态");
+
+    auto second = makeStreamFixtureFrame(34);
+    auto overflowInput = first;
+    appendBytes(overflowInput, second);
+    require(run(overflowInput, first.size()) ==
+                std::vector<std::string>{"E:overflow:waiting", "F:34:overflow"},
+            "追加阶段先产生的 Overflow 必须位于保留下来的帧之前");
+}
+
+void test_lua_contract_order_value_targets_per_frame()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-order-targets"));
+    writeMainLua(protocolDir.path(), R"lua(
+function ui()
+    return {{id = "safe", title = "Safe", controls = {
+        {type = "value_table", id = "regs", label = "寄存器",
+         rows = {{id = 0x3000, label = "当前值"}}}
+    }}}
+end
+function stream()
+    return {buffer = {capacity = 256}, frames = {{
+        name = "ack", header = {0xAA, 0x55},
+        len = {offset = 3, type = "u8", means = "payload", extra = 5},
+        crc = {type = "crc16_modbus", order = "lo_hi"},
+        fields = {{name = "value", type = "u8", offset = 4}},
+        value_targets = {controls = {{id = "regs", start_id = 0x3000, values_field = "value"}}},
+        on_frame = function(ctx, frame)
+            proto.emit("observed", tostring(frame.fields.value) .. ":" .. proto.get_control("regs")[1].value)
+        end,
+    }}}
+end
+)lua");
+    for (const bool merged : {true, false}) {
+        protoscope::scripting::ScriptHost host;
+        require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "值表顺序协议应加载");
+        auto bytes = makeStreamFixtureFrame(17);
+        if (merged) {
+            appendBytes(bytes, makeStreamFixtureFrame(34));
+        }
+        host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), bytes});
+        if (!merged) {
+            host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), makeStreamFixtureFrame(34)});
+        }
+        std::vector<std::string> observed;
+        for (const auto& event : host.drainEvents()) {
+            if (event.name == "observed") {
+                observed.push_back(event.payload);
+            }
+        }
+        require(observed == std::vector<std::string>{"17:17", "34:34"},
+                "每帧回调应读到本帧 value_targets，不能读到同批后续帧值");
+    }
 }
 
 void test_script_stream_schema_legacy_on_bytes_still_works()
@@ -1400,6 +1793,187 @@ void test_script_stream_schema_reports_overflow_and_crc_error()
     }
     require(foundOverflow, "buffer overflow 时应回调 stream.on_error");
     require(foundCrc, "CRC 校验失败时应回调 stream.on_error");
+}
+
+namespace {
+
+void requireLuaContractReloadFailure(const char* operation, bool declarationFailure)
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-reload-profile"));
+    const auto oldScript = readTextFile(fixtureProtocolDir("runtime_profile_stream") / "main.lua") + R"lua(
+function ui()
+    return {{id = "safe", title = "Safe", controls = {
+        {type = "input_text", id = "old_control", label = "旧控件", default = "old"}
+    }}}
+end
+function on_control(ctx, id, value) proto.emit("old_callback", id) end
+function on_open(ctx) proto.emit("old_pending", "preserved") end
+)lua";
+    writeMainLua(protocolDir.path(), oldScript.c_str());
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "旧 profile 协议应加载");
+    const auto generation = host.runtimeGeneration();
+    require(host.setControlValue("old_control", std::string("kept")), "旧控件值应可设置");
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{sampleCtx()});
+    // 保留旧 profile 事件待消费：失败候选不能追加事件，也不能通过清空队列掩盖泄漏。
+    sol::state lua;
+    lua.open_libraries(sol::lib::base, sol::lib::table);
+    auto profile = lua.create_table();
+    profile["frame"] = "dynamic_profile";
+    profile["length"] = 8;
+    auto map = lua.create_table();
+    map[1] = 2;
+    map[2] = 1;
+    profile["channel_map"] = map;
+    std::string error;
+    require(host.setStreamRuntimeProfile(sol::make_object(lua, profile), error), "旧 profile 应设置");
+    // 留下半帧，证明失败重载不清理旧 parser 当前缓冲。
+    std::vector<std::uint8_t> raw{0xFF, 0x26, 0, 17, 0, 34};
+    const auto crc = protoscope::protocol_utils::crc16Modbus(raw);
+    raw.push_back(static_cast<std::uint8_t>(crc >> 8U));
+    raw.push_back(static_cast<std::uint8_t>(crc & 0xFFU));
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{
+        sampleCtx(), std::vector<std::uint8_t>(raw.begin(), raw.begin() + 3)});
+    std::string candidate;
+    if (declarationFailure) {
+        candidate = "function stream()\n" + std::string(operation) + "\nerror('candidate declaration failed')\nend\n";
+    } else {
+        candidate = std::string(operation) + "\nerror('candidate top level failed')\n";
+    }
+    writeMainLua(protocolDir.path(), candidate.c_str());
+    require(!host.loadProtocolDirectory(protocolDir.path().generic_string()), "候选脚本应确定性加载失败");
+    require(host.runtimeGeneration() == generation, "失败候选不得更改旧代次");
+    const auto controls = host.controlStatesSnapshot();
+    require(controls.size() == 1 && controls[0].descriptor.id == "old_control" &&
+                std::get<std::string>(controls[0].value) == "kept", "旧控件及值应保留");
+    const auto profileEvents = host.drainStreamRuntimeProfileEvents();
+    require(profileEvents.size() == 1 && !profileEvents[0].cleared &&
+                profileEvents[0].frameName == "dynamic_profile" && profileEvents[0].length == 8 &&
+                profileEvents[0].channelMap == std::vector<std::size_t>{1, 0},
+            "旧待消费 profile 事件应完整保留且候选不能泄漏任何事件");
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{
+        sampleCtx(), std::vector<std::uint8_t>(raw.begin() + 3, raw.end())});
+    host.onControl(sampleCtx(), "old_control", std::string("next"), generation);
+    const auto events = host.drainEvents();
+    bool pending = false;
+    bool parsed = false;
+    bool callback = false;
+    for (const auto& event : events) {
+        pending = pending || (event.name == "old_pending" && event.payload == "preserved");
+        parsed = parsed || (event.name == "runtime_profile_frame" && event.payload == "dynamic_profile|map=2");
+        callback = callback || event.name == "old_callback";
+    }
+    require(pending && parsed && callback, "失败重载后旧宿主事件队列、半帧/profile 及回调应继续工作");
+}
+
+} // namespace
+
+void test_lua_contract_reload_failed_candidate_profiles()
+{
+    for (const bool declaration : {false, true}) {
+        requireLuaContractReloadFailure(
+            "proto.stream.set_profile({frame='dynamic_profile', length=6, channel_map={1}})", declaration);
+        requireLuaContractReloadFailure("proto.stream.clear_profile('dynamic_profile')", declaration);
+        requireLuaContractReloadFailure("proto.stream.clear_profile()", declaration);
+    }
+}
+
+void test_lua_contract_reload_loading_api_rejected_and_runtime_restored()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-reload-api"));
+    const auto schema = readTextFile(fixtureProtocolDir("runtime_profile_stream") / "main.lua");
+    protoscope::scripting::ScriptHost host;
+    writeMainLua(protocolDir.path(), schema.c_str());
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "基线协议应加载");
+    const auto generation = host.runtimeGeneration();
+    const auto candidate = R"lua(
+local function reject_loading_profile()
+    local ok, err = proto.stream.set_profile({frame="dynamic_profile", length=8})
+    assert(ok == false and type(err) == "string" and #err > 0, "loading set_profile must return false,error")
+    local cleared, clear_error = proto.stream.clear_profile()
+    assert(cleared == false and type(clear_error) == "string" and #clear_error > 0,
+           "loading clear_profile must return false,error")
+end
+reject_loading_profile()
+)lua" + schema + R"lua(
+local original_stream = stream
+function stream()
+    reject_loading_profile()
+    return original_stream()
+end
+function ui()
+    reject_loading_profile()
+    return {}
+end
+function on_open(ctx)
+    local ok, err = proto.stream.set_profile({frame="dynamic_profile", length=8})
+    assert(ok, err)
+    proto.emit("new_runtime", "ready")
+end
+)lua";
+    writeMainLua(protocolDir.path(), candidate.c_str());
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()),
+            "顶层/stream/ui 加载期 profile API 应拒绝但不妨碍候选成功提交");
+    require(host.runtimeGeneration() == generation + 1, "成功重载仅推进一个代次");
+    require(host.drainStreamRuntimeProfileEvents().empty(), "成功提交前也不得产生候选 profile 事件");
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{sampleCtx()});
+    const auto profiles = host.drainStreamRuntimeProfileEvents();
+    require(profiles.size() == 1 && !profiles[0].cleared && profiles[0].length == 8,
+            "成功提交后运行期 profile API 应恢复正常");
+    bool ready = false;
+    for (const auto& event : host.drainEvents()) {
+        ready = ready || (event.name == "new_runtime" && event.payload == "ready");
+    }
+    require(ready, "成功重载应使用新回调而非旧回调");
+}
+
+void test_lua_contract_reload_top_level_snapshot_apis_remain_available()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-reload-snapshot-apis"));
+    const char* script = R"lua(
+proto.plot.setup({channels = {{label = "candidate"}}})
+proto.status.set("candidate status")
+proto.set_timer("candidate timer", 0)
+function on_timer(ctx, name) proto.emit("timer", name) end
+)lua";
+    protoscope::scripting::ScriptHost host;
+    writeMainLua(protocolDir.path(), script);
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "顶层快照 API 不应被 profile 隔离禁用");
+    require(host.drainPlotSetups().size() == 1, "成功加载应保留顶层 plot.setup");
+    const auto status = host.drainStatusUpdates();
+    require(status.size() == 1 && status[0].text == "candidate status", "成功加载应保留顶层状态");
+    host.tick(nowMs() + 1000);
+    const auto events = host.drainEvents();
+    require(events.size() == 1 && events[0].name == "timer" && events[0].payload == "candidate timer",
+            "成功加载应保留顶层定时器");
+    const auto generation = host.runtimeGeneration();
+    const auto failing = std::string(script) + "\nerror('snapshot candidate failed')\n";
+    writeMainLua(protocolDir.path(), failing.c_str());
+    require(!host.loadProtocolDirectory(protocolDir.path().generic_string()), "失败候选应恢复快照");
+    require(host.runtimeGeneration() == generation && host.drainPlotSetups().empty() &&
+                host.drainStatusUpdates().empty(), "失败候选不得泄漏 plot/status 或代次变化");
+    host.tick(nowMs() + 1000);
+    require(host.drainEvents().empty(), "失败候选顶层定时器不得泄漏");
+}
+
+void test_lua_contract_schema_rejects_unrepresentable_runtime_profile_channel_map()
+{
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("runtime_profile_stream").generic_string()),
+            "runtime_profile_stream 协议应加载");
+
+    sol::state lua;
+    lua.open_libraries(sol::lib::base, sol::lib::table);
+    auto profile = lua.create_table();
+    profile["frame"] = "dynamic_profile";
+    profile["length"] = 8;
+    auto map = lua.create_table();
+    map[1] = 9223372036854775808.0;
+    profile["channel_map"] = map;
+
+    std::string error;
+    require(!host.setStreamRuntimeProfile(sol::make_object(lua, profile), error),
+            "导致目标索引超出Lua int64可逆表示范围的最大物理通道必须拒绝");
 }
 
 void test_script_stream_runtime_profile_set_and_clear()
@@ -1721,6 +2295,281 @@ void test_script_stream_schema_rejects_count_function()
     require(host.lastError().find("不再支持 function") != std::string::npos, "错误应明确旧 function 写法已废弃");
     require(host.lastError().find("count = { op = \"div\", field = \"byte_count\", by = 2 }") != std::string::npos,
             "错误应给出 count 表达式迁移示例");
+}
+
+void test_lua_contract_schema_rejects_duplicate_fields_and_reserved_compat_aliases()
+{
+    std::vector<std::string> failures;
+    const auto rejectsSchema = [&failures](const std::string& protocolName, const std::string& schema,
+                                           const char* behavior) {
+        const ScopedTempPath protocolDir(makeUniqueTempDir(protocolName));
+        writeMainLua(protocolDir.path(), schema.c_str());
+        protoscope::scripting::ScriptHost host;
+        if (host.loadProtocolDirectory(protocolDir.path().generic_string())) {
+            failures.emplace_back(behavior);
+        }
+    };
+
+    rejectsSchema(
+        "protoscope-schema-duplicate-fields",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 3, fields = {"
+        "{name = 'value', type = 'u8', offset = 2}, {name = 'value', type = 'u8', offset = 3}"
+        "}, on_frame = function() end }} } end\n",
+        "重复字段未在加载时拒绝");
+
+    for (const std::string& reservedName : {"name", "fields", "raw", "crc_ok", "channel_map"}) {
+        const auto schema =
+            "function controls() return {} end\n"
+            "function stream() return { field_output = 'compat', frames = {{ name = 'f', header = {0xAA}, size = 2, "
+            "fields = {{name = '" +
+            reservedName + "', type = 'u8', offset = 2}}, on_frame = function() end }} } end\n";
+        rejectsSchema("protoscope-schema-compat-" + reservedName,
+                      schema,
+                      ("compat 字段别名 " + reservedName + " 未被拒绝").c_str());
+    }
+
+    if (!failures.empty()) {
+        std::ostringstream message;
+        message << "schema 拒绝回归失败（" << failures.size() << " 项）：";
+        for (const auto& failure : failures) {
+            message << " " << failure << ";";
+        }
+        const auto failureMessage = message.str();
+        require(false, failureMessage.c_str());
+    }
+}
+
+void test_lua_contract_schema_default_compat_preserves_metadata_accessors()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-schema-compat-metadata"));
+    writeMainLua(protocolDir.path(),
+                 "function controls() return {} end\n"
+                 "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 2, "
+                 "fields = {{name = 'value', type = 'u8', offset = 2}}, on_frame = function(ctx, frame) "
+                 "local ok = frame.name == 'f' and frame.fields.value == 42 and frame.value == 42 "
+                 "and type(frame.raw) == 'table' and frame.raw[1] == 170 and frame.crc_ok == true "
+                 "and type(frame.channel_map) == 'nil'; if not ok then error('compat metadata overwritten') end "
+                 "proto.emit('lua_contract_schema_compat_metadata', 'ok') end }} } end\n");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "普通 compat 字段 schema 应加载");
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), {0xAA, 0x2A}});
+    const auto events = host.drainEvents();
+    require(events.size() == 1 && events.front().name == "lua_contract_schema_compat_metadata" &&
+                events.front().payload == "ok",
+            "compat 正常字段不能覆盖 name/fields/raw/crc_ok/channel_map 元数据访问器");
+}
+
+void test_lua_contract_schema_accepts_legacy_default_compat_aliases()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-schema-default-compat"));
+    writeMainLua(protocolDir.path(),
+                 "function controls() return {} end\n"
+                 "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 2, "
+                 "fields = {{name = 'value', type = 'u8', offset = 2}}, on_frame = function(ctx, frame) "
+                 "proto.emit('lua_contract_schema_default_compat', tostring(frame.value) .. ':' .. "
+                 "tostring(frame.fields.value) .. ':' .. tostring(frame.name) .. ':' .. tostring(frame.raw[1]) .. ':' "
+                 ".. tostring(frame.crc_ok)) end }} } end\n");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "省略 field_output 的合法旧 compat schema 应加载");
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), {0xAA, 0x2A}});
+    bool found = false;
+    for (const auto& event : host.drainEvents()) {
+        if (event.name == "lua_contract_schema_default_compat" && event.payload.find("42:42:f:170:true") != std::string::npos) {
+            found = true;
+        }
+    }
+    require(found, "默认 compat 应继续提供字段别名及不可覆盖的帧元数据");
+}
+
+void test_lua_contract_schema_fields_only_keeps_reserved_business_name_isolated()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-schema-fields-only-metadata"));
+    writeMainLua(protocolDir.path(),
+                 "function controls() return {} end\n"
+                 "function stream() return { field_output = 'fields_only', frames = {{ name = 'f', header = {0xAA}, "
+                 "size = 2, fields = {{name = 'name', type = 'u8', offset = 2}}, on_frame = function(ctx, frame) "
+                 "proto.emit('lua_contract_schema_fields_only', tostring(frame.name) .. ':' .. "
+                 "tostring(frame.fields.name) .. ':' .. tostring(frame.name == 'f')) end }} } end\n");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()),
+            "fields_only 应允许隔离后的业务字段使用元数据名称");
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), {0xAA, 0x2A}});
+    bool found = false;
+    for (const auto& event : host.drainEvents()) {
+        if (event.name == "lua_contract_schema_fields_only" && event.payload.find("f:42:true") != std::string::npos) {
+            found = true;
+        }
+    }
+    require(found, "fields_only 业务字段应保留在 frame.fields 且不覆盖 frame.name");
+}
+
+void test_lua_contract_schema_rejects_fractional_integer_inputs()
+{
+    std::vector<std::string> failures;
+    const auto rejectsSchema = [&failures](const std::string& protocolName, const std::string& schema,
+                                           const char* behavior) {
+        const ScopedTempPath protocolDir(makeUniqueTempDir(protocolName));
+        writeMainLua(protocolDir.path(), schema.c_str());
+        protoscope::scripting::ScriptHost host;
+        if (host.loadProtocolDirectory(protocolDir.path().generic_string())) {
+            failures.emplace_back(behavior);
+        }
+    };
+    const auto verifyAllRejected = [&failures]() {
+        if (failures.empty()) {
+            return;
+        }
+        std::ostringstream message;
+        message << "显式非法整数 schema 值未被拒绝（" << failures.size() << " 项）：";
+        for (const auto& failure : failures) {
+            message << " " << failure << ";";
+        }
+        require(false, message.str().c_str());
+    };
+
+    rejectsSchema(
+        "protoscope-schema-fractional-count",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 4, fields = "
+        "{{name = 'values', type = 'u8', offset = 2, count = 1.5}}, on_frame = function() end }} } end\n",
+        "整数 count 参数显式传入非整数时必须拒绝，不能截断成 1");
+    rejectsSchema(
+        "protoscope-schema-nan-count",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 4, fields = "
+        "{{name = 'values', type = 'u8', offset = 2, count = 0/0}}, on_frame = function() end }} } end\n",
+        "NaN count 必须作为非法数值拒绝，不能被误判为字段名");
+    rejectsSchema(
+        "protoscope-schema-infinite-count",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 4, fields = "
+        "{{name = 'values', type = 'u8', offset = 2, count = math.huge}}, on_frame = function() end }} } end\n",
+        "无穷 count 必须作为非法数值拒绝，不能被误判为字段名");
+    rejectsSchema(
+        "protoscope-schema-out-of-range-count",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 4, fields = "
+        "{{name = 'values', type = 'u8', offset = 2, count = 9223372036854775808.0}}, "
+        "on_frame = function() end }} } end\n",
+        "int64 范围外 count 必须作为非法数值拒绝，不能被误判为字段名");
+    rejectsSchema(
+        "protoscope-schema-fractional-offset",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 2, fields = "
+        "{{name = 'value', type = 'u8', offset = 1.5}}, on_frame = function() end }} } end\n",
+        "整数字段 offset 显式传入非整数时必须拒绝，不能截断");
+    rejectsSchema(
+        "protoscope-schema-fractional-size",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 2.5, on_frame = function() end }} } end\n",
+        "帧 size 显式传入非整数时必须拒绝，不能截断");
+    rejectsSchema(
+        "protoscope-schema-fractional-capacity",
+        "function controls() return {} end\n"
+        "function stream() return { buffer = {capacity = 2.5}, frames = {{ name = 'f', header = {0xAA}, size = 2, "
+        "on_frame = function() end }} } end\n",
+        "buffer.capacity 显式传入非整数时必须拒绝，不能静默使用缺省值");
+    rejectsSchema(
+        "protoscope-schema-fractional-max-capacity",
+        "function controls() return {} end\n"
+        "function stream() return { buffer = {max_capacity = 8.5}, frames = {{ name = 'f', header = {0xAA}, "
+        "size = 2, on_frame = function() end }} } end\n",
+        "buffer.max_capacity 显式传入非整数时必须拒绝，不能静默使用缺省值");
+    rejectsSchema(
+        "protoscope-schema-fractional-length-offset",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, len = {offset = 1.5, type = 'u8'}, "
+        "on_frame = function() end }} } end\n",
+        "frame.len.offset 显式传入非整数时必须拒绝，不能截断");
+    rejectsSchema(
+        "protoscope-schema-fractional-length-extra",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, len = {offset = 1, type = 'u8', "
+        "extra = 1.5}, on_frame = function() end }} } end\n",
+        "frame.len.extra 显式传入非整数时必须拒绝，不能截断");
+    rejectsSchema(
+        "protoscope-schema-fractional-count-expression-operand",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 4, fields = "
+        "{{name = 'values', type = 'u8', offset = 2, count = {op = 'div', field = 'byte_count', by = 1.5}}}, "
+        "on_frame = function() end }} } end\n",
+        "count 表达式除数显式传入非整数时必须拒绝，不能截断");
+    rejectsSchema(
+        "protoscope-schema-nan-size",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 0/0, "
+        "on_frame = function() end }} } end\n",
+        "NaN size 必须安全拒绝");
+    rejectsSchema(
+        "protoscope-schema-infinite-size",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = math.huge, "
+        "on_frame = function() end }} } end\n",
+        "无穷 size 必须安全拒绝");
+    rejectsSchema(
+        "protoscope-schema-out-of-range-size",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 9223372036854775808.0, "
+        "on_frame = function() end }} } end\n",
+        "int64 范围外 size 必须安全拒绝");
+    rejectsSchema(
+        "protoscope-schema-nan-buffer-capacity",
+        "function controls() return {} end\n"
+        "function stream() return { buffer = {capacity = 0/0}, frames = {{ name = 'f', header = {0xAA}, size = 2, "
+        "on_frame = function() end }} } end\n",
+        "NaN capacity 必须安全拒绝");
+    rejectsSchema(
+        "protoscope-schema-fractional-count-expression-constant",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 4, fields = "
+        "{{name = 'values', type = 'u8', offset = 2, count = {op = 'const', value = 1.5}}}, "
+        "on_frame = function() end }} } end\n",
+        "count const 的非整数 value 必须拒绝");
+    rejectsSchema(
+        "protoscope-schema-fractional-if-flag-mask",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 4, fields = "
+        "{{name = 'values', type = 'u8', offset = 2, count = {op = 'if_flag', field = 'flags', mask = 1.5, "
+        "then = 1, else = 0}}}, on_frame = function() end }} } end\n",
+        "if_flag.mask 显式非整数必须拒绝");
+    rejectsSchema(
+        "protoscope-schema-fractional-case-key",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 4, fields = "
+        "{{name = 'values', type = 'u8', offset = 2, count = {op = 'case', field = 'kind', "
+        "cases = {[1.5] = 1}, default = 0}}}, on_frame = function() end }} } end\n",
+        "case.cases 的非整数数字 key 必须拒绝");
+    rejectsSchema(
+        "protoscope-schema-invalid-case-key-type",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 4, fields = "
+        "{{name = 'values', type = 'u8', offset = 2, count = {op = 'case', field = 'kind', "
+        "cases = {['1'] = 1}, default = 0}}}, on_frame = function() end }} } end\n",
+        "case.cases 的非数字 key 必须拒绝");
+    rejectsSchema(
+        "protoscope-schema-invalid-value-target-start-id",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 2, value_targets = "
+        "{controls = {{id = 'regs', start_id = 1.5, values_field = 'value'}}}, on_frame = function() end }} } end\n",
+        "value_targets.start_id 显式非整数必须拒绝");
+    rejectsSchema(
+        "protoscope-schema-invalid-value-target-start-id-type",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 2, value_targets = "
+        "{controls = {{id = 'regs', start_id = '1', values_field = 'value'}}}, on_frame = function() end }} } end\n",
+        "value_targets.start_id 显式非整数类型必须拒绝");
+    rejectsSchema(
+        "protoscope-schema-invalid-sub-value",
+        "function controls() return {} end\n"
+        "function stream() return { frames = {{ name = 'f', header = {0xAA}, size = 4, fields = "
+        "{{name = 'values', type = 'u8', offset = 2, count = {op = 'sub', field = 'n', value = 'bad', by = 1}}}, "
+        "on_frame = function() end }} } end\n",
+        "sub.value 显式非法类型必须拒绝，不能回退到 by");
+    verifyAllRejected();
 }
 
 void test_script_stream_schema_accepts_count_expression_table()

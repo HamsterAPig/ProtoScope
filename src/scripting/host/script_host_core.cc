@@ -94,6 +94,12 @@ StreamParseBatch makeStreamParseBatchSnapshot(const StreamParseBatch& batch, boo
 
     StreamParseBatch snapshot;
     snapshot.errors = batch.errors;
+    // 成功帧已从快照移除，只保留仍指向 errors 的事件，不能留下悬空帧索引。
+    for (const auto& event : batch.events) {
+        if (event.kind == StreamParseEventKind::Error) {
+            snapshot.events.push_back(event);
+        }
+    }
     snapshot.bufferSize = batch.bufferSize;
     snapshot.bufferCapacity = batch.bufferCapacity;
     snapshot.nearOverflow = batch.nearOverflow;
@@ -3039,13 +3045,31 @@ std::optional<std::int64_t> luaIntegerValue(const sol::object& object)
     if (!object.valid() || object.get_type() == sol::type::lua_nil) {
         return std::nullopt;
     }
-    if (object.is<int>()) {
-        return object.as<int>();
+    if (object.get_type() != sol::type::number) {
+        return std::nullopt;
     }
-    if (object.is<double>()) {
-        return static_cast<std::int64_t>(object.as<double>());
+    auto* state = object.lua_state();
+    const int top = lua_gettop(state);
+    sol::stack::push(state, object);
+    if (lua_isinteger(state, -1) != 0) {
+        const auto value = lua_tointeger(state, -1);
+        lua_settop(state, top);
+        if constexpr (sizeof(lua_Integer) > sizeof(std::int64_t)) {
+            if (value < static_cast<lua_Integer>((std::numeric_limits<std::int64_t>::min)()) ||
+                value > static_cast<lua_Integer>((std::numeric_limits<std::int64_t>::max)())) {
+                return std::nullopt;
+            }
+        }
+        return static_cast<std::int64_t>(value);
     }
-    return std::nullopt;
+    const double value = lua_tonumber(state, -1);
+    lua_settop(state, top);
+    // double 中 INT64_MAX 会舍入到 2^63；用半开区间避免越界浮点转整数。
+    constexpr double int64Limit = 9223372036854775808.0;
+    if (!std::isfinite(value) || std::floor(value) != value || value < -int64Limit || value >= int64Limit) {
+        return std::nullopt;
+    }
+    return static_cast<std::int64_t>(value);
 }
 
 PlotChannelDescriptor makePlotChannelDescriptor(const sol::table& channelTable, std::size_t index)
@@ -3519,6 +3543,11 @@ std::vector<StreamFrameDefinition> ScriptHost::streamFrameDefinitions() const
 
 bool ScriptHost::setStreamRuntimeProfile(const sol::object& profileObject, std::string& error)
 {
+    // 候选顶层及 stream/ui 声明共用现有加载标记；提交前不能访问仍存活的旧 parser。
+    if (!scriptLoaded_) {
+        error = "脚本加载期间不能设置 stream profile，请在成功加载后的运行期回调中设置";
+        return false;
+    }
     if (!runtime_ || !runtime_->stream) {
         error = "当前协议未启用 stream()";
         return false;
@@ -3534,8 +3563,9 @@ bool ScriptHost::setStreamRuntimeProfile(const sol::object& profileObject, std::
         error = "stream profile.frame 不能为空";
         return false;
     }
-    if (!lengthValue.has_value() || *lengthValue <= 0) {
-        error = "stream profile.length 必须是正整数";
+    if (!lengthValue.has_value() || *lengthValue <= 0 || static_cast<std::uint64_t>(*lengthValue) >
+                                                           static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
+        error = "stream profile.length 必须是平台可表示的正整数";
         return false;
     }
 
@@ -3551,11 +3581,17 @@ bool ScriptHost::setStreamRuntimeProfile(const sol::object& profileObject, std::
         profile.channelMap.reserve(channelMapTable.size());
         for (std::size_t index = 1; index <= channelMapTable.size(); ++index) {
             const auto value = luaIntegerValue(channelMapTable[index]);
-            if (!value.has_value() || *value <= 0) {
-                error = "stream profile.channel_map 必须是从 1 开始的正整数数组";
+            if (!value.has_value() || *value <= 0 || static_cast<std::uint64_t>(*value) >
+                                                           static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
+                error = "stream profile.channel_map 必须是平台可表示的正整数数组";
                 return false;
             }
-            profile.channelMap.push_back(static_cast<std::size_t>(*value - 1));
+            const auto target = static_cast<std::size_t>(*value - 1);
+            if (target == (std::numeric_limits<std::size_t>::max)()) {
+                error = "stream profile.channel_map 索引超出平台范围";
+                return false;
+            }
+            profile.channelMap.push_back(target);
         }
     }
 
@@ -3574,6 +3610,11 @@ bool ScriptHost::setStreamRuntimeProfile(const sol::object& profileObject, std::
 
 bool ScriptHost::clearStreamRuntimeProfile(const sol::object& frameNameObject, std::string& error)
 {
+    // 不清空 profile 事件队列：其中可能还有旧运行时尚未消费的有效事件。
+    if (!scriptLoaded_) {
+        error = "脚本加载期间不能清除 stream profile，请在成功加载后的运行期回调中清除";
+        return false;
+    }
     if (!runtime_ || !runtime_->stream) {
         error = "当前协议未启用 stream()";
         return false;
@@ -3805,7 +3846,7 @@ void ScriptHost::updateStreamParseErrorSummary(const StreamParseBatch& batch)
     lastTransportStats_.lastErrorSummary = std::move(summary);
 }
 
-void ScriptHost::applyStreamValueTargets(const std::vector<StreamParsedFrame>& frames)
+void ScriptHost::applyStreamValueTargets(std::span<const StreamParsedFrame> frames)
 {
     if (!runtime_ || !runtime_->stream || runtime_->stream->valueTargetsByFrame.empty()) {
         return;
@@ -3858,13 +3899,21 @@ void ScriptHost::applyStreamValueTargets(const std::vector<StreamParsedFrame>& f
 }
 
 void ScriptHost::dispatchStreamFrames(const transport::ConnectionContext& context,
-                                      const std::vector<StreamParsedFrame>& frames)
+                                      std::span<const StreamParsedFrame> frames)
 {
-    // 核心流程：同一 parser 链顺序产出完整帧；若脚本支持 on_batch，则只批量调用一次，避免重复 on_frame。
-    if (!frames.empty() && !callbackOnStreamBatch(ScriptHostContext{context}, frames)) {
-        for (const auto& frame : frames) {
-            callbackOnStreamFrame(ScriptHostContext{context}, frame);
-        }
+    if (frames.empty()) {
+        return;
+    }
+    // 批回调观察整段最终值；逐帧回调则必须先应用本帧，不能提前看到后续帧。
+    // 是否定义 batch 与执行成功无关：batch 抛错或预算故障不能降级重复调用 on_frame。
+    if (runtime_ && runtime_->stream && runtime_->stream->onBatchCallbackKey.has_value()) {
+        applyStreamValueTargets(frames);
+        callbackOnStreamBatch(ScriptHostContext{context}, frames);
+        return;
+    }
+    for (const auto& frame : frames) {
+        applyStreamValueTargets(std::span<const StreamParsedFrame>(&frame, 1));
+        callbackOnStreamFrame(ScriptHostContext{context}, frame);
     }
 }
 
@@ -3874,10 +3923,27 @@ void ScriptHost::handleStreamTransportBytes(const transport::TransportBytesEvent
     std::chrono::steady_clock::time_point parserFinishedAt;
     const auto batch = parseTransportStreamBytes(event.bytes, parserFinishedAt);
     const auto callbackStartedAt = parserFinishedAt;
-    dispatchStreamParseErrors(event.context, batch);
+    // events 只记录解析时的产生顺序；profile 回调不会重新解释已解析的同块后续帧。
+    const std::span<const StreamParsedFrame> frames(batch.frames);
+    std::size_t segmentStart = 0;
+    std::size_t segmentSize = 0;
+    const auto flushFrames = [&] {
+        dispatchStreamFrames(event.context, frames.subspan(segmentStart, segmentSize));
+        segmentSize = 0;
+    };
+    for (const auto& parsedEvent : batch.events) {
+        if (parsedEvent.kind == StreamParseEventKind::Frame) {
+            if (segmentSize == 0) {
+                segmentStart = parsedEvent.index;
+            }
+            ++segmentSize;
+        } else {
+            flushFrames();
+            callbackOnStreamError(ScriptHostContext{event.context}, batch.errors.at(parsedEvent.index));
+        }
+    }
+    flushFrames();
     updateStreamParseErrorSummary(batch);
-    applyStreamValueTargets(batch.frames);
-    dispatchStreamFrames(event.context, batch.frames);
     const auto finishedAt = std::chrono::steady_clock::now();
     lastTransportStats_.callbackMs = elapsedMilliseconds(callbackStartedAt, finishedAt);
     lastTransportStats_.totalMs = elapsedMilliseconds(startedAt, finishedAt);
@@ -4266,7 +4332,13 @@ void ScriptHost::onTxEvent(const transport::ConnectionContext& ctx, const TxEven
             }
         }
     }
+    if (txCallbackTestHook_) txCallbackTestHook_();
     callbackOnTx(ScriptHostContext{ctx}, event);
+}
+
+void ScriptHost::setTxCallbackTestHookForTest(std::function<void()> hook)
+{
+    txCallbackTestHook_ = std::move(hook);
 }
 
 void ScriptHost::onDialogEvent(const transport::ConnectionContext& ctx, const DialogEvent& event)
