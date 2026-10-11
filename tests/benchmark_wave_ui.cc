@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string_view>
 #include <thread>
@@ -241,6 +242,257 @@ int main(int argc, char** argv)
             io.AddMouseButtonEvent(0, false); draw();
             ImGui::GetMainViewport()->DpiScale = 1;
             std::cout << "overview_capture: quadrants, edges, narrow, DPI, release, focus, wheel passed\n";
+        }
+        {
+            // 真正通过概览捕获进入拖动；最终移动与抬起同帧，不能用直接改 view 代替释放链路。
+            const auto check = [](bool condition, const char* message) {
+                if (!condition) throw std::runtime_error(message);
+            };
+            const auto run = [&](int target, bool firstMoveOnRelease, double shift,
+                                 bool outside, double minTime, double maxTime,
+                                 bool staleTask, bool visibleSamples) {
+                plot::WaveDockState wave;
+                auto& view = wave.view;
+                view.initialized = true;
+                view.defaultViewportPending = false;
+                view.autoFollowLatest = false;
+                view.showCursors = false;
+                view.viewMinTime = minTime;
+                view.viewMaxTime = maxTime;
+                view.visibleDuration = maxTime - minTime;
+                view.sampleFrequencyHz = 1024;
+                view.fft.enabled = true;
+                view.fft.pointCount = visibleSamples ? plot::WaveFftPointCount::VisibleSamples
+                                                     : plot::WaveFftPointCount::N1024;
+                std::vector<plot::WaveSample> samples;
+                for (int i = 0; i <= 4096; ++i) {
+                    const double hz = i < 2048 ? 32 : 96;
+                    const double value = i == 512 || i == 3072
+                        ? std::numeric_limits<double>::quiet_NaN()
+                        : std::sin(6.283185307179586 * hz * i / 1024.0);
+                    samples.push_back({i / 1024.0, value});
+                }
+                check(wave.buffer.append(0, {{}, samples}), "频谱释放样本写入失败");
+                ImRect bounds;
+                bool rejectOldResult = false;
+                const auto draw = [&] {
+                    if (withGl) ImGui_ImplOpenGL3_NewFrame();
+                    ImGui::NewFrame();
+                    ImGui::SetNextWindowPos(ImVec2(0, 0));
+                    ImGui::SetNextWindowSize(ImVec2(1100, 600));
+                    ImGui::Begin("FFT overview release", nullptr, ImGuiWindowFlags_NoSavedSettings);
+                    auto frame = ui::prepareWaveFrame(wave, 1100);
+                    if (rejectOldResult && wave.cachedFftKeyValid)
+                        check(wave.cachedFftKey.viewMinTime == view.fftSourceMinTime &&
+                              wave.cachedFftKey.viewMaxTime == view.fftSourceMaxTime,
+                              "等待最终频谱时发布了旧代次结果");
+                    ImGui::BeginChild("overview", ImVec2(0, 150));
+                    ui::drawOverviewWindow(wave, frame.fullSnapshot->config, *frame.fullSnapshot,
+                        *frame.overviewDisplayData, plot::computeDisplayBounds(*frame.overviewDisplayData, 1e-6),
+                        {0}, frame.renderBudget);
+                    if (const auto* p = ImPlot::GetPlot("##wave_overview")) bounds = p->PlotRect;
+                    ImGui::EndChild();
+                    ui::drawWaveFftPlot(wave, frame, true, false);
+                    ImGui::End();
+                    ImGui::Render();
+                };
+                const auto settle = [&] {
+                    const auto deadline = Clock::now() + std::chrono::seconds(5);
+                    do {
+                        draw();
+                        // 无效但已缓存的不足样本结果也是完成，不无限等待 valid。
+                        if (wave.cachedFftKeyValid && !view.fftUpdatePending && !wave.fftRequestActive) return;
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    } while (Clock::now() < deadline);
+                    throw std::runtime_error("概览释放后 FFT 未在期限内完成");
+                };
+                io.AddMouseButtonEvent(0, false);
+                io.AddMousePosEvent(-100, -100);
+                for (int i = 0; i < 24; ++i) draw(); // 隔离前一场景双击和事件队列。
+                settle();
+                const auto oldKey = wave.cachedFftKey;
+                const auto oldGeneration = wave.fftRequestGeneration;
+                const auto submissions = wave.fftSubmittedCount;
+                const auto oldPeak = wave.cachedFftFrame.fundamentalHz;
+                view.fftFrequencyMin = 10; view.fftFrequencyMax = 200;
+                view.fftMagnitudeMin = -2; view.fftMagnitudeMax = 2;
+                view.fftPhaseMin = -90; view.fftPhaseMax = 90;
+                view.fftViewportInitialized = true;
+                const double startTime = target == 1 ? minTime : target == 2 ? maxTime : (minTime + maxTime) / 2;
+                const float startX = std::floor(bounds.Min.x + bounds.GetWidth() * float(startTime / 4));
+                const float startY = std::floor(bounds.Min.y + bounds.GetHeight() * (target == 3 ? .2F : .5F));
+                io.AddMousePosEvent(startX, startY); draw();
+                io.AddMouseButtonEvent(0, true); draw();
+                check(view.overviewDrag.target == target, "FFT 回归未捕获预期概览目标");
+                const float endX = std::floor(startX + bounds.GetWidth() * float(shift / 4));
+                if (!firstMoveOnRelease) {
+                    io.AddMousePosEvent(std::floor((startX + endX) / 2), startY); draw();
+                    for (int i = 0; i < 3; ++i) draw();
+                }
+                check(wave.fftSubmittedCount == submissions, "按住概览时提交了昂贵 FFT");
+                if (staleTask) {
+                    // 注入旧窗口的有效任务（可在执行或已完成但未取走），不依赖线程调度时长。
+                    auto snapshot = wave.buffer.snapshot(oldKey.viewMinTime, oldKey.viewMaxTime, false);
+                    auto display = plot::buildDisplayData(snapshot, view.sampleFrequencyHz);
+                    wave.analysisWorker->submit(plot::WaveFftInput{oldGeneration, oldKey,
+                        std::move(snapshot), std::move(display)});
+                    wave.fftRequestActive = true;
+                }
+                // 独立预期：真实整数像素总位移，先限制边缘，再夹紧历史与最小跨度。
+                const double delta = (endX - startX) * 4.0 / bounds.GetWidth();
+                double expectedMin = minTime + (target != 2 ? delta : 0);
+                double expectedMax = maxTime + (target != 1 ? delta : 0);
+                if (target == 1) expectedMin = std::clamp(expectedMin, 0.0, maxTime - view.minVisibleTimeSpan);
+                if (target == 2) expectedMax = std::clamp(expectedMax, minTime + view.minVisibleTimeSpan, 4.0);
+                const double span = (std::min)(4.0, (std::max)(view.minVisibleTimeSpan, expectedMax - expectedMin));
+                expectedMin = std::clamp((expectedMin + expectedMax - span) / 2, 0.0, 4.0 - span);
+                expectedMax = expectedMin + span;
+                io.AddMousePosEvent(endX, outside ? bounds.Max.y + 100 : startY);
+                io.AddMouseButtonEvent(0, false);
+                draw(); // 两个事件必须在同一次 NewFrame 前入队。
+                check(!io.MouseDown[0] && io.MouseReleased[0] && io.MousePos.x == endX,
+                      "最终移动与释放未在同帧送达");
+                check(std::abs(view.viewMinTime - expectedMin) < 1e-9 &&
+                      std::abs(view.viewMaxTime - expectedMax) < 1e-9, "释放遗漏最终总位移或归一化错误");
+                check(!view.overviewDrag.activeId && !view.overviewWindowDragging,
+                      "FFT 释放后概览捕获未清理");
+                check(wave.fftSubmittedCount == submissions, "释放收口前提交了旧选区 FFT");
+                rejectOldResult = true;
+                settle();
+                check(std::abs(wave.cachedFftKey.viewMinTime - expectedMin) < 1e-9 &&
+                      std::abs(wave.cachedFftKey.viewMaxTime - expectedMax) < 1e-9 &&
+                      view.fftSourceMinTime == view.viewMinTime && view.fftSourceMaxTime == view.viewMaxTime,
+                      "最终选区未自动发布或旧任务覆盖新频谱");
+                std::size_t finite = 0;
+                for (const auto& sample : samples)
+                    if (sample.time >= expectedMin && sample.time <= expectedMax && std::isfinite(sample.value)) ++finite;
+                check(wave.cachedFftFrame.visibleSampleCount == finite, "FFT 未精确包含端点或未排除非有限值");
+                const auto required = plot::resolveWaveFftPointCount(view.fft, finite);
+                const bool enough = required >= 16 && finite >= required;
+                check(wave.cachedFftFrame.valid == enough, "固定 N 不足样本未发布正确无效结果");
+                if (!enough) check(!wave.cachedFftFrame.channels.empty() &&
+                    wave.cachedFftFrame.channels[0].message == "当前可视区样本不足", "不足样本错误提示丢失");
+                if (enough && expectedMin > 2 && !visibleSamples) {
+                    check(oldPeak && std::abs(*oldPeak - 32) < 1 && wave.cachedFftFrame.fundamentalHz &&
+                          std::abs(*wave.cachedFftFrame.fundamentalHz - 96) < 1,
+                          "不同信号区段释放后谱峰没有自动改变");
+                }
+                check(view.fftFrequencyMin == 10 && view.fftFrequencyMax == 200 &&
+                      view.fftMagnitudeMin == -2 && view.fftMagnitudeMax == 2 &&
+                      view.fftPhaseMin == -90 && view.fftPhaseMax == 90 && !view.fftFitAllRequested,
+                      "概览改变了独立频域视口");
+                const bool changed = std::abs(expectedMin - minTime) > 1e-9 || std::abs(expectedMax - maxTime) > 1e-9;
+                check(wave.fftSubmittedCount == submissions + (changed || staleTask ? 1 : 0),
+                      "概览最终目标未合并成单次计算或无变化点击额外刷新");
+                const auto settled = wave.fftSubmittedCount;
+                for (int i = 0; i < 5; ++i) {
+                    ui::releaseOverviewDrag(wave);
+                    draw();
+                    check(wave.fftSubmittedCount == settled, "稳定帧或重复清理重复计算 FFT");
+                }
+                // 停止跟随后的新数据不移动输入；实时恢复仍采用最新窗口。
+                check(wave.buffer.append(0, {{}, {{5, 1}}}), "追加样本失败");
+                settle();
+                check(view.fftSourceMinTime == expectedMin && view.fftSourceMaxTime == expectedMax,
+                      "暂停后的新数据移动了历史输入");
+                view.autoFollowLatest = true;
+                settle();
+                check(std::abs(view.fftSourceMaxTime - 4097 / 1024.0) < 1e-9, "恢复跟随没有采用最新窗口");
+            };
+            for (int target : {1, 2, 3}) for (bool first : {false, true})
+                run(target, first, target == 1 ? .125 : target == 2 ? 1.5 : 2, false, .25, 1.5,
+                    target == 3 && !first, false);
+            run(3, true, 10, true, .25, 1.5, false, false);
+            run(3, true, -10, true, .25, 1.5, false, false);
+            run(1, true, -10, true, .25, 1.5, false, true); // 精确包含历史左端和非有限样本。
+            run(2, true, 10, true, .25, 1.5, false, true);  // 精确包含历史右端。
+            run(1, true, 10, true, .25, 1.5, false, false); // 最小跨度且固定 N 不足。
+            run(2, true, -10, true, .25, 1.5, false, false);
+            run(3, true, .5, false, 1, 1.001, false, false); // 窄框视觉扩展不得污染真实跨度。
+            run(3, true, 0, false, .25, 1.5, false, false); // 无变化点击不得强制刷新。
+            for (int cancel : {0, 1, 2, 3, 4}) {
+                // 取消不是放下：失焦、空历史、折叠、ID 丢失、抽屉输入隔离不能应用新 MousePos。
+                plot::WaveDockState wave;
+                auto& view = wave.view;
+                view.initialized = true; view.defaultViewportPending = false;
+                view.autoFollowLatest = false; view.showCursors = false;
+                view.viewMinTime = 1; view.viewMaxTime = 2; view.visibleDuration = 1;
+                wave.buffer.append(0, {{}, {{0, 0}, {4, 1}}});
+                ImRect bounds;
+                const auto draw = [&] {
+                    if (withGl) ImGui_ImplOpenGL3_NewFrame();
+                    ImGui::NewFrame();
+                    ImGui::SetNextWindowPos(ImVec2(0, 0));
+                    ImGui::SetNextWindowSize(ImVec2(1100, 300));
+                    ImGui::Begin("overview release cancellation", nullptr, ImGuiWindowFlags_NoSavedSettings);
+                    auto frame = ui::prepareWaveFrame(wave, 1100);
+                    if (cancel == 4 && wave.toolsDrawerResizing) ui::releaseOverviewDrag(wave);
+                    ui::drawOverviewWindow(wave, frame.fullSnapshot->config, *frame.fullSnapshot,
+                        *frame.overviewDisplayData, plot::computeDisplayBounds(*frame.overviewDisplayData, 1e-6),
+                        {0}, frame.renderBudget);
+                    if (const auto* p = ImPlot::GetPlot("##wave_overview")) bounds = p->PlotRect;
+                    ImGui::End(); ImGui::Render();
+                };
+                io.AddMouseButtonEvent(0, false); io.AddMousePosEvent(-100, -100);
+                for (int i = 0; i < 24; ++i) draw();
+                const float x = std::floor(bounds.Min.x + bounds.GetWidth() * .375F);
+                const float y = std::floor(bounds.Min.y + bounds.GetHeight() * .2F);
+                io.AddMousePosEvent(x, y); draw();
+                io.AddMouseButtonEvent(0, true); draw();
+                check(view.overviewDrag.target == 3, "取消测试没有捕获概览");
+                if (cancel == 0) io.AddFocusEvent(false);
+                if (cancel == 1) wave.buffer.clear();
+                if (cancel == 2) wave.overviewCollapsed = true;
+                if (cancel == 3) ImGui::ClearActiveID();
+                if (cancel == 4) wave.toolsDrawerResizing = true;
+                io.AddMousePosEvent(x + 200, y);
+                io.AddMouseButtonEvent(0, false);
+                draw();
+                check(view.viewMinTime == 1 && view.viewMaxTime == 2 && !view.overviewDrag.activeId,
+                      "取消路径应用了无关的释放坐标");
+                io.AddFocusEvent(true); draw();
+            }
+            {
+                // 即使直接调用概览组件，CursorSplit 也必须保留 A/B 输入，而非被时域框覆盖。
+                plot::WaveDockState wave;
+                auto& view = wave.view;
+                view.initialized = true; view.defaultViewportPending = false;
+                view.autoFollowLatest = false; view.showCursors = false;
+                view.viewMinTime = .25; view.viewMaxTime = 1.5; view.visibleDuration = 1.25;
+                view.sampleFrequencyHz = 1024;
+                view.fft.enabled = true; view.fft.displayMode = plot::WaveFftDisplayMode::CursorSplit;
+                view.fft.pointCount = plot::WaveFftPointCount::N1024;
+                view.cursors[1].time = 3;
+                std::vector<plot::WaveSample> samples;
+                for (int i = 0; i <= 4096; ++i) samples.push_back({i / 1024.0, std::sin(i * .1)});
+                wave.buffer.append(0, {{}, samples});
+                ImRect bounds;
+                const auto draw = [&] {
+                    if (withGl) ImGui_ImplOpenGL3_NewFrame();
+                    ImGui::NewFrame();
+                    ImGui::SetNextWindowPos(ImVec2(0, 0));
+                    ImGui::SetNextWindowSize(ImVec2(1100, 300));
+                    ImGui::Begin("split FFT input isolation", nullptr, ImGuiWindowFlags_NoSavedSettings);
+                    auto frame = ui::prepareWaveFrame(wave, 1100);
+                    ui::drawOverviewWindow(wave, frame.fullSnapshot->config, *frame.fullSnapshot,
+                        *frame.overviewDisplayData, plot::computeDisplayBounds(*frame.overviewDisplayData, 1e-6),
+                        {0}, frame.renderBudget);
+                    if (const auto* p = ImPlot::GetPlot("##wave_overview")) bounds = p->PlotRect;
+                    ImGui::End(); ImGui::Render();
+                };
+                io.AddMouseButtonEvent(0, false); io.AddMousePosEvent(-100, -100);
+                for (int i = 0; i < 24; ++i) draw();
+                check(view.fftSourceMinTime == 2 && view.fftSourceMaxTime == 3, "分屏 A/B 测试输入错误");
+                const float x = std::floor(bounds.Min.x + bounds.GetWidth() * .21875F);
+                const float y = std::floor(bounds.Min.y + bounds.GetHeight() * .2F);
+                io.AddMousePosEvent(x, y); draw();
+                io.AddMouseButtonEvent(0, true); draw();
+                check(view.overviewDrag.target == 3, "分屏隔离测试没有捕获概览");
+                io.AddMousePosEvent(x + 100, y); io.AddMouseButtonEvent(0, false); draw();
+                check(view.viewMinTime > .25 && view.fftSourceMinTime == 2 && view.fftSourceMaxTime == 3,
+                      "概览拖动破坏 CursorSplit A/B 输入");
+            }
+            std::cout << "fft_overview_release: final events, clamp, stale work, finite samples and peaks passed\n";
         }
         {
             plot::WaveDockState wave;

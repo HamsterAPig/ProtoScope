@@ -96,7 +96,9 @@ void drawOverviewWindow(plot::WaveDockState& wave,
                         const RenderBudget& renderBudget)
 {
     auto& view = wave.view;
-    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::GetIO().AppFocusLost)
+    const bool normalRelease = ImGui::IsMouseReleased(ImGuiMouseButton_Left) && ImGui::IsMousePosValid();
+    if (wave.overviewCollapsed || wave.toolsDrawerResizing || ImGui::GetIO().AppFocusLost ||
+        (!ImGui::IsMouseDown(ImGuiMouseButton_Left) && !normalRelease))
         releaseOverviewDrag(wave);
     if (fullSnapshot.channels.empty()) {
         releaseOverviewDrag(wave);
@@ -296,7 +298,12 @@ void drawOverviewWindow(plot::WaveDockState& wave,
             else rectMaxTime = overviewMaxTime;
             changed = true;
             releaseOverviewDrag(wave);
-        } else if (drag.activeId && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+        } else if (drag.activeId && (ImGui::IsMouseDragging(ImGuiMouseButton_Left) ||
+                   (normalRelease && (ImGui::IsMouseDragPastThreshold(ImGuiMouseButton_Left) ||
+                    ImLengthSqr(ImVec2(mouse.x - ImGui::GetIO().MouseClickedPos[ImGuiMouseButton_Left].x,
+                                       mouse.y - ImGui::GetIO().MouseClickedPos[ImGuiMouseButton_Left].y)) >=
+                        ImGui::GetIO().MouseDragThreshold * ImGui::GetIO().MouseDragThreshold)))) {
+            // 抬起帧不累计 ImGui 的最大距离，首次越阈值也必须按最终位置应用总位移。
             const double delta = (mouse.x - drag.mouseX) * drag.timePerPixel;
             rectMinTime = drag.minTime + (drag.target != 2 ? delta : 0);
             rectMaxTime = drag.maxTime + (drag.target != 1 ? delta : 0);
@@ -329,7 +336,14 @@ void drawOverviewWindow(plot::WaveDockState& wave,
             view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
             applyAutoFollowPausePolicy(view, WaveViewportAutoFollowPolicy::OverviewDrag);
             view.forceNextMainPlotLimits = true;
+            if (view.fft.enabled && view.fft.displayMode == plot::WaveFftDisplayMode::FullSpectrum) {
+                // 只更新输入目标；现有交互门禁和代次校验负责释放后的单次计算及拒绝旧结果。
+                view.fftSourceMinTime = view.viewMinTime;
+                view.fftSourceMaxTime = view.viewMaxTime;
+                view.fftSourceWindowValid = true;
+            }
         }
+        if (normalRelease) releaseOverviewDrag(wave);
         visual = visualRect();
         const auto visualMin = visual.Min, visualMax = visual.Max;
         const auto left = visual.Min.x, right = visual.Max.x;

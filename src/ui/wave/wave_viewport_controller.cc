@@ -316,9 +316,15 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
 {
     alignWaveLayoutChannels(wave);
     auto& view = wave.view;
-    if (view.overviewDrag.activeId && ImGui::GetCurrentContext() &&
-        (wave.overviewCollapsed || ImGui::GetIO().AppFocusLost || !ImGui::IsMouseDown(ImGuiMouseButton_Left) ||
-         ImGui::GetActiveID() != view.overviewDrag.activeId)) releaseOverviewDrag(wave);
+    if (view.overviewDrag.activeId && ImGui::GetCurrentContext()) {
+        const bool normalRelease = ImGui::IsMouseReleased(ImGuiMouseButton_Left) && ImGui::IsMousePosValid();
+        if (wave.overviewCollapsed || wave.toolsDrawerResizing || ImGui::GetIO().AppFocusLost ||
+            ImGui::GetActiveID() != view.overviewDrag.activeId ||
+            (!ImGui::IsMouseDown(ImGuiMouseButton_Left) && !normalRelease)) {
+            releaseOverviewDrag(wave);
+        }
+        // 正常释放先保留锚点和交互门禁：概览绘制收口最后位置后，下一帧才提交最终 FFT。
+    }
     if (wave.displayDataDownsampleMode != view.downsampleMode) {
         // 模式切换只重建显示缓存与余辉，保留测量、FFT 计算结果及游标状态。
         wave.displayDataDownsampleMode = view.downsampleMode;
