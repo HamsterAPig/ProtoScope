@@ -19,6 +19,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -179,6 +180,16 @@ public:
 private:
     // 仅测试协调背压观察/取消，不暴露业务侧 worker 访问入口。
     friend struct ApplicationBackpressureTestAccess;
+
+    // 跨职责实现共用的辅助函数，不增加对象状态或公开接口。
+    static std::uint64_t nowMs();
+    static std::uint64_t nowUs();
+    static std::string csvEscape(std::string_view text);
+    static std::string formatFrequencyInput(double valueHz);
+    static bool sameAppliedPlotSetup(const plot::WaveDockState& wave, const plot::RawCapturePlotSetupEventData& setup);
+    static std::string payloadPreviewSuffix(const config::AppLoggingConfig& logging,
+                                           const std::vector<std::uint8_t>& payload);
+    static std::string transportContextFields(std::string_view kind, const transport::ConnectionContext& context);
 
     enum class WaveResetViewportTrigger {
         PlotSetupReset,
