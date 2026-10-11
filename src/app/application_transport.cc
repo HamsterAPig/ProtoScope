@@ -1383,8 +1383,9 @@ bool Application::processRequestTimeouts()
     }
     // 独立RX执行计数覆盖callback和输出发布，但不把RX字节占用期延长到输出队列消费，
     // 避免改变worker背压水位；已发布ACK输出仍由主线程drain。
+    // 三个 RX 阶段必须来自同一时刻；分开读取会在出队/发布切换时误判没有待处理 ACK。
     const auto workerSnapshot = scriptWorker_.snapshot();
-    if (scriptWorker_.executingRxBytes() > 0U || workerSnapshot.pendingWorkerRxBytes > 0U ||
+    if (workerSnapshot.executingRxBytes > 0U || workerSnapshot.pendingWorkerRxBytes > 0U ||
         workerSnapshot.outputQueueSize > 0U) {
         return true;
     }

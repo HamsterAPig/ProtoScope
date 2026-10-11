@@ -537,7 +537,13 @@ struct ScriptRuntimeWorker::Impl {
     ScriptRuntimeSnapshot currentSnapshot() const
     {
         std::lock_guard lock(mutex);
-        return snapshot;
+        auto current = snapshot;
+        // Host 内容仍是最近发布的缓存；队列状态必须同锁读取，不能漏掉刚入队的 ACK。
+        current.pendingWorkerRxBytes = pendingRxBytes;
+        current.executingRxBytes = executingRxBytes;
+        current.inputQueueSize = commands.size();
+        current.outputQueueSize = outputs.size();
+        return current;
     }
 
     void publishOutputs(ScriptRuntimeOutputBatch batch)

@@ -37,6 +37,13 @@ struct ApplicationBackpressureTestAccess {
     {
         application.scriptWorker_.setTxCallbackTestHookForTest(std::move(hook));
     }
+    static bool expireRequest(Application& application)
+    {
+        if (!application.activeHalfDuplexRequest_) throw std::runtime_error("测试需要活动 request");
+        application.activeHalfDuplexRequest_->waitDeadlineMs = 0U;
+        return application.processRequestTimeouts();
+    }
+    static void flushOutputs(Application& application) { application.flushScriptOutputsUnbounded(); }
 };
 
 } // namespace protoscope::app
@@ -1625,6 +1632,120 @@ void test_application_request_timeout_drains_pending_rx_before_timeout()
     require(application.docks().commState().lastError.empty(),
             "已排队 ACK 应先 drain 并完成 request，不应误报等待 request_done 超时");
     application.shutdown();
+}
+
+void test_application_request_timeout_uses_live_rx_snapshot()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-request-live-rx-snapshot"));
+    writeTextFile(protocolDir.path() / "main.lua", R"lua(
+function ui()
+  return { { id = "live_rx", title = "Live RX", controls = {
+    { type = "button", id = "read", label = "Read" }
+  } } }
+end
+function on_control(ctx, id, value)
+  if id == "read" then proto.request({ 1 }, { timeout_ms = 1000, tag = "read" }) end
+end
+function on_bytes(ctx, bytes)
+  proto.request_done({ ok = true, message = "ACK 已处理" })
+end
+)lua");
+
+    // 两条路径共享同一个受控阻塞窗口，不依赖 sleep 或扩大 request 超时来碰运气。
+    for (const bool queueAck : {true, false}) {
+        auto transportState = std::make_shared<QueuedEventTransport::State>();
+        protoscope::app::Application application;
+        auto& worker = protoscope::app::ApplicationBackpressureTestAccess::worker(application);
+        struct CallbackGate {
+            std::mutex mutex;
+            std::condition_variable changed;
+            bool entered{false};
+            bool released{false};
+        } gate;
+        struct WorkerGuard {
+            protoscope::app::Application& application;
+            protoscope::scripting::ScriptRuntimeWorker& worker;
+            CallbackGate& gate;
+            ~WorkerGuard()
+            {
+                // 断言抛出时也先释放钩子，避免 stop/join 永久等待测试自己持有的门。
+                {
+                    std::lock_guard lock(gate.mutex);
+                    gate.released = true;
+                }
+                gate.changed.notify_all();
+                worker.stop();
+                application.shutdown();
+            }
+        } guard{application, worker, gate};
+        application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+            static_cast<void>(kind);
+            return std::make_unique<QueuedEventTransport>(transportState);
+        });
+        require(application.initialize(), "实时 RX 快照测试应用应初始化");
+        require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
+                "实时 RX 快照测试协议应加载");
+        application.openTransport();
+        application.pumpOnce();
+        application.updateControlValue("read", true);
+        const auto hasState = [&](protoscope::dock::RequestTraceState state) {
+            const auto& rows = application.docks().requestTraceState().rows;
+            return std::any_of(rows.begin(), rows.end(), [&](const auto& row) {
+                return row.tag == "read" && row.state == state;
+            });
+        };
+        pumpApplicationUntil(application,
+                             [&] { return hasState(protoscope::dock::RequestTraceState::Sent); },
+                             "实时 RX 快照测试 request 发送超时");
+        worker.waitIdle();
+        protoscope::app::ApplicationBackpressureTestAccess::flushOutputs(application);
+        protoscope::app::ApplicationBackpressureTestAccess::setTxCallbackHook(application, [&] {
+            std::unique_lock lock(gate.mutex);
+            gate.entered = true;
+            gate.changed.notify_all();
+            // 有界等待作为最后保险；正常结束和异常退出均由 WorkerGuard 释放。
+            gate.changed.wait_for(lock, std::chrono::seconds(5), [&] { return gate.released; });
+        });
+        const auto context = queuedTransportContext();
+        worker.postTxEvent(context, protoscope::scripting::TxEvent{});
+        {
+            std::unique_lock lock(gate.mutex);
+            require(gate.changed.wait_for(lock, std::chrono::seconds(2), [&] { return gate.entered; }),
+                    "测试应进入受控非 RX 回调窗口");
+        }
+        worker.postTick(currentTimeMs());
+        if (queueAck) worker.postTransportBytes({context, {0xAA, 0x55}}, false);
+        const auto queued = worker.snapshot();
+        require(queued.inputQueueSize >= (queueAck ? 2U : 1U), "快照应包含实时待执行命令数");
+        require(queued.executingRxBytes == 0U && queued.outputQueueSize == 0U,
+                "非 RX 回调阻塞时不应伪造 RX 执行或已发布输出");
+        require(queued.pendingWorkerRxBytes == (queueAck ? 2U : 0U),
+                "快照必须立即反映尚未执行的 ACK 字节数");
+        require(protoscope::app::ApplicationBackpressureTestAccess::expireRequest(application),
+                "测试应推进已到期请求");
+        require(hasState(protoscope::dock::RequestTraceState::Timeout) == !queueAck,
+                "排队 ACK 必须保护 deadline，普通 tick/非 RX 执行不得延长 deadline");
+        {
+            std::lock_guard lock(gate.mutex);
+            gate.released = true;
+        }
+        gate.changed.notify_all();
+        worker.waitIdle();
+        if (queueAck) {
+            const auto published = worker.snapshot();
+            require(published.pendingWorkerRxBytes == 0U && published.executingRxBytes == 0U &&
+                        published.outputQueueSize > 0U,
+                    "ACK 发布后应仅由实时输出队列继续保护请求");
+            require(protoscope::app::ApplicationBackpressureTestAccess::expireRequest(application),
+                    "未消费 ACK 输出时应继续等待 drain");
+            require(!hasState(protoscope::dock::RequestTraceState::Timeout),
+                    "已发布但未消费的 ACK 不得被超时抢先关闭");
+            protoscope::app::ApplicationBackpressureTestAccess::flushOutputs(application);
+            require(hasState(protoscope::dock::RequestTraceState::Completed) &&
+                        application.docks().commState().lastError.empty(),
+                    "消费 ACK 后 request 必须成功完成且无误报错误");
+        }
+    }
 }
 
 void test_application_guarded_request_timeout_retry_then_success_keeps_guard_active()

@@ -222,7 +222,12 @@ end
             "首个RX应建立活动连接并占满输出发布槽");
 
     worker.postTransportBytes(bytesEvent({0x02}), false);
-    require(observe([&] { return worker.executingRxBytes() == 1U && !worker.inputIdle(); }),
+    // 出队先设置 executing，随后才扣 pending；必须等扣减完成才能验证后续四字节积压。
+    require(observe([&] {
+                const auto snapshot = worker.snapshot();
+                return snapshot.executingRxBytes == 1U && snapshot.pendingWorkerRxBytes == 0U &&
+                       !worker.inputIdle();
+            }),
             "第二个RX应受控阻塞在输出发布窗口");
 
     auto stale = bytesEvent({0xA1, 0xA2});

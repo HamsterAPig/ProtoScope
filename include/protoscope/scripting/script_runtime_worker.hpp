@@ -46,6 +46,8 @@ struct ScriptRuntimeSnapshot {
     std::string lastError;
     std::size_t pendingPlotAppends{0};
     std::size_t pendingWorkerRxBytes{0};
+    // 与队列计数同锁读取，覆盖 RX 回调及输出发布窗口；不与 pending 相加统计字节数。
+    std::size_t executingRxBytes{0};
     std::size_t inputQueueSize{0};
     std::size_t outputQueueSize{0};
     std::size_t postprocessWorkerThreads{1U};

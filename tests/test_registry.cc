@@ -415,6 +415,8 @@ static const TestCase kAllTests[] = {
      &test_application_request_done_disabled_worker_completes_in_same_pump},
     {"application_request_timeout_drains_pending_rx_before_timeout",
      &test_application_request_timeout_drains_pending_rx_before_timeout},
+    {"application_request_timeout_uses_live_rx_snapshot",
+     &test_application_request_timeout_uses_live_rx_snapshot},
     {"application_guarded_request_timeout_retry_then_success_keeps_guard_active",
      &test_application_guarded_request_timeout_retry_then_success_keeps_guard_active},
     {"application_guarded_request_final_timeout_halts_followup_guarded",
