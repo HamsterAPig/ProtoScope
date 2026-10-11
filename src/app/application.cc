@@ -1890,21 +1890,28 @@ bool Application::applyPlotSetup(const plot::RawCapturePlotSetupEventData& input
     auto& wave = dockStore_.waveState();
     if (wave.buffer.importedLabelsReadOnly() && !rebuilding) {
         bool changed = false;
-        // 导入数据只接受共有通道的 Bit 总开关，不应用清历史、通道身份或视窗配置。
+        // 导入只更新共有位置的显示规格；绝不能进入会清历史、改通道数或视窗的全量路径。
         const auto count = (std::min)(setup.channels.size(), wave.buffer.channelCount());
         for (std::size_t index = 0; index < count; ++index) {
-            const bool enabled = setup.channels[index].bitDisplay.enabled;
-            auto spec = *wave.buffer.channelSpec(index);
-            if (spec.bitDisplay.enabled != enabled) {
-                spec.bitDisplay.enabled = enabled;
-                wave.buffer.setChannelSpec(index, std::move(spec));
-                changed = true;
+            const auto currentSpec = *wave.buffer.channelSpec(index);
+            auto defaultSpec = setup.channels[index];
+            defaultSpec.label = index < wave.defaultChannelSpecs.size()
+                                    ? wave.defaultChannelSpecs[index].label : currentSpec.label;
+            auto effectiveSpec = defaultSpec;
+            // 默认基线与用户显示覆盖独立，Lua 配置不得清除覆盖或借默认名称间接改名。
+            if (index < wave.channelOverrides.size()) {
+                const auto& overrideState = wave.channelOverrides[index];
+                if (overrideState.ratioOverridden) effectiveSpec.ratio = overrideState.ratio;
+                if (overrideState.scaleOverridden) effectiveSpec.scale = overrideState.scale;
+                if (overrideState.offsetOverridden) effectiveSpec.offset = overrideState.offset;
+                if (overrideState.colorOverridden) effectiveSpec.color = overrideState.color;
+                if (overrideState.bitYOffsetOverridden) effectiveSpec.bitDisplay.yOffset = overrideState.bitYOffset;
             }
-            if (index < wave.defaultChannelSpecs.size() &&
-                wave.defaultChannelSpecs[index].bitDisplay.enabled != enabled) {
-                wave.defaultChannelSpecs[index].bitDisplay.enabled = enabled;
-                changed = true;
-            }
+            effectiveSpec.label = currentSpec.label;
+            if (index < wave.defaultChannelSpecs.size())
+                wave.defaultChannelSpecs[index] = std::move(defaultSpec);
+            wave.buffer.setChannelSpec(index, std::move(effectiveSpec));
+            changed = true;
         }
         return changed;
     }
@@ -5061,7 +5068,7 @@ bool Application::applyScriptPlotSetups(const std::vector<scripting::PlotSetup>&
     for (const auto& setup : setups) {
         auto rawSetup = toRawPlotSetup(setup);
         changed = applyPlotSetup(rawSetup, rebuilding) || changed;
-        // 导入保护只应用 Bit 开关，不能把被拒绝的整份 Lua 配置记成实际采集事件。
+        // 导入只应用非名称显示规格，不能把含有被拒绝结构字段的整份 Lua 配置记成采集事件。
         if (dockStore_.waveState().buffer.importedLabelsReadOnly()) continue;
         const auto timestampMs = activeConnection_.has_value() ? activeConnection_->timestampMs : nowMs();
         recordPlotSetupSnapshot(rawSetup, timestampMs);

@@ -809,6 +809,8 @@ proto.plot.push(2, {
 })
 ```
 
+导入波形后，普通 Lua `proto.plot.setup()` 按 `channels` 数组位置更新已有共有通道的非名称显示规格：`unit`、`ratio`、`scale`、`offset`、`color`、`line_width` 及完整 `bit_display`（`enabled`、`first_bit`、`bit_count`、`y_offset`、`hover_readout`）。实际波形名称和默认名称分别保持原名，已有用户显示覆盖继续优先于新的 Lua 默认基线；恢复默认采用最新 Lua 非名称规格但不会改名。省略字段沿用 API 默认值，不是增量 patch；未声明的尾部通道不变，多余通道不会新增，非法配置仍整份拒绝。普通导入配置不会应用 `source`、`reset_history`、历史或视窗字段，也不接受普通 `push()` 追加导入数据；明确切换到实时来源后恢复通常行为。Bit 子项显示由位索引生成，不属于父通道 `label` 的名称保护。
+
 `bit_display` 读取同一通道 `push()` 的原始 `y` 作为非负整数 bitfield；
 这些 bit 不会套用 `ratio`、`scale` 或 `offset`。
 `bit_display.hover_readout` 默认 `false`，省略、`nil` 或 `bit_display=true` 均不显示 bit 悬停读数。

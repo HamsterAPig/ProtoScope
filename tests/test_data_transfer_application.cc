@@ -238,8 +238,25 @@ static void testImportedLuaBitToggle()
     const auto originalConfig = wave.buffer.viewConfig();
     const auto originalEpoch = wave.buffer.historyEpoch();
     const auto originalEvents = wave.rawCapture.events.size();
-    // 连续相同 setup 也不能解除导入保护或新增通道。
-    for (const std::string id : {"enable", "enable", "disable", "enable", "omit"}) {
+    // 两组名称刻意不同，不能把实际名称整份回写默认基线。
+    for (std::size_t i = 0; i < 2; ++i)
+        wave.defaultChannelSpecs[i].label = "default-import-" + std::to_string(i);
+    std::array<plot::ChannelSpec, 2> expectedSpecs;
+    for (std::size_t i = 0; i < expectedSpecs.size(); ++i) {
+        expectedSpecs[i] = data.channels[i].spec;
+        expectedSpecs[i].label = data.channels[i].label;
+        expectedSpecs[i].unit = data.channels[i].unit;
+    }
+    const auto assertDisplaySpec = [](const auto& actual, const plot::ChannelSpec& expected,
+                                      const std::string& stage) {
+        require(actual.label == expected.label && actual.unit == expected.unit &&
+                    actual.ratio == expected.ratio && actual.scale == expected.scale && actual.offset == expected.offset &&
+                    actual.color == expected.color && actual.lineWidth == expected.lineWidth &&
+                    actual.bitDisplay == expected.bitDisplay,
+                stage + ": Lua 非名称显示规格或原名不正确");
+    };
+    // 连续相同 setup 也不能解除导入保护或新增通道；短数组必须保留尾部最新规格。
+    for (const std::string id : {"enable", "enable", "disable", "disable", "enable", "omit", "omit"}) {
         application.updateControlValue(id, true);
         waitFor(application, [&] {
             require(application.docks().luaState().lastError.empty(), application.docks().luaState().lastError);
@@ -250,22 +267,35 @@ static void testImportedLuaBitToggle()
         });
         // 日志与 setup 在同一输出批次应用；清除日志保证下一次同名控件等待的是新回调。
         application.docks().scriptState().rows.clear();
+        // 首先核验具体非名称字段，旧 enabled-only 实现必须在这里产生行为红测。
+        require(wave.buffer.channelSpec(0)->bitDisplay.firstBit == (id == "omit" ? 0U : 6U),
+                "导入Lua first_bit未生效");
         require(wave.buffer.channelSpec(0)->bitDisplay.enabled == (id == "enable"), "Lua Bit toggle not applied");
         require(wave.buffer.channelSpec(1)->bitDisplay.enabled, "unmentioned imported channel changed");
+        expectedSpecs[0] = id == "omit" ? plot::ChannelSpec{} : plot::ChannelSpec{
+            .unit = "changed", .ratio = 99, .scale = 88, .offset = 77,
+            .color = std::array<float, 4>{1, 0, 0, 1}, .lineWidth = 4.0F,
+            .bitDisplay = {.enabled = id == "enable", .firstBit = 6, .bitCount = 3,
+                           .yOffset = 9, .hoverReadout = true}};
+        expectedSpecs[0].label = data.channels[0].label;
+        if (id == "enable") {
+            expectedSpecs[1] = plot::ChannelSpec{
+                .label = data.channels[1].label, .unit = "flags", .ratio = 5, .scale = 6, .offset = -7,
+                .color = std::array<float, 4>{0, 1, 0, 1}, .lineWidth = 3.5F,
+                .bitDisplay = {.enabled = true, .firstBit = 11, .bitCount = 2,
+                               .yOffset = -3, .hoverReadout = false}};
+        }
         const auto snapshot = wave.buffer.snapshot(-1e9, 1e9, false);
-        require(snapshot.channels.size() == 2, "Lua changed imported channel count");
+        require(snapshot.channels.size() == 2 && wave.defaultChannelSpecs.size() == 2,
+                "Lua changed imported channel count");
+        require(snapshot.source == data.source, "Lua changed imported source");
         for (std::size_t i = 0; i < 2; ++i) {
-            auto expected = data.channels[i].spec;
-            expected.label = data.channels[i].label;
-            expected.unit = data.channels[i].unit;
-            expected.bitDisplay.enabled = i == 1 || id == "enable";
-            const auto actual = *wave.buffer.channelSpec(i);
-            require(actual.label == expected.label && actual.unit == expected.unit &&
-                    actual.ratio == expected.ratio && actual.scale == expected.scale && actual.offset == expected.offset &&
-                    actual.color == expected.color && actual.lineWidth == expected.lineWidth &&
-                    actual.bitDisplay == expected.bitDisplay, "Lua modified protected channel metadata");
-            require(wave.defaultChannelSpecs[i].bitDisplay == expected.bitDisplay &&
-                    wave.defaultChannelSpecs[i].label == expected.label, "default Bit spec not synchronized");
+            const auto& expected = expectedSpecs[i];
+            assertDisplaySpec(*wave.buffer.channelSpec(i), expected, "actual");
+            auto expectedDefault = expected;
+            expectedDefault.label = "default-import-" + std::to_string(i);
+            assertDisplaySpec(wave.defaultChannelSpecs[i], expectedDefault, "default");
+            assertDisplaySpec(snapshot.channels[i], expected, "snapshot");
             require(snapshot.channels[i].totalSamples == 3 && snapshot.channels[i].sampleIndexOffset == 42,
                     "Lua reset history or appended samples");
             for (std::size_t j = 0; j < 3; ++j)
@@ -276,8 +306,12 @@ static void testImportedLuaBitToggle()
         require(wave.buffer.historyEpoch() == originalEpoch && wave.buffer.importedLabelsReadOnly(),
                 "Lua reset imported history protection");
         require(wave.buffer.viewConfig().timeScale == originalConfig.timeScale &&
+                wave.buffer.viewConfig().timeUnit == originalConfig.timeUnit &&
                 wave.buffer.viewConfig().historyLimit == originalConfig.historyLimit &&
-                wave.buffer.viewConfig().verticalMin == originalConfig.verticalMin,
+                wave.buffer.viewConfig().verticalMin == originalConfig.verticalMin &&
+                wave.buffer.viewConfig().verticalMax == originalConfig.verticalMax &&
+                wave.buffer.viewConfig().verticalUnit == originalConfig.verticalUnit &&
+                wave.buffer.viewConfig().displayFormula == originalConfig.displayFormula,
                 "Lua changed imported view config");
         require(wave.view.initialized && !wave.view.defaultViewportPending &&
                 wave.view.viewMinTime == 1.5 && wave.view.viewMaxTime == 2.5, "Lua reset viewport");
@@ -286,6 +320,111 @@ static void testImportedLuaBitToggle()
                 "Lua changed imported time axis");
         require(wave.rawCapture.events.size() == originalEvents, "unapplied Lua setup recorded in raw capture");
     }
+
+    const auto sendControl = [&](const std::string& id) {
+        application.docks().scriptState().rows.clear();
+        application.updateControlValue(id, true);
+        waitFor(application, [&] {
+            const auto& rows = application.docks().scriptState().rows;
+            return std::any_of(rows.begin(), rows.end(), [&](const auto& row) {
+                return row.message.find("bit-toggle-" + id) != std::string::npos;
+            });
+        });
+    };
+    const auto assertProtectedData = [&] {
+        const auto snapshot = wave.buffer.snapshot(-1e9, 1e9, false);
+        require(snapshot.source == data.source && snapshot.channels.size() == 2 &&
+                    wave.defaultChannelSpecs.size() == 2 && wave.buffer.historyEpoch() == originalEpoch &&
+                    wave.buffer.importedLabelsReadOnly(), "显示覆盖或恢复改变了导入结构");
+        require(wave.buffer.viewConfig().timeScale == originalConfig.timeScale &&
+                    wave.buffer.viewConfig().timeUnit == originalConfig.timeUnit &&
+                    wave.buffer.viewConfig().historyLimit == originalConfig.historyLimit &&
+                    wave.buffer.viewConfig().verticalMin == originalConfig.verticalMin &&
+                    wave.buffer.viewConfig().verticalMax == originalConfig.verticalMax &&
+                    wave.buffer.viewConfig().verticalUnit == originalConfig.verticalUnit &&
+                    wave.buffer.viewConfig().displayFormula == originalConfig.displayFormula &&
+                    wave.rawCapture.events.size() == originalEvents,
+                "显示覆盖或恢复改变了视窗配置或原始事件");
+        for (std::size_t i = 0; i < 2; ++i) {
+            require(snapshot.channels[i].label == data.channels[i].label &&
+                        wave.buffer.channelSpec(i)->label == data.channels[i].label &&
+                        wave.defaultChannelSpecs[i].label == "default-import-" + std::to_string(i) &&
+                        snapshot.channels[i].totalSamples == 3 && snapshot.channels[i].sampleIndexOffset == 42,
+                    "显示覆盖或恢复改变了原名或样本数");
+            for (std::size_t j = 0; j < 3; ++j)
+                require(snapshot.channels[i].samples[j].time == data.channels[i].samples[j].time &&
+                            snapshot.channels[i].samples[j].value == data.channels[i].samples[j].value,
+                        "显示覆盖或恢复改变了准确样本");
+        }
+    };
+    wave.channelOverrides.resize(2);
+    auto& overrides = wave.channelOverrides[0];
+    overrides.labelOverridden = true;
+    overrides.label = "forbidden-user-label";
+    overrides.ratioOverridden = overrides.scaleOverridden = overrides.offsetOverridden = true;
+    overrides.colorOverridden = overrides.bitYOffsetOverridden = true;
+    overrides.ratio = 12;
+    overrides.scale = 13;
+    overrides.offset = 14;
+    overrides.color = std::array<float, 4>{0, 0, 1, 1};
+    overrides.bitYOffset = 15;
+    auto userSpec = *wave.buffer.channelSpec(0);
+    userSpec.ratio = 12;
+    userSpec.scale = 13;
+    userSpec.offset = 14;
+    userSpec.color = overrides.color;
+    userSpec.bitDisplay.yOffset = 15;
+    wave.buffer.setChannelSpec(0, userSpec);
+    // 多次 setup 更新 Lua 默认值，用户显示覆盖不丢失，也不能污染默认基线。
+    for (const std::string id : {"enable", "disable", "enable"}) {
+        sendControl(id);
+        auto expectedDefault = plot::ChannelSpec{
+            .label = "default-import-0", .unit = "changed", .ratio = 99, .scale = 88, .offset = 77,
+            .color = std::array<float, 4>{1, 0, 0, 1}, .lineWidth = 4.0F,
+            .bitDisplay = {.enabled = id == "enable", .firstBit = 6, .bitCount = 3,
+                           .yOffset = 9, .hoverReadout = true}};
+        auto expectedEffective = expectedDefault;
+        expectedEffective.label = data.channels[0].label;
+        expectedEffective.ratio = 12;
+        expectedEffective.scale = 13;
+        expectedEffective.offset = 14;
+        expectedEffective.color = std::array<float, 4>{0, 0, 1, 1};
+        expectedEffective.bitDisplay.yOffset = 15;
+        assertDisplaySpec(wave.defaultChannelSpecs[0], expectedDefault, "覆盖后的默认基线");
+        assertDisplaySpec(*wave.buffer.channelSpec(0), expectedEffective, "覆盖后的实际规格");
+        assertDisplaySpec(wave.buffer.snapshot(-1e9, 1e9, false).channels[0], expectedEffective,
+                          "覆盖后的快照规格");
+        assertProtectedData();
+    }
+    require(plot::resetOneChannelViewSettings(wave, 0), "单通道恢复默认失败");
+    auto restored = wave.defaultChannelSpecs[0];
+    restored.label = data.channels[0].label;
+    assertDisplaySpec(*wave.buffer.channelSpec(0), restored, "恢复最新 Lua 默认");
+    assertProtectedData();
+    sendControl("omit");
+    auto omitted = plot::ChannelSpec{};
+    omitted.label = data.channels[0].label;
+    assertDisplaySpec(*wave.buffer.channelSpec(0), omitted, "恢复后省略配置");
+    // 第一通道合法但第二通道越界时，不得应用任何部分配置。
+    const auto beforeInvalidDefaults = wave.defaultChannelSpecs;
+    const auto beforeInvalidActual = std::array{*wave.buffer.channelSpec(0), *wave.buffer.channelSpec(1)};
+    sendControl("invalid");
+    const auto& invalidRows = application.docks().scriptState().rows;
+    require(std::any_of(invalidRows.begin(), invalidRows.end(), [](const auto& row) {
+        return row.message.find("first_bit + bit_count") != std::string::npos;
+    }), "非法 Bit 范围没有明确错误");
+    for (std::size_t i = 0; i < 2; ++i) {
+        assertDisplaySpec(*wave.buffer.channelSpec(i), beforeInvalidActual[i], "非法配置后的实际规格");
+        assertDisplaySpec(wave.defaultChannelSpecs[i], beforeInvalidDefaults[i], "非法配置后的默认规格");
+    }
+    require(plot::resetAllChannelViewSettings(wave), "全部通道恢复默认失败");
+    assertProtectedData();
+    sendControl("enable");
+    restored = wave.defaultChannelSpecs[0];
+    restored.label = data.channels[0].label;
+    assertDisplaySpec(*wave.buffer.channelSpec(0), restored, "全部恢复后再次 setup");
+    assertProtectedData();
+    application.docks().scriptState().rows.clear();
 
     // 清内存不等于切换来源，明确实时请求之前仍须保留导入身份。
     application.resetWaveHistory();
@@ -313,8 +452,10 @@ static void testImportedLuaBitToggle()
     }
     const auto liveSpec = *wave.buffer.channelSpec(0);
     require(liveSpec.unit == "changed" && liveSpec.ratio == 99 && liveSpec.scale == 88 && liveSpec.offset == 77 &&
-                liveSpec.bitDisplay.enabled && liveSpec.bitDisplay.firstBit == 0 && liveSpec.bitDisplay.bitCount == 1 &&
-                liveSpec.bitDisplay.yOffset == 99 && liveSpec.bitDisplay.hoverReadout,
+                liveSpec.color == std::optional<std::array<float, 4>>{std::array<float, 4>{1, 0, 0, 1}} &&
+                liveSpec.lineWidth == 4.0F &&
+                liveSpec.bitDisplay.enabled && liveSpec.bitDisplay.firstBit == 6 && liveSpec.bitDisplay.bitCount == 3 &&
+                liveSpec.bitDisplay.yOffset == 9 && liveSpec.bitDisplay.hoverReadout,
             "非导入 Lua 通道参数行为不应受名称保护影响");
     const auto liveSnapshot = wave.buffer.snapshot(-1e9, 1e9, false);
     require(liveSnapshot.channels[0].totalSamples == 1 && liveSnapshot.channels[0].samples[0].value == 999,
