@@ -181,6 +181,7 @@ target_compile_features(protoscope_dock PUBLIC cxx_std_20)
 
 add_library(protoscope_config STATIC
     config/config.cc
+    config/settings.cc
     config/embedded_protocols.cc
 )
 target_include_directories(protoscope_config
@@ -232,6 +233,7 @@ target_compile_features(protoscope_startup_diagnostics PUBLIC cxx_std_20)
 add_library(protoscope_app STATIC
     app/adaptive_performance.cc
     app/application.cc
+    app/application_settings.cc
     app/application_data.cc
     app/application_replay.cc
     app/application_wave.cc
@@ -287,6 +289,7 @@ if(PROTOSCOPE_ENABLE_GUI)
         ui/runtime/ui_components.cc
         ui/runtime/platform_controller.cc
         ui/runtime/config_controller.cc
+        ui/runtime/application_settings.cc
         ui/runtime/workspace_controller.cc
         ui/runtime/main_menu.cc
         ui/runtime/lua_view_menu.cc

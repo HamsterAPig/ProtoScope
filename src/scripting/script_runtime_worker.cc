@@ -31,6 +31,11 @@ namespace {
         ScriptRuntimeWorkerConfig config;
     };
 
+    struct BudgetSettingsCommand {
+        std::size_t rxQueueBytes, memoryBytes, outputLimit, batchBytes;
+        std::shared_ptr<std::promise<bool>> result;
+    };
+
     struct SetFileIoConfigCommand {
         FileIoConfig config;
     };
@@ -134,6 +139,7 @@ namespace {
     };
 
     using WorkerCommand = std::variant<ConfigureCommand,
+                                       BudgetSettingsCommand,
                                        SetFileIoConfigCommand,
                                        ReloadProtocolCommand,
                                        SetControlValueCommand,
@@ -753,6 +759,19 @@ struct ScriptRuntimeWorker::Impl {
         return true;
     }
 
+    CommandExecutionResult executeCommandItem(ScriptHost&, std::optional<std::uint64_t>&, BudgetSettingsCommand& command)
+    {
+        {
+            std::lock_guard lock(mutex);
+            config.rxQueueLimitBytes = command.rxQueueBytes;
+            config.memoryBudgetBytes = command.memoryBytes;
+            config.outputQueueLimit = command.outputLimit;
+            config.batchBytes = command.batchBytes;
+        }
+        command.result->set_value(true);
+        return {};
+    }
+
     CommandExecutionResult executeCommandItem(ScriptHost& host, std::optional<std::uint64_t>&, ConfigureCommand& command)
     {
         host.setExecutionConfig(command.config.execution);
@@ -1015,6 +1034,20 @@ ScriptRuntimeWorker::applyStreamRuntimeProfileEventAsync(StreamRuntimeProfileEve
     auto promise = std::make_shared<std::promise<std::pair<bool, std::string>>>();
     auto future = promise->get_future();
     impl_->pushCommand(ApplyStreamRuntimeProfileCommand{.event = std::move(event), .result = promise});
+    return future;
+}
+
+std::future<bool> ScriptRuntimeWorker::applyBudgetSettingsAsync(std::size_t rxQueueBytes,
+    std::size_t memoryBytes, std::size_t outputLimit, std::size_t batchBytes)
+{
+    auto promise = std::make_shared<std::promise<bool>>();
+    auto future = promise->get_future();
+    {
+        std::lock_guard lock(impl_->mutex);
+        if (impl_->stopping) { promise->set_value(false); return future; }
+        impl_->commands.push_back(BudgetSettingsCommand{rxQueueBytes, memoryBytes, outputLimit, batchBytes, promise});
+    }
+    impl_->signalCommandAvailable();
     return future;
 }
 

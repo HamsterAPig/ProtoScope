@@ -508,6 +508,13 @@ void GuiRuntime::saveFileDialogPreferences(const config::DataExportConfig* lastE
 {
     std::string error;
     const auto configPath = std::filesystem::u8path(application_.docks().configState().loadedFromPath);
+    // 专项目录保存不能掩盖既有外部更新，再刷新全局保存快照。
+    if (configStore_.hasChanged(configSnapshot_)) {
+        fileDialogPreferenceError_ = "保存文件目录偏好暂停：外部配置已变化";
+        application_.docks().setPendingExternalReload(configStore_.snapshot(configPath).timestampMs, fileDialogPreferenceError_);
+        application_.setStatusMessage(fileDialogPreferenceError_);
+        return;
+    }
     if (!configStore_.saveFileDialogPreferences(
             configPath, application_.runtimeConfig().gui.fileDialogs, error, lastExport)) {
         fileDialogPreferenceError_ = "保存文件目录偏好失败: " + error;

@@ -48,8 +48,10 @@ public:
               bool* fullscreenToggleRequested = nullptr,
               bool shortcutFocusOverride = false);
     void drawOverlay(bool fullscreenActive, bool* fullscreenToggleRequested);
+    void setSettingsInputBlocked(bool blocked) { settingsInputBlocked_ = blocked; }
 
 private:
+    bool settingsInputBlocked_{false};
     struct PendingOscilloscopeToggle {
         bool currentRunning{false};
         bool targetRunning{false};

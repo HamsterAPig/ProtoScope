@@ -48,6 +48,10 @@ int main()
                 "locked config reports save failure");
 #endif
         input.close();
+        const auto stableSnapshot = store.snapshot(path);
+        // 反复跨时钟采样检查：同一文件时间不得因转换估算漂移产生假外部冲突。
+        for (int i = 0; i < 100; ++i)
+            require(!store.hasChanged(stableSnapshot), "unchanged snapshot must remain stable");
         require(store.saveFileDialogPreferences(path, preferences, error, &lastExport), "save last export only");
         require(store.load(path).config.gui.lastDataExport.valid, "last export reload without wave");
         preferences.lastExportDirectory = "failed-export";

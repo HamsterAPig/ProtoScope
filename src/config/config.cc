@@ -1,13 +1,18 @@
 #include "protoscope/config/config.hpp"
 
 #include "protoscope/config/embedded_protocols.hpp"
+#include "protoscope/config/settings.hpp"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <fstream>
 #include <limits>
+#include <iterator>
+#include <stdexcept>
 #include <string_view>
 #include <system_error>
 
@@ -18,6 +23,9 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 namespace protoscope::config {
@@ -122,7 +130,7 @@ namespace {
 
     double normalizePerformanceScale(const double scale)
     {
-        return scale > 0.0 ? scale : 1.0;
+        return std::isfinite(scale) && scale > 0.0 ? scale : 1.0;
     }
 
     double normalizeAdaptiveMaxMultiplier(const double multiplier)
@@ -133,51 +141,12 @@ namespace {
         return (std::clamp)(multiplier, 0.25, 4.0);
     }
 
-    std::size_t scaleIntegerBudget(const std::size_t fallback, const double scale)
-    {
-        if (fallback == 0U) {
-            return 0U;
-        }
-        const auto scaled = std::round(static_cast<double>(fallback) * normalizePerformanceScale(scale));
-        if (scaled < 1.0) {
-            return 1U;
-        }
-        const auto maxValue = static_cast<double>((std::numeric_limits<std::size_t>::max)());
-        if (scaled > maxValue) {
-            return (std::numeric_limits<std::size_t>::max)();
-        }
-        return static_cast<std::size_t>(scaled);
-    }
-
-    double scaleDoubleBudget(const double fallback, const double scale)
-    {
-        if (fallback == 0.0) {
-            return 0.0;
-        }
-        return fallback * normalizePerformanceScale(scale);
-    }
-
     void applyPerformanceScale(AppConfig& config)
     {
-        const auto scale = normalizePerformanceScale(config.performance.scale);
-        config.performance.scale = scale;
-
-        // 核心流程：公共性能系数只缩放缺省预算；YAML 显式单项会在后续读取中覆盖这些值。
-        config.receive.transportReadBufferBytes = scaleIntegerBudget(config.receive.transportReadBufferBytes, scale);
-        config.scripting.workerRxQueueLimitBytes = scaleIntegerBudget(config.scripting.workerRxQueueLimitBytes, scale);
-        config.scripting.workerMemoryBudgetBytes = scaleIntegerBudget(config.scripting.workerMemoryBudgetBytes, scale);
-        config.scripting.workerOutputQueueLimit = scaleIntegerBudget(config.scripting.workerOutputQueueLimit, scale);
-        config.scripting.workerBatchBytes = scaleIntegerBudget(config.scripting.workerBatchBytes, scale);
-        config.scripting.workerOutputFlushBudgetMs =
-            scaleDoubleBudget(config.scripting.workerOutputFlushBudgetMs, scale);
-        config.gui.realtimeBacklog.rxChunkBytesPerPump =
-            scaleIntegerBudget(config.gui.realtimeBacklog.rxChunkBytesPerPump, scale);
-        config.gui.realtimeBacklog.transferFrameRowsPerPump =
-            scaleIntegerBudget(config.gui.realtimeBacklog.transferFrameRowsPerPump, scale);
-        config.gui.realtimeBacklog.plotAppendsPerPump =
-            scaleIntegerBudget(config.gui.realtimeBacklog.plotAppendsPerPump, scale);
-        config.gui.realtimeBacklog.rawFirstBacklogWarnBytes =
-            scaleIntegerBudget(config.gui.realtimeBacklog.rawFirstBacklogWarnBytes, scale);
+        config.performance.scale = normalizePerformanceScale(config.performance.scale);
+        std::string error;
+        // 与设置共用缺省基线/显式覆盖/安全转换；YAML 保留合法值并钳制超大派生值。
+        if (!recomputePerformanceDefaults(config, error, true)) throw std::runtime_error(error);
     }
 
     void readPerformanceSize(const YAML::Node& node, const char* key, std::size_t& value, bool& explicitOverride)
@@ -1481,35 +1450,102 @@ namespace {
         loadScriptingConfig(root, config);
         loadLoggingConfig(root, config);
         loadCommunicationConfig(root, config);
+        std::string error;
+        if (!recomputePerformanceDefaults(config, error, true)) throw std::runtime_error(error);
     }
 
-    bool writeConfigYamlFile(const std::filesystem::path& path, const YAML::Node& root, std::string& error)
+    // 只拥有本次独占创建的文件；任何失败都不删除既有路径或原配置。
+    struct ConfigTemporaryFile {
+        std::filesystem::path path;
+        std::string& error;
+        ~ConfigTemporaryFile()
+        {
+            if (path.empty()) return;
+            error += "；失败临时文件已保留 " + path.string();
+        }
+    };
+
+    bool writeConfigYamlFile(const std::filesystem::path& target, const YAML::Node& root,
+                             ConfigTemporaryFile& temporary, std::string& error)
     {
-        try {
-            if (!path.parent_path().empty()) {
-                std::error_code directoryError;
-                std::filesystem::create_directories(path.parent_path(), directoryError);
-                if (directoryError) {
-                    error = "创建配置目录失败: " + directoryError.message();
-                    return false;
-                }
+        const auto text = YAML::Dump(root);
+        std::error_code ec;
+        if (!target.parent_path().empty()) std::filesystem::create_directories(target.parent_path(), ec);
+        if (ec) { error = "创建配置目录失败: " + ec.message(); return false; }
+        static std::atomic<std::uint64_t> sequence{0};
+#if defined(_WIN32)
+        HANDLE handle = INVALID_HANDLE_VALUE;
+        const auto processId = GetCurrentProcessId();
+#else
+        int handle = -1;
+        const auto processId = getpid();
+#endif
+        for (int attempt = 0; attempt < 128; ++attempt) {
+            auto candidate = target;
+            candidate += ".save." + std::to_string(processId) + "." +
+                std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "." +
+                std::to_string(sequence.fetch_add(1)) + ".tmp";
+#if defined(_WIN32)
+            handle = CreateFileW(candidate.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                                 FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (handle == INVALID_HANDLE_VALUE) {
+                const auto code = GetLastError();
+                if (code == ERROR_FILE_EXISTS || code == ERROR_ALREADY_EXISTS) continue;
+                error = "独占创建配置临时文件失败: " + std::system_category().message(code); return false;
             }
-            std::ofstream out(path);
-            if (!out.good()) {
-                error = "无法写入配置文件";
-                return false;
+#else
+            handle = ::open(candidate.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+            if (handle < 0) {
+                if (errno == EEXIST) continue;
+                error = "独占创建配置临时文件失败: " + std::generic_category().message(errno); return false;
             }
-            out << root;
-            out.flush();
-            if (!out.good()) {
-                error = "写入配置文件失败";
-                return false;
+#endif
+            temporary.path = std::move(candidate);
+            break;
+        }
+        if (temporary.path.empty()) { error = "无法分配唯一配置临时文件"; return false; }
+        bool ok = true;
+        std::size_t offset = 0;
+        while (offset < text.size()) {
+#if defined(_WIN32)
+            DWORD written = 0;
+            const auto count = static_cast<DWORD>((std::min)(text.size() - offset, std::size_t{1024 * 1024}));
+            if (!WriteFile(handle, text.data() + offset, count, &written, nullptr) || written == 0) {
+                error = "写入配置临时文件失败: " + std::system_category().message(GetLastError()); ok = false; break;
             }
-            return true;
-        } catch (const std::exception& ex) {
-            error = ex.what();
+#else
+            const auto written = ::write(handle, text.data() + offset,
+                                         (std::min)(text.size() - offset, std::size_t{1024 * 1024}));
+            if (written < 0 && errno == EINTR) continue;
+            if (written <= 0) { error = "写入配置临时文件失败: " + std::generic_category().message(errno); ok = false; break; }
+#endif
+            offset += static_cast<std::size_t>(written);
+        }
+#if defined(_WIN32)
+        if (ok && !FlushFileBuffers(handle)) { error = "刷新配置临时文件失败: " + std::system_category().message(GetLastError()); ok = false; }
+        if (!CloseHandle(handle)) { error += "关闭配置临时文件失败: " + std::system_category().message(GetLastError()); ok = false; }
+#else
+        if (ok && ::fsync(handle) != 0) { error = "刷新配置临时文件失败: " + std::generic_category().message(errno); ok = false; }
+        if (::close(handle) != 0) { error += "关闭配置临时文件失败: " + std::generic_category().message(errno); ok = false; }
+#endif
+        return ok;
+    }
+
+    bool replaceConfigFile(const std::filesystem::path& temporary,
+                           const std::filesystem::path& path, std::string& error)
+    {
+        // 复用专项保存的原子替换能力；失败绝不先删除原配置重试。
+#if defined(_WIN32)
+        if (!MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            error = "替换配置失败: " + std::system_category().message(static_cast<int>(GetLastError()));
             return false;
         }
+#else
+        std::error_code ec;
+        std::filesystem::rename(temporary, path, ec);
+        if (ec) { error = "替换配置失败: " + ec.message(); return false; }
+#endif
+        return true;
     }
 } // namespace
 
@@ -1568,10 +1604,12 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const
 
     try {
         const YAML::Node root = YAML::LoadFile(result.resolvedPath.string());
+        auto candidate = withDefaults();
+        if (!root.IsMap()) throw std::runtime_error("配置根节点必须为映射");
+        loadConfigYamlRoot(root, candidate);
+        candidate.configPath = normalizeTextPath(result.resolvedPath);
+        result.config = std::move(candidate);
         result.loadedFromDisk = true;
-
-        loadConfigYamlRoot(root, result.config);
-        result.config.configPath = normalizeTextPath(result.resolvedPath);
     } catch (const std::exception& ex) {
         result.error = std::string("读取 YAML 失败: ") + ex.what();
         result.loadedFromDisk = false;
@@ -1588,9 +1626,12 @@ ConfigLoadResult ConfigStore::loadText(std::string_view yamlText, const std::fil
 
     try {
         const YAML::Node root = YAML::Load(std::string(yamlText));
+        auto candidate = withDefaults();
+        if (!root.IsMap()) throw std::runtime_error("配置根节点必须为映射");
+        loadConfigYamlRoot(root, candidate);
+        candidate.configPath = normalizeTextPath(result.resolvedPath);
+        result.config = std::move(candidate);
         result.loadedFromDisk = true;
-        loadConfigYamlRoot(root, result.config);
-        result.config.configPath = normalizeTextPath(result.resolvedPath);
     } catch (const std::exception& ex) {
         result.error = std::string("读取 YAML 文本失败: ") + ex.what();
         result.loadedFromDisk = false;
@@ -1600,8 +1641,29 @@ ConfigLoadResult ConfigStore::loadText(std::string_view yamlText, const std::fil
 
 bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& config, std::string& error) const
 {
-    const auto root = buildConfigYamlRoot(config, withDefaults());
-    return writeConfigYamlFile(path, root, error);
+    return saveChecked(path, config, snapshot(path), error);
+}
+
+bool ConfigStore::saveChecked(const std::filesystem::path& path, const AppConfig& config,
+                              const FileSnapshot& expected, std::string& error) const
+{
+    error.clear();
+    try {
+        if (path.empty() || expected.path != path) { error = "保存路径与确认快照不一致"; return false; }
+        if (!expected.error.empty()) { error = expected.error; return false; }
+        if (hasChanged(expected)) { error = "配置文件已被外部修改，请重新确认覆盖或重载"; return false; }
+        const auto root = buildConfigYamlRoot(config, withDefaults());
+        ConfigTemporaryFile temporary{{}, error};
+        if (!writeConfigYamlFile(path, root, temporary, error)) return false;
+        // 普通本机保存的冲突检测，不承诺恶意跨进程修改下的绝对事务隔离。
+        if (hasChanged(expected)) { error = "写入期间配置文件发生变化，未替换原文件"; return false; }
+        if (!replaceConfigFile(temporary.path, path, error)) return false;
+        temporary.path.clear();
+        return true;
+    } catch (const std::exception& ex) {
+        error = std::string("保存配置失败: ") + ex.what();
+        return false;
+    }
 }
 
 bool ConfigStore::saveText(const AppConfig& config, std::string& yamlText, std::string& error) const
@@ -1622,6 +1684,8 @@ bool ConfigStore::saveFileDialogPreferences(const std::filesystem::path& path,
 {
     try {
         error.clear();
+        const auto expected = snapshot(path);
+        if (!expected.error.empty()) { error = expected.error; return false; }
         std::error_code ec;
         const bool exists = std::filesystem::exists(path, ec);
         if (ec) {
@@ -1658,22 +1722,11 @@ bool ConfigStore::saveFileDialogPreferences(const std::filesystem::path& path,
             last["csv_shape"] = lastExport->csvShape;
             last["directory"] = lastExport->directory;
         }
-        // 先写同目录临时文件再替换，磁盘写满时保留原配置。
-        auto temporary = path;
-        temporary += ".file-dialog.tmp";
-        if (!writeConfigYamlFile(temporary, root, error)) return false;
-#if defined(_WIN32)
-        if (!MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-            error = std::system_category().message(static_cast<int>(GetLastError()));
-            return false;
-        }
-#else
-        std::filesystem::rename(temporary, path, ec);
-        if (ec) {
-            error = ec.message();
-            return false;
-        }
-#endif
+        ConfigTemporaryFile temporary{{}, error};
+        if (!writeConfigYamlFile(path, root, temporary, error)) return false;
+        if (hasChanged(expected)) { error = "保存期间配置发生变化，未保存目录偏好"; return false; }
+        if (!replaceConfigFile(temporary.path, path, error)) return false;
+        temporary.path.clear();
         return true;
     } catch (const std::exception& ex) {
         error = ex.what();
@@ -1772,20 +1825,29 @@ FileSnapshot ConfigStore::snapshot(const std::filesystem::path& path) const
     FileSnapshot result;
     result.path = path;
     std::error_code error;
-    result.exists = std::filesystem::exists(path, error) && !error;
-    if (result.exists) {
-        const auto lastWriteTime = std::filesystem::last_write_time(path, error);
-        if (!error) {
-            result.timestampMs = toTimestampMs(lastWriteTime);
-        }
+    result.exists = std::filesystem::exists(path, error);
+    if (error) { result.error = "检查配置快照失败: " + error.message(); return result; }
+    if (!result.exists) return result;
+    if (!std::filesystem::is_regular_file(path, error) || error) {
+        result.error = "配置快照不是可读取的普通文件";
+        return result;
     }
+    const auto lastWriteTime = std::filesystem::last_write_time(path, error);
+    if (error) { result.error = "读取配置时间失败: " + error.message(); return result; }
+    result.timestampMs = toTimestampMs(lastWriteTime);
+    std::ifstream input(path, std::ios::binary);
+    if (!input) { result.error = "读取配置快照失败"; return result; }
+    result.contents.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+    if (input.bad()) result.error = "读取配置快照内容失败";
     return result;
 }
 
 bool ConfigStore::hasChanged(const FileSnapshot& previous) const
 {
     const auto current = snapshot(previous.path);
-    return current.exists != previous.exists || current.timestampMs != previous.timestampMs;
+    return !previous.error.empty() || !current.error.empty() ||
+           current.exists != previous.exists || current.timestampMs != previous.timestampMs ||
+           current.contents != previous.contents;
 }
 
 void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStore) const
@@ -1880,7 +1942,12 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
 
 AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
 {
-    AppConfig config = withDefaults();
+    return captureFromDock(dockStore, withDefaults());
+}
+
+AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore, AppConfig config) const
+{
+    // 只覆盖 Dock 真正拥有的字段，未展示的已知运行配置必须原样保留。
 
     config.communication = dockStore.commState();
     config.protocol.rootDir = dockStore.luaState().protocolRootDir;
@@ -1954,7 +2021,8 @@ const std::filesystem::path& ConfigStore::defaultProtocolDir() const
 
 std::uint64_t ConfigStore::toTimestampMs(const std::filesystem::file_time_type& fileTime)
 {
-    const auto normalized = fileTime - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now();
+    // C++20固定时钟转换；用两次now估算会在毫秒边界抖动，误报未变化文件冲突。
+    const auto normalized = std::filesystem::file_time_type::clock::to_sys(fileTime);
     return static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(normalized.time_since_epoch()).count());
 }

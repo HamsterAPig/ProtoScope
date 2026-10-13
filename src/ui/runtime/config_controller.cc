@@ -8,8 +8,13 @@ namespace protoscope::ui {
 
 bool GuiRuntime::reloadConfigFromDisk()
 {
+    const auto path = std::filesystem::path(application_.docks().configState().loadedFromPath);
+    const auto loaded = configStore_.load(path);
+    if (!loaded.error.empty() || !loaded.loadedFromDisk) {
+        settingsError_ = "重载失败，保持运行态：" + loaded.error;
+        application_.setStatusMessage(settingsError_, false); return false;
+    }
     saveCurrentProtocolWorkspace();
-    const auto loaded = configStore_.load(configStore_.defaultConfigPath());
     if (!application_.applyConfig(loaded.config)) {
         return false;
     }
@@ -23,11 +28,12 @@ bool GuiRuntime::reloadConfigFromDisk()
                                       false);
     }
     loadCurrentProtocolWorkspace();
-    configSnapshot_ = configStore_.snapshot(configStore_.defaultConfigPath());
+    configSnapshot_ = configStore_.snapshot(path);
     auto& configState = application_.docks().configState();
     application_.docks().clearPendingExternalReload();
     application_.docks().clearDirty("已从磁盘重载配置");
     configState.fileTimestampMs = configSnapshot_.timestampMs;
+    settingsError_.clear();
     if (!themeError.empty()) application_.setStatusMessage(themeError, false);
     return true;
 }
@@ -41,8 +47,8 @@ bool GuiRuntime::pollConfigFileChanges()
     if (!configSnapshot_.path.empty() && !configStore_.hasChanged(configSnapshot_)) {
         return false;
     }
-    configSnapshot_ = configStore_.snapshot(configStore_.defaultConfigPath());
-    application_.docks().setPendingExternalReload(configSnapshot_.timestampMs, "检测到外部配置更新，请手动保存或重载");
+    const auto observed = configStore_.snapshot(configState.loadedFromPath);
+    application_.docks().setPendingExternalReload(observed.timestampMs, "检测到外部配置更新，请明确覆盖或重载");
     return false;
 }
 
@@ -91,8 +97,13 @@ bool GuiRuntime::maybeAutoSave()
 
     std::string error;
     const auto path = std::filesystem::path(configState.loadedFromPath);
-    if (!configStore_.save(path, application_.captureConfig(), error)) {
-        application_.setStatusMessage("自动保存失败: " + error, true);
+    if (settingsApplyRequested_ || settingsSaveAfterApply_ || settingsOverwriteSnapshot_ ||
+        application_.settingsSaveBlocked() || application_.dataTransferStatus().active) return false;
+    if (!configStore_.saveChecked(path, application_.captureConfig(), configSnapshot_, error)) {
+        settingsError_ = "自动保存失败: " + error;
+        if (configStore_.hasChanged(configSnapshot_))
+            application_.docks().setPendingExternalReload(configStore_.snapshot(path).timestampMs, "自动保存暂停：外部配置已变化，请明确覆盖或重载");
+        application_.setStatusMessage(settingsError_, true);
         return false;
     }
     configSnapshot_ = configStore_.snapshot(path);

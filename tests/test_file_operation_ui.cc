@@ -1,6 +1,7 @@
 #include "protoscope/app/application.hpp"
 #include "protoscope/ui/gui_runtime.hpp"
 #include "../src/ui/wave/wave_render_service.hpp"
+#include "../src/ui/docks/dock_widgets.hpp"
 #include <imgui_internal.h>
 #include <implot_internal.h>
 #include <imgui_impl_opengl3.h>
@@ -62,6 +63,128 @@ struct GuiRuntimeTestAccess {
     static void require(bool value, const char* message)
     {
         if (!value) throw std::runtime_error(message);
+    }
+    static void verifySettings(app::Application& application, GuiRuntime& runtime)
+    {
+        const auto original = application.captureConfig();
+        runtime.openApplicationSettings();
+        auto frame = [&] {
+            runtime.processSettingsActions();
+            beginFrame(); runtime.drawApplicationSettings(); endFrame();
+        };
+        frame(); frame();
+        auto* settings = ImGui::FindWindowByName("应用设置");
+        require(settings && settings->Active && settings->DockId == 0, "settings floating single instance");
+        require((settings->Flags & ImGuiWindowFlags_NoSavedSettings) != 0, "settings excluded from saved layouts");
+        runtime.settingsDraft_->value.gui.showAppHeader = !original.gui.showAppHeader;
+        runtime.openApplicationSettings(); frame();
+        require(application.captureConfig().gui.showAppHeader == original.gui.showAppHeader, "settings draft isolation and reopen retention");
+        require(runtime.settingsOwnInput(), "settings focus owns shortcuts");
+        for (const auto mode : {config::GuiWaveFullscreenMode::Focus, config::GuiWaveFullscreenMode::Overlay}) {
+            auto fullscreenConfig = application.captureConfig();
+            fullscreenConfig.gui.wave.fullscreenMode = mode;
+            application.applyConfig(fullscreenConfig);
+            runtime.enterWaveFullscreen();
+            runtime.openApplicationSettings(); frame();
+            ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, true);
+            beginFrame(); runtime.processWaveFullscreenInput(); runtime.drawApplicationSettings(); endFrame();
+            ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, false); frame();
+            // 第一次Escape打开草稿关闭弹窗，第二次Escape取消，草稿继续保留。
+            ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, true); frame();
+            ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, false); frame();
+            require(runtime.waveFullscreenActive_, "settings Escape does not leave either fullscreen strategy");
+            runtime.exitWaveFullscreen();
+        }
+        // 用真实鼠标点击标题栏关闭按钮，而不是直接调用关闭业务函数。
+        const ImVec2 close(settings->Pos.x + settings->Size.x - ImGui::GetFontSize(),
+                           settings->Pos.y + settings->TitleBarHeight * 0.5F);
+        auto& io = ImGui::GetIO();
+        io.AddMousePosEvent(close.x, close.y); io.AddMouseButtonEvent(0, true); frame();
+        io.AddMouseButtonEvent(0, false); frame(); frame();
+        require(runtime.settingsCloseRequested_ && runtime.settingsOpen_, "title close protects unapplied draft");
+        io.AddKeyEvent(ImGuiKey_Escape, true); frame();
+        io.AddKeyEvent(ImGuiKey_Escape, false); frame();
+        require(runtime.settingsOpen_ && !runtime.settingsCloseRequested_, "escape continues editing modal draft");
+        runtime.settingsDraft_->refresh(original);
+        for (const auto size : {ImVec2(820, 680), ImVec2(360, 400)}) {
+            ImGui::SetWindowSize(settings, size);
+            for (int page = 0; page < 4; ++page) {
+                runtime.settingsPage_ = static_cast<config::SettingsPage>(page);
+                frame(); frame();
+                require(settings->Active && settings->Size.x >= 320, "all settings pages render at narrow size");
+            }
+        }
+        runtime.settingsDraft_->value.gui.showAppHeader = !original.gui.showAppHeader;
+        runtime.applySettingsDraft(false, false);
+        frame();
+        require(application.captureConfig().gui.showAppHeader != original.gui.showAppHeader, "settings apply executed at frame boundary");
+        require(!runtime.settingsDraft_->hasChanges() && application.docks().configState().dirty, "apply refreshes draft without claiming saved");
+        // 设置窗口存在但失焦时，波形重新取得键盘所有权。
+        beginFrame();
+        ImGui::Begin("波形焦点测试"); ImGui::SetWindowFocus(); ImGui::End();
+        runtime.drawApplicationSettings(); endFrame();
+        require(!runtime.settingsOwnInput(), "wave refocus restores shortcut ownership");
+        io.AddMousePosEvent(settings->Pos.x + 30, settings->Pos.y + 65);
+        io.AddMouseButtonEvent(0, true);
+        io.AddKeyEvent(ImGuiKey_Space, true);
+        beginFrame();
+        require(runtime.settingsOwnInput(), "same-frame mouse target protects settings keyboard input before Begin");
+        runtime.drawApplicationSettings(); endFrame();
+        io.AddMouseButtonEvent(0, false); io.AddKeyEvent(ImGuiKey_Space, false); frame();
+        const auto root = std::filesystem::temp_directory_path() /
+            ("protoscope-settings-save-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(root);
+        const auto path = root / "config.yaml";
+        std::string error;
+        require(runtime.configStore_.save(path, application.captureConfig(), error), "save transaction fixture");
+        application.docks().configState().loadedFromPath = path.string();
+        runtime.configSnapshot_ = runtime.configStore_.snapshot(path);
+        const auto savedBaseline = runtime.configSnapshot_.contents;
+        { std::ofstream external(path); external << "app: {fps_limit: 321}\n"; }
+        const auto externalContents = runtime.configStore_.snapshot(path).contents;
+        runtime.settingsOverwriteSnapshot_ = runtime.configStore_.snapshot(path);
+        runtime.settingsDraft_->refresh(application.captureConfig());
+        runtime.settingsDraft_->value.gui.window.width = 0;
+        application.docks().configState().autoSaveEnabled = true;
+        application.docks().markDirty("test");
+        runtime.applySettingsDraft(true, false);
+        require(!runtime.maybeAutoSave() && runtime.configSnapshot_.contents == savedBaseline,
+                "queued overwrite cannot authorize autosave or advance baseline");
+        runtime.processSettingsActions();
+        require(runtime.configStore_.snapshot(path).contents == externalContents &&
+                runtime.settingsDraft_->value.gui.window.width == 0 && !runtime.settingsCloseAfterApply_ &&
+                !runtime.settingsSaveAfterApply_ && !runtime.settingsOverwriteSnapshot_,
+                "invalid overwrite preserves external file and ends transaction intentions");
+        // 有效应用后使用错误快照触发落盘冲突，原草稿和编辑基线必须仍在。
+        runtime.settingsDraft_->refresh(application.captureConfig());
+        const auto beforeSave = runtime.settingsDraft_->baseline.gui.showAppHeader;
+        runtime.settingsDraft_->value.gui.showAppHeader = !beforeSave;
+        runtime.settingsOverwriteSnapshot_ = runtime.configSnapshot_; // 旧快照：模拟应用期间磁盘变化。
+        runtime.applySettingsDraft(true, true); runtime.processSettingsActions();
+        require(runtime.settingsPreserveSaveDraft_ && runtime.settingsDraft_->hasChanges() &&
+                runtime.settingsDraft_->baseline.gui.showAppHeader == beforeSave && runtime.settingsOpen_ &&
+                !runtime.settingsCloseAfterApply_, "persist failure keeps original draft baseline and does not close");
+        runtime.settingsExternalConflict_ = false;
+        runtime.settingsSaveAfterApply_ = runtime.settingsCloseAfterApply_ = false;
+        application.docks().configState().autoSaveEnabled = false;
+        runtime.settingsOpen_ = false;
+        ImRect marker;
+        for (int n = 0; n < 60; ++n) {
+            if (n > 0) io.AddMousePosEvent(marker.GetCenter().x, marker.GetCenter().y);
+            beginFrame();
+            ImGui::Begin("帮助标记验证");
+            ImGui::TextUnformatted("字段");
+            drawDockHelpMarker("单位：毫秒；默认：5000；范围：非负；0无最小间隔。长文本自动换行，不影响草稿。");
+            marker = GImGui->LastItemData.Rect;
+            ImGui::End();
+            if (n == 59) {
+                const auto* tooltip = ImGui::FindWindowByName("##Tooltip_00");
+                require(tooltip && tooltip->Active && tooltip->Size.x <= ImGui::GetFontSize() * 34,
+                        "real hover opens wrapped help tooltip");
+            }
+            endFrame();
+        }
+        application.applyConfig(original);
     }
     static void verify(app::Application& application, GuiRuntime& runtime)
     {
@@ -175,6 +298,7 @@ struct GuiRuntimeTestAccess {
         const auto configPath = root / "config.yaml";
         auto& state = application.docks().configState();
         state.loadedFromPath = fileDialogPathText(configPath);
+        runtime.configSnapshot_ = store.snapshot(configPath);
         state.dirty = false;
         runtime.importCsvDataFromPath(importDir / "missing.csv");
         require(!runtime.csvDataImportError_.empty(), "import fixture must fail");
@@ -309,6 +433,7 @@ int main(int argc, char** argv)
         protoscope::app::Application app;
         protoscope::config::ConfigStore store;
         protoscope::ui::GuiRuntime runtime(app, store);
+        protoscope::ui::GuiRuntimeTestAccess::verifySettings(app, runtime);
         protoscope::ui::GuiRuntimeTestAccess::verify(app, runtime);
         protoscope::ui::GuiRuntimeTestAccess::verifyRememberedPaths(app, runtime, store);
         protoscope::ui::GuiRuntimeTestAccess::verifyStatus(app, runtime);

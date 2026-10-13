@@ -1,6 +1,8 @@
 #pragma once
 
 #include "protoscope/config/config.hpp"
+#include "protoscope/config/settings.hpp"
+#include "protoscope/app/application.hpp"
 #include "protoscope/ui/dock_layout.hpp"
 #include "protoscope/ui/control_edit_state.hpp"
 #include "protoscope/ui/elf_static_address_file_watch.hpp"
@@ -378,6 +380,12 @@ private:
                                        const ElfSymbolComboUiState& state,
                                        const std::string& selectedLabel);
 
+    void openApplicationSettings();
+    void drawApplicationSettings();
+    void requestSettingsClose();
+    void applySettingsDraft(bool save, bool close);
+    void processSettingsActions();
+    bool settingsOwnInput() const;
     bool reloadConfigFromDisk();
     bool pollConfigFileChanges();
     bool pollElfStaticAddressFileChanges();
@@ -405,6 +413,17 @@ private:
     std::uint64_t lastPumpMs_{0};
     std::uint64_t lastAutoSaveAtMs_{0};
     config::FileSnapshot configSnapshot_{};
+    std::optional<config::SettingsDraft> settingsDraft_;
+    config::SettingsPage settingsPage_{config::SettingsPage::General};
+    app::SettingsApplyResult settingsResult_;
+    bool settingsOpen_{false}, settingsFocusRequested_{false}, settingsFocused_{false};
+    bool settingsCloseRequested_{false}, settingsSaveAfterApply_{false}, settingsCloseAfterApply_{false};
+    bool settingsExternalConflict_{false};
+    bool settingsApplyRequested_{false};
+    std::optional<config::FileSnapshot> settingsOverwriteSnapshot_;
+    bool settingsPreserveSaveDraft_{false};
+    std::string settingsError_;
+    std::optional<config::AppConfig> settingsStartupConfig_;
     std::string lastWindowTitle_;
     std::string activeWorkspaceProtocolKey_;
     std::optional<std::string> pendingProtocolDir_;

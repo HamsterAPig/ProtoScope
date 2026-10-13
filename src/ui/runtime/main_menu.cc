@@ -220,6 +220,8 @@ void GuiRuntime::drawSettingsMenu()
         return;
     }
 
+    if (ImGui::MenuItem("应用设置…")) openApplicationSettings();
+    ImGui::Separator();
     if (ImGui::BeginMenu("日志等级")) {
         const auto currentLevel = application_.logger().currentConfig().level;
         for (const auto& item : kLogLevelMenuItems) {

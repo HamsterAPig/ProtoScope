@@ -88,7 +88,7 @@ bool Application::initialize()
 
 bool Application::applyConfig(const config::AppConfig& config)
 {
-    if (dataTransferStatus().active && !applyingImportContext_) return false;
+    if (pendingSettingsConfig_ || (dataTransferStatus().active && !applyingImportContext_)) return false;
     captureProtocolConfigOverride_.reset();
     runtimeConfig_ = config;
     adaptivePerformance_.configure(config.performance.adaptive);
@@ -127,11 +127,10 @@ bool Application::applyConfig(const config::AppConfig& config)
 
 void Application::setLogLevel(const config::LogLevel level)
 {
+    if (runtimeConfig_.logging.level == level) return;
+    loggingFacade_.setLevel(level);
     runtimeConfig_.logging.level = level;
-    auto logging = loggingFacade_.currentConfig();
-    logging.level = level;
-    // 核心流程：菜单切换只刷新日志门限，不走 applyConfig，避免无关协议重载。
-    loggingFacade_.applyConfig(logging);
+    dockStore_.markDirty("日志等级已修改");
 }
 
 void Application::setGuiTheme(const config::GuiTheme theme)
@@ -148,7 +147,7 @@ void Application::setGuiTheme(const std::string_view theme)
 
 config::AppConfig Application::captureConfig() const
 {
-    auto captured = configStore_.captureFromDock(dockStore_);
+    auto captured = configStore_.captureFromDock(dockStore_, runtimeConfig_);
     if (captureProtocolConfigOverride_.has_value()) {
         captured.protocol.rootDir = captureProtocolConfigOverride_->rootDir;
         captured.protocol.selectedDir = captureProtocolConfigOverride_->selectedDir;

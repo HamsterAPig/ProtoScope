@@ -3,6 +3,7 @@
 #include "protoscope/app/adaptive_performance.hpp"
 #include "protoscope/app/data_transfer_task.hpp"
 #include "protoscope/config/config.hpp"
+#include "protoscope/config/settings.hpp"
 #include "protoscope/dock/docks.hpp"
 #include "protoscope/logging/logging.hpp"
 #include "protoscope/plot/csv_data_file.hpp"
@@ -25,6 +26,26 @@
 
 namespace protoscope::app {
 
+enum class SettingsApplyStatus { Applied, Pending, Failed, ConfirmationRequired };
+struct SettingsApplyOptions {
+    bool confirmHistoryTrim{false};
+    bool overwriteConflicts{false};
+    std::uint64_t confirmationId{0};
+    // 宿主必须通过 ThemeManager 验证并提交主题；核心不直接渲染。
+    std::function<bool(std::string_view, std::string&)> applyTheme;
+    // 可失败的资源校验/准备应在 worker 执行前完成；不得预览主题。
+    std::function<bool(std::string_view, std::string&)> prepareTheme;
+};
+struct SettingsApplyResult {
+    SettingsApplyStatus status{SettingsApplyStatus::Failed};
+    std::string error;
+    std::vector<std::string> conflicts;
+    std::uint64_t confirmationId{0};
+    bool restartRequired{false};
+    bool nextConnectionRequired{false};
+    bool partiallyApplied{false};
+};
+
 class Application {
 public:
     Application();
@@ -32,6 +53,15 @@ public:
     bool initialize();
     bool applyConfig(const config::AppConfig& config);
     config::AppConfig captureConfig() const;
+    SettingsApplyResult applySettingsChanges(const config::AppConfig& baseline, const config::AppConfig& draft,
+                                             SettingsApplyOptions options = {});
+    SettingsApplyResult pollSettingsApply();
+    [[nodiscard]] bool settingsSaveBlocked() const { return pendingSettingsConfig_.has_value() || settingsPartialSaveBlocked_; }
+    bool preparePartialWorkerRecovery(config::SettingsDraft& draft) const;
+    bool acceptPartialSettings(std::string& error);
+    // 只保存最新运行态；导入导出或应用 Pending 时禁止落盘。
+    bool saveSettings(config::SettingsPersistence& persistence, std::string& error);
+    [[nodiscard]] AdaptivePerformanceBudget effectiveSettingsPerformance() const;
     [[nodiscard]] const config::AppConfig& runtimeConfig() const;
     [[nodiscard]] std::uint32_t effectiveFpsLimit() const;
     [[nodiscard]] bool loadedConfigFromDisk() const;
@@ -180,6 +210,7 @@ public:
 private:
     // 仅测试协调背压观察/取消，不暴露业务侧 worker 访问入口。
     friend struct ApplicationBackpressureTestAccess;
+    friend struct ApplicationSettingsTestAccess;
 
     // 跨职责实现共用的辅助函数，不增加对象状态或公开接口。
     static std::uint64_t nowMs();
@@ -432,6 +463,17 @@ private:
     std::optional<config::ProtocolConfig> captureProtocolConfigOverride_;
     logging::LoggingFacade loggingFacade_{};
     scripting::ScriptRuntimeWorker scriptWorker_;
+    std::future<bool> settingsBudgetFence_;
+    std::optional<config::AppConfig> pendingSettingsConfig_;
+    std::optional<config::AppConfig> pendingSettingsBaseline_;
+    SettingsApplyOptions pendingSettingsOptions_;
+    SettingsApplyResult settingsApplyResult_;
+    bool settingsPartialSaveBlocked_{false};
+    std::optional<config::PerformanceExplicitOverrides> settingsWorkerOriginalFlags_;
+    std::uint64_t settingsConfirmationId_{0};
+    std::optional<config::AppConfig> settingsConfirmationRuntime_;
+    std::optional<config::AppConfig> settingsConfirmationDraft_;
+    void commitSettingsChanges(const config::AppConfig& value);
     std::unique_ptr<scripting::ScriptRuntimeWorker> offlineScriptWorker_;
     plugin::ElfStaticViewBridge elfStaticView_;
     std::uint64_t elfStaticAddressRevision_{0};

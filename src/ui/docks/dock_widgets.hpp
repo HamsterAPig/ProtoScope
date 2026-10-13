@@ -12,7 +12,9 @@ inline void drawDockHelpMarker(const char* text)
     ImGui::SameLine();
     ImGui::TextDisabled("(?)");
     if (ImGui::BeginItemTooltip()) {
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 32.0F);
         ImGui::TextUnformatted(text);
+        ImGui::PopTextWrapPos();
         ImGui::EndTooltip();
     }
 }
