@@ -129,6 +129,8 @@ public:
     [[nodiscard]] std::vector<ScriptRuntimeOutputBatch> drainOutputs();
     [[nodiscard]] std::optional<ScriptRuntimeOutputBatch> drainOneOutput();
     [[nodiscard]] ScriptRuntimeSnapshot snapshot() const;
+    // 只请求中断并唤醒队列，不等待线程退出；stop 仍负责 join。
+    void requestStop();
     void stop();
 
 private:

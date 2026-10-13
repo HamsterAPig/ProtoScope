@@ -415,6 +415,8 @@ void Application::freezeImportedChannelLabels()
 
 void Application::switchToLiveWaveSource()
 {
+    importedRawAssociated_ = false;
+    protocolSwitchReplay_ = false;
     if (!dockStore_.waveState().buffer.importedLabelsReadOnly()) return;
     if (rawCaptureReplay_.loaded) unloadRawCaptureReplayTimeline();
     logRealtimeBacklogDiscard(clearPendingRealtimeBacklog());
@@ -586,6 +588,10 @@ bool Application::importWaveCsvData(const plot::WaveCsvData& data, std::string& 
     importedActualLabels_.clear();
     importedDefaultLabels_.clear();
     importedRebuildGeneration_.reset();
+    // 单独导入波形不关联任何旧采集；随后同包 importRawRecords 才重新建立关联。
+    if (rawCaptureReplay_.loaded) unloadRawCaptureReplayTimeline();
+    importedRawAssociated_ = false;
+    protocolSwitchReplay_ = false;
     wave.buffer.setDataSource(plot::WaveDataSource::Imported);
     wave.buffer.clear();
     wave.buffer.setHistoryTrimSuspended(true);

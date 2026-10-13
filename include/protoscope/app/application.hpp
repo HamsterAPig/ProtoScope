@@ -65,7 +65,9 @@ public:
     [[nodiscard]] const config::AppConfig& runtimeConfig() const;
     [[nodiscard]] std::uint32_t effectiveFpsLimit() const;
     [[nodiscard]] bool loadedConfigFromDisk() const;
-    bool reloadProtocolDirectory(const std::string& protocolDir, bool forceReload = false);
+    // 配置/启动调用必须显式关闭手动导入重算；无变化的非强制 reload 本身不会重算。
+    bool reloadProtocolDirectory(const std::string& protocolDir, bool forceReload = false,
+                                 bool manualSwitch = true);
     bool pumpOnce();
     void shutdown();
 
@@ -344,6 +346,8 @@ private:
         plot::RawCaptureFileData capture{};
         transport::ConnectionContext context{};
         std::size_t eventIndex{0};
+        std::size_t legacyByteOffset{0};
+        bool legacyEventStarted{false};
         std::size_t targetEventIndex{0};
         std::size_t completedLuaInputs{0};
         bool resumeAfterSeek{false};
@@ -382,7 +386,8 @@ private:
     bool applyProtocolLoadResult(const std::string& resolvedDirText,
                                  const std::string& protocolName,
                                  const std::string& scriptPath,
-                                 const scripting::ScriptRuntimeLoadResult& loadResult);
+                                 const scripting::ScriptRuntimeLoadResult& loadResult,
+                                 bool preserveImportedWave = false);
     void refreshTransferFrameDisplayAfterProtocolReload();
     bool handleTransportEvents();
     void resetTransportPumpMetrics();
@@ -537,6 +542,8 @@ private:
     std::optional<config::AppConfig> settingsConfirmationDraft_;
     void commitSettingsChanges(const config::AppConfig& value);
     std::unique_ptr<scripting::ScriptRuntimeWorker> offlineScriptWorker_;
+    // future 持有后台退场任务，未完成时不能销毁（std::async 的析构会等待）。
+    std::vector<std::future<std::string>> retiringOfflineWorkers_;
     plugin::ElfStaticViewBridge elfStaticView_;
     std::uint64_t elfStaticAddressRevision_{0};
     std::unique_ptr<transport::ITransport> transport_;
@@ -599,6 +606,12 @@ private:
     std::shared_future<scripting::ScriptRuntimeLoadResult> retiringImportProtocolLoad_;
     std::shared_ptr<session::SessionPackageData> pendingImportSession_;
     std::vector<plot::WaveAnalysisMarker> pendingImportMarkers_;
+    // 明确关联身份，波形单独导入后不得借用先前采集的 raw。
+    bool importedRawAssociated_{false};
+    bool protocolSwitchReplay_{false};
+    bool discardProtocolInitializationOutputs_{false};
+    // 初始化输出排空前暂存用户控件操作，避免与初始化一起被丢弃。
+    std::vector<std::function<void()>> deferredProtocolControls_;
     bool importedWaveIncomplete_{false};
     std::string importedWaveRange_{"full"};
     bool importReplacedWave_{false};

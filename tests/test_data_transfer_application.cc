@@ -5,6 +5,7 @@
 #include "test_helpers.hpp"
 
 #include <chrono>
+#include <atomic>
 #include <algorithm>
 #include <iostream>
 #include <thread>
@@ -56,6 +57,23 @@ static void require(bool value, const std::string& message)
 namespace protoscope::app {
 // 复用已有测试友元；验证独立离线 parser 不被切换入口替换，不调用 Lua。
 struct ApplicationBackpressureTestAccess {
+    static bool offlineInputIdle(const Application& application) {
+        return application.offlineScriptWorker_ && application.offlineScriptWorker_->inputIdle();
+    }
+    static std::size_t legacyOffset(const Application& application) { return application.rawCaptureReplay_.legacyByteOffset; }
+    static void postBlockedOfflineTx(Application& application, std::function<void()> hook) {
+        application.offlineScriptWorker_->setTxCallbackTestHookForTest(std::move(hook));
+        application.offlineScriptWorker_->postTxEvent(application.rawCaptureReplay_.context, scripting::TxEvent{});
+    }
+    static bool retirementPending(const Application& application) { return !application.retiringOfflineWorkers_.empty(); }
+    static bool switchReplayFinished(const Application& application) {
+        return application.rawCaptureReplay_.phase == Application::OfflineReplayPhase::Completed ||
+               application.rawCaptureReplay_.phase == Application::OfflineReplayPhase::Failed;
+    }
+    static std::uint64_t replayGeneration(const Application& application) { return application.rawCaptureReplay_.generation; }
+    static bool switchReplayFailed(const Application& application) {
+        return application.rawCaptureReplay_.phase == Application::OfflineReplayPhase::Failed;
+    }
     static std::uint64_t runtimeGeneration(const Application& application) {
         return application.scriptWorker_.snapshot().runtimeGeneration;
     }
@@ -497,7 +515,8 @@ static void testProtocolReloadDefersLargeHistory()
     require(application.importRawRecords(capture, error), error);
     application.docks().receiveState().displayMode = dock::TransferLogDisplayMode::ParsedFrames;
     // 真实入口：成功重新加载协议触发 refreshTransferFrameDisplayAfterProtocolReload。
-    require(application.reloadProtocolDirectory(protocol.generic_string(), true), "重载协议失败");
+    // 此用例验证 UI parser 的旧路径，而非本次手动重算入口。
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true, false), "重载协议失败");
     app::ApplicationBackpressureTestAccess::verifyReloadHistoryDeferred(application, true);
     application.pumpOnce();
     app::ApplicationBackpressureTestAccess::verifyReloadHistoryDeferred(application, false);
@@ -713,8 +732,10 @@ static void testImportedSourceLabelsAfterReplay()
         waitCompleted();
         tryLuaRename("完成后再次播放");
     }
-    require(application.reloadProtocolDirectory(protocol.generic_string(), true), "导入后的普通 reload 失败");
-    tryLuaRename("普通 reload 后");
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true), "导入后的手动 reload 失败");
+    // 手动成功重载现在真正重算关联raw；准备阶段重置旧日志，须待新代次完成再测控件保护。
+    waitCompleted();
+    tryLuaRename("手动 reload 重算完成后");
     plot::WaveCsvData invalid;
     error.clear();
     require(!application.importWaveCsvData(invalid, error), "零通道导入应被拒绝");
@@ -1143,9 +1164,142 @@ static void testSessionImportProtocolSelection()
     current.shutdown();
 }
 
+static void testLegacyReplayAndRetirementNonblocking()
+{
+    app::Application application;
+    require(application.initialize(), "legacy 非阻塞测试初始化失败");
+    const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures/protocols/stream_frame_only";
+    require(application.reloadProtocolDirectory(fixture.generic_string(), true, false), "legacy schema 加载失败");
+    auto config = application.captureConfig();
+    config.scripting.workerOutputQueueLimit = 1;
+    require(application.applyConfig(config, false), "背压预算应用失败");
+    plot::RawCaptureFileData capture;
+    for (int i = 0; i < 128; ++i)
+        capture.payload.insert(capture.payload.end(), {0xAA, 0x55, 0, 7, 0, 0});
+    std::string error;
+    require(application.loadRawCaptureReplayTimeline(capture, app::Application::OfflineReplayProcessing::CurrentProtocol,
+        app::Application::OfflineReplayPacing::FastBatchParse, error), error);
+    require(application.playRawCaptureReplay(error), error);
+    waitFor(application, [&] { return application.rawCaptureReplayStatus().phase !=
+        app::Application::OfflineReplayPhase::Preparing; });
+    bool sawPartial = app::ApplicationBackpressureTestAccess::legacyOffset(application) > 0;
+    const auto deadline = Clock::now() + std::chrono::seconds(20);
+    while (!app::ApplicationBackpressureTestAccess::switchReplayFinished(application)) {
+        const auto start = Clock::now();
+        application.pumpOnce();
+        require(Clock::now() - start < std::chrono::milliseconds(500), "输出背压下 pump 不得等待 worker");
+        const auto offset = app::ApplicationBackpressureTestAccess::legacyOffset(application);
+        sawPartial = sawPartial || (offset > 0 && application.rawCaptureReplayStatus().eventIndex == 0);
+        require(Clock::now() < deadline, "legacy 背压回放应最终完成");
+        std::this_thread::yield();
+    }
+    require(sawPartial && !application.docks().receiveState().frameRows.empty(),
+            "超过 schema 容量的 legacy 必须分轮解析并产生帧");
+    // 旧 worker 的回调故意等待有限时间；取消返回后应仍有后台退场任务。
+    const auto txFixture = std::filesystem::path(__FILE__).parent_path() / "fixtures/protocols/data_transfer";
+    require(application.reloadProtocolDirectory(txFixture.generic_string(), true, false), "退场fixture加载失败");
+    require(application.loadRawCaptureReplayTimeline(capture, app::Application::OfflineReplayProcessing::CurrentProtocol,
+        app::Application::OfflineReplayPacing::FastBatchParse, error), error);
+    require(application.playRawCaptureReplay(error), error);
+    waitFor(application, [&] { return app::ApplicationBackpressureTestAccess::offlineInputIdle(application) &&
+        application.rawCaptureReplayStatus().phase != app::Application::OfflineReplayPhase::Preparing; });
+    const auto entered = std::make_shared<std::atomic<bool>>(false);
+    const auto release = std::make_shared<std::atomic<bool>>(false);
+    app::ApplicationBackpressureTestAccess::postBlockedOfflineTx(application, [entered, release] {
+        entered->store(true);
+        const auto until = Clock::now() + std::chrono::seconds(2);
+        while (!release->load() && Clock::now() < until) std::this_thread::yield();
+    });
+    const auto hookDeadline = Clock::now() + std::chrono::seconds(5);
+    while (!entered->load() && Clock::now() < hookDeadline) std::this_thread::yield();
+    require(entered->load(), "退场钩子必须进入执行态");
+    const auto cancelStart = Clock::now();
+    application.unloadRawCaptureReplayTimeline();
+    const auto cancelElapsed = Clock::now() - cancelStart;
+    const bool pending = app::ApplicationBackpressureTestAccess::retirementPending(application);
+    release->store(true);
+    require(cancelElapsed < std::chrono::milliseconds(500) && pending,
+            "取消不能在UI join旧worker，必须持有后台退场任务");
+    waitFor(application, [&] { return !app::ApplicationBackpressureTestAccess::retirementPending(application); });
+    application.shutdown();
+}
+
+static void testManualProtocolSwitchReplay()
+{
+    app::Application application;
+    require(application.initialize(), "手动切协议重算初始化失败");
+    std::string error;
+    const auto protocol = std::filesystem::path(__FILE__).parent_path() / "fixtures/protocols/import_source_label";
+    plot::RawCaptureFileData capture;
+    capture.source = "关联导入";
+    capture.events = {{.type = plot::RawCaptureEventType::RxBytes, .bytes = {11, 12, 13}, .sequence = 1}};
+    require(application.importRawRecords(capture, error), error);
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true), "手动切换失败");
+    waitFor(application, [&] { return app::ApplicationBackpressureTestAccess::switchReplayFinished(application); });
+    const auto parsed = application.captureWaveData({}, error);
+    require(parsed && parsed->channels.size() == 2 && parsed->channels[0].samples.size() == 3 &&
+        parsed->channels[0].samples[0].value == 11 && parsed->channels[1].samples[0].value == 111,
+        "纯原始导入手动切换必须真正重算波形");
+    const auto first = app::ApplicationBackpressureTestAccess::replayGeneration(application);
+    require(application.reloadProtocolDirectory(protocol.generic_string(), false), "无变化 reload 失败");
+    require(app::ApplicationBackpressureTestAccess::replayGeneration(application) == first,
+        "无变化 reload 不得重算");
+    require(application.applyConfig(application.captureConfig()), "配置应用失败");
+    require(app::ApplicationBackpressureTestAccess::replayGeneration(application) == first,
+        "配置应用不得触发手动重算");
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true), "连续切换第一次失败");
+    const auto second = app::ApplicationBackpressureTestAccess::replayGeneration(application);
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true), "连续切换第二次失败");
+    require(app::ApplicationBackpressureTestAccess::replayGeneration(application) > second,
+        "连续重算必须更新代次隔离旧 worker");
+    waitFor(application, [&] { return app::ApplicationBackpressureTestAccess::switchReplayFinished(application); });
+    const auto again = application.captureWaveData({}, error);
+    require(again && again->channels[0].samples.size() == 3, "loaded timeline 重算不得重复追加旧结果");
+    // 切至不同 schema，完整关联数据必须用新 parser 更新帧。
+    const auto streamProtocol = std::filesystem::path(__FILE__).parent_path() / "fixtures/protocols/stream_frame_only";
+    std::vector<std::uint8_t> frame{0xAA, 0x55, 0x01, 0x07};
+    const auto crc = protocol_utils::crc16Modbus(frame);
+    frame.push_back(static_cast<std::uint8_t>(crc & 0xFFU));
+    frame.push_back(static_cast<std::uint8_t>((crc >> 8U) & 0xFFU));
+    auto framed = capture;
+    framed.events.front().bytes = frame;
+    require(application.importRawRecords(framed, error), error);
+    require(application.reloadProtocolDirectory(streamProtocol.generic_string(), true), "新 schema 切换失败");
+    waitFor(application, [&] { return app::ApplicationBackpressureTestAccess::switchReplayFinished(application); });
+    require(!application.docks().receiveState().frameRows.empty() &&
+        application.docks().receiveState().frameRows.back().message.find("stream_sample") != std::string::npos,
+        "手动切换必须使用新 schema 更新关联原始数据的协议帧");
+    // 波形单独导入解除关联，即使旧 raw 留在应用中也不得误用。
+    plot::WaveCsvData snapshot;
+    snapshot.channels.resize(1);
+    snapshot.channels[0].samples = {{0, 999}};
+    require(application.importWaveCsvData(snapshot, error), error);
+    const auto beforeSnapshotSwitch = app::ApplicationBackpressureTestAccess::replayGeneration(application);
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true), "快照切协议失败");
+    application.pumpOnce();
+    const auto retained = application.captureWaveData({}, error);
+    require(retained && retained->channels[0].samples[0].value == 999 &&
+        app::ApplicationBackpressureTestAccess::replayGeneration(application) == beforeSnapshotSwitch,
+        "无关联 raw 的快照必须保留且不能重放旧采集");
+    // 不兼容 profile 在新 parser 中明确失败，保留完整 raw 并标记结果不完整。
+    capture.events.push_back({.type = plot::RawCaptureEventType::ProfileSet,
+        .profile = {.frameName = "不存在的新协议帧", .length = 3}});
+    require(application.importRawRecords(capture, error), error);
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true), "失败重算切换失败");
+    waitFor(application, [&] { return app::ApplicationBackpressureTestAccess::switchReplayFinished(application); });
+    application.pumpOnce();
+    require(app::ApplicationBackpressureTestAccess::switchReplayFailed(application) &&
+        application.docks().waveState().rawCapture.events.size() == capture.events.size() &&
+        application.docks().waveState().statusMessage.find("不完整") != std::string::npos,
+        "中途不兼容必须明确失败、不完整并保留 raw");
+    application.shutdown();
+}
+
 int main(int argc, char**)
 {
     try {
+        testManualProtocolSwitchReplay();
+        testLegacyReplayAndRetirementNonblocking();
         testSessionImportProtocolSelection();
         testImportedSourceLabelsAfterReplay();
         testImportedLuaBitToggle();

@@ -316,7 +316,7 @@ struct ScriptRuntimeWorker::Impl {
 
     ~Impl() { stop(); }
 
-    void stop()
+    void requestStop()
     {
         // 停止信号直接被 Lua 指令钩子读取，不排在可能卡住的业务回调之后。
         stopSignal->store(true, std::memory_order_relaxed);
@@ -333,6 +333,11 @@ struct ScriptRuntimeWorker::Impl {
             rxBackpressureChanged.notify_all();
             outputBackpressureChanged.notify_all();
         }
+    }
+
+    void stop()
+    {
+        requestStop();
         if (thread.joinable()) {
             thread.join();
         }
@@ -1251,6 +1256,11 @@ std::optional<ScriptRuntimeOutputBatch> ScriptRuntimeWorker::drainOneOutput()
 ScriptRuntimeSnapshot ScriptRuntimeWorker::snapshot() const
 {
     return impl_->currentSnapshot();
+}
+
+void ScriptRuntimeWorker::requestStop()
+{
+    impl_->requestStop();
 }
 
 void ScriptRuntimeWorker::stop()
