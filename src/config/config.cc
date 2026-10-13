@@ -2096,7 +2096,7 @@ const std::filesystem::path& ConfigStore::defaultProtocolDir() const
 std::uint64_t ConfigStore::toTimestampMs(const std::filesystem::file_time_type& fileTime)
 {
     // C++20固定时钟转换；用两次now估算会在毫秒边界抖动，误报未变化文件冲突。
-    const auto normalized = std::filesystem::file_time_type::clock::to_sys(fileTime);
+    const auto normalized = std::chrono::clock_cast<std::chrono::system_clock>(fileTime);
     return static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(normalized.time_since_epoch()).count());
 }
