@@ -514,13 +514,17 @@ static void testTransferHistorySwitchConfig()
                 invalid.config.gui.historyScope == TransferLogHistoryScope::RetainedRows,
             "非法枚举值必须回退默认");
 
-    // 旧 bool 兼容：仅旧键存在时映射（true=UseHistory / false=SkipHistory）。
+    // 旧 bool 兼容：仅旧键存在时映射（true=UseHistory / false=Ask）。
     const auto legacyTrue = store.loadText("gui:\n  transfer_log:\n    replay_raw_history_on_schema_switch: true\n");
     require(legacyTrue.config.gui.historyOnParsedSwitch == TransferLogHistoryOnParsedSwitch::UseHistory,
             "旧键 true 必须映射 use_history");
     const auto legacyFalse = store.loadText("gui:\n  transfer_log:\n    replay_raw_history_on_schema_switch: false\n");
-    require(legacyFalse.config.gui.historyOnParsedSwitch == TransferLogHistoryOnParsedSwitch::SkipHistory,
-            "旧键 false 必须映射 skip_history");
+    require(legacyFalse.config.gui.historyOnParsedSwitch == TransferLogHistoryOnParsedSwitch::Ask,
+            "旧键 false 必须映射 ask");
+    const auto explicitUse = store.loadText(
+        "gui:\n  transfer_log:\n    history_on_parsed_switch: use_history\n    replay_raw_history_on_schema_switch: false\n");
+    require(explicitUse.config.gui.historyOnParsedSwitch == TransferLogHistoryOnParsedSwitch::UseHistory,
+            "新键 use_history 必须优先于旧 false");
 
     // 新键优先：新旧键同时存在时以新键为准（旧键不再覆盖）。
     const auto newerWins = store.loadText(

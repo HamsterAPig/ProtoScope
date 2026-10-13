@@ -932,10 +932,10 @@ namespace {
                 config.gui.historyOnParsedSwitch = parsed;
             } else {
                 if (hasLegacyKey) {
-                    // 兼容旧键：true=按范围重建历史，false=不使用历史。
+                    // 兼容旧键：true=按范围重建历史；false 迁移为询问，不能静默跳过历史。
                     config.gui.historyOnParsedSwitch = config.gui.replayRawHistoryOnSchemaSwitch
                                                              ? TransferLogHistoryOnParsedSwitch::UseHistory
-                                                             : TransferLogHistoryOnParsedSwitch::SkipHistory;
+                                                             : TransferLogHistoryOnParsedSwitch::Ask;
                 }
             }
             const auto scopeText = readScalar<std::string>(transferLog, "history_scope",
