@@ -232,6 +232,8 @@ gui:
   raw_capture:
     live_limit_bytes: 67108864
     recording_queue_limit_bytes: 268435456
+  data_import:
+    protocol_source: prefer_package
   transfer_log:
     history_on_parsed_switch: ask
     history_scope: retained_rows
@@ -257,15 +259,22 @@ gui:
 - `log_history.*`：收发原始行、逐帧行、宿主日志和脚本日志保留上限。
 - `raw_capture.live_limit_bytes`：实时原始缓存上限。
 - `raw_capture.recording_queue_limit_bytes`：完整录制队列上限。
-- `transfer_log.history_on_parsed_switch`：原始转逐帧切换的历史策略，默认 `ask`。可选 `ask`（有历史时每次询问）/ `use_history`（按所选范围重建替换）/ `skip_history`（只清半帧，不重放旧字节）；非法值回退 `ask`。
+- `data_import.protocol_source`：本机导入来源偏好，默认 `prefer_package`（优先包内协议；缺失时用当前），可选 `current_protocol`（只用当前，不执行包 Lua）；非法值回退默认。所选包协议存在但损坏时失败，不按缺失回退。同步与 GUI 异步导入均先实际初始化协议再提交数据；确认提示外部 Lua 初始化风险，初次保持原始浏览和波形快照。现场包不覆盖此偏好。
+- `transfer_log.history_on_parsed_switch`：原始转逐帧切换的历史策略，默认 `ask`。可选 `ask`（当前来源有 stream schema 且有历史时每次询问）/ `use_history`（按所选范围重建替换）/ `skip_history`（只清半帧，不重放旧字节）；非法值回退 `ask`。
 - `transfer_log.history_scope`：历史范围，默认 `retained_rows`（只用收发面板保留的原始 RX/TX 行）；可选 `retained_capture`（底层仍保留的完整采集/导入历史；不保证找回已裁剪字节、不自动重读文件）。不受显示筛选影响。
-- `transfer_log.replay_raw_history_on_schema_switch`：保留读写兼容的旧键；仅当 `history_on_parsed_switch` 缺失时映射（`true`→`use_history`，`false`→`skip_history`），新键优先。
+- `transfer_log.replay_raw_history_on_schema_switch`：保留读写兼容的旧键；仅当 `history_on_parsed_switch` 缺失时映射（`true`→`use_history`，`false`→`ask`），新键优先。
+
+手动成功切换协议后，仍保留且与当前导入关联的原始记录使用新协议分批重新解析，更新波形与帧；启动、配置应用、导入恢复、无变化加载和普通实时采集不触发此重算。只有波形快照而无关联原始数据时保留快照并提示不能重算，不借用旧采集。中途解析失败保留关联原始记录并标记结果不完整。
+
+无有效协议、协议加载失败且没有旧有效协议、有效协议未声明 stream，分别显示不可解析原因；最近一次失败不会否定旧有效 schema。无 schema 可进入逐帧提示视图，不创建历史任务、不清已有帧或 pending。确认生效时重新检查能力和历史。即使旧帧可见仍展示当前不可解析原因，筛选无匹配提示保持独立。
+
+历史确认窗口局部自适应，按字号缩放约 560 宽、320 最高，并限制在 viewport 工作区宽 90%/高 80% 内；说明可滚动、按钮可换行，不修改全局样式。相关新增回归本轮尚未构建或运行，自动化和人工小屏验证结论待集中验证。
 
 #### 原始转逐帧：配置合同与当前实现边界
 
 这两个枚举是本机展示偏好，入口为现有应用设置的日志历史页；沿用字段白名单、三方合并、草稿/运行态 dirty、枚举校验、应用、保存和恢复默认流程。现场包恢复保留本机这两个值。内建值与仓库 YAML 均为 `ask` / `retained_rows`。迁移旧配置时可删除旧 bool 并显式写入新枚举；保留旧键也不会覆盖新键。
 
-原始转逐帧按钮在实时连接、断开与暂停自动滚动时都进入同一个策略入口，不要求暂停采集。`ask` 在所选范围有历史时每次询问，确认前保持原始视图，采集继续；取消或 Escape 保持原始视图。自动使用历史在处理请求时固定上界，询问使用历史在选择生效时固定上界，包含弹窗期间已接纳的原始数据，不以物理到达时间推断队列归属。
+原始转逐帧按钮在实时连接、断开与暂停自动滚动时都进入同一个策略入口，不要求暂停采集。`ask` 在当前来源有有效 stream schema 且所选范围有历史时每次询问，确认前保持原始视图，采集继续；取消或 Escape 保持原始视图。自动使用历史在处理请求时固定上界，询问使用历史在选择生效时固定上界，包含弹窗期间已接纳的原始数据，不以物理到达时间推断队列归属。
 
 当前源码的行为与验证边界如下（实现不等于验收通过）：
 
