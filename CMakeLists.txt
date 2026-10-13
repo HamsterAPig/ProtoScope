@@ -26,6 +26,13 @@ option(YAML_CPP_BUILD_TESTS "Build yaml-cpp tests" OFF)
 option(YAML_CPP_BUILD_TOOLS "Build yaml-cpp tools" OFF)
 option(PROTOSCOPE_ENABLE_GUI "Build ProtoScope GUI runtime" ON)
 
+# MinGW 的 Debug 链接占用较多内存；只串行链接，保留编译并行和全部测试目标。
+# 必须在创建目标前设置，让应用及依赖它的测试共同使用同一 Ninja 链接池。
+if(MINGW AND CMAKE_GENERATOR MATCHES "Ninja")
+    set_property(GLOBAL APPEND PROPERTY JOB_POOLS protoscope_link=1)
+    set(CMAKE_JOB_POOL_LINK protoscope_link)
+endif()
+
 include(cmake/CompilerWarnings.cmake)
 include(cmake/Dependencies.cmake)
 include(cmake/EmbeddedProtocols.cmake)
