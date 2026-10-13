@@ -206,6 +206,29 @@ public:
     void requestParsedHistorySwitch();
     void resolveHistorySwitch(config::TransferLogHistoryOnParsedSwitch decision);
     void cancelHistorySwitch();
+    enum class TransferHistoryPhase { History, Following, Display, Completed, Cancelled, Failed };
+    struct TransferHistoryStatus {
+        std::uint64_t taskId{0};
+        std::uint64_t sourceGeneration{0};
+        config::TransferLogHistoryScope scope{};
+        TransferHistoryPhase phase{TransferHistoryPhase::History};
+        std::chrono::steady_clock::time_point startedAt{};
+        double elapsedSeconds{0};
+        std::string reason;
+        std::size_t historyTotal{0}, historyDone{0};
+        std::size_t currentBytesTotal{0}, currentBytesDone{0};
+        std::size_t followingDone{0}, followingBytesDone{0}, followingPending{0}, followingBytesPending{0};
+        std::size_t validFrames{0}, fallbackRows{0};
+        std::size_t displayTotal{0}, displayPending{0}, displaySubmitted{0}, discardedRows{0};
+        bool previousResults{false};
+        bool loadedTimeline{false};
+        [[nodiscard]] bool running() const {
+            return phase == TransferHistoryPhase::History || phase == TransferHistoryPhase::Following ||
+                phase == TransferHistoryPhase::Display;
+        }
+    };
+    [[nodiscard]] std::optional<TransferHistoryStatus> transferHistoryStatus() const;
+    void dismissTransferHistoryStatus();
     [[nodiscard]] bool historySwitchConfirmationPending() const { return historySwitchConfirmationOpen_; }
     [[nodiscard]] std::uint64_t historySwitchConfirmationId() const { return historySwitchConfirmationId_; }
     [[nodiscard]] config::TransferLogHistoryOnParsedSwitch historySwitchStrategy() const {
@@ -512,7 +535,10 @@ private:
     void trimPendingTransferFrameRowsToLimit();
     // 三态历史切换与分批重建实现。
     std::uint64_t historySwitchGeneration() const;
-    void invalidateHistorySwitchWork(std::string_view reason);
+    void invalidateHistorySwitchWork(std::string_view reason,
+        TransferHistoryPhase phase = TransferHistoryPhase::Cancelled);
+    void clearTransferHistoryStatus(std::string_view reason);
+    void settleTransferHistoryRows(std::size_t count, bool discarded);
     bool beginHistoryRebuild(config::TransferLogHistoryScope scope, std::uint64_t generation, std::size_t upperBound);
     bool pumpHistoryRebuild();
     bool historySourceAvailable() const;
@@ -587,6 +613,8 @@ private:
     bool historySwitchConfirmationOpen_{false};
     std::uint64_t historySwitchConfirmationId_{0};
     std::optional<HistoryRebuildTask> historyRebuild_;
+    std::optional<TransferHistoryStatus> transferHistoryStatus_;
+    std::uint64_t transferHistoryTaskId_{0};
     std::deque<transport::TransportEvent> pendingTransportEvents_;
     std::deque<PendingRxBytes> pendingRxByteChunks_;
     std::deque<dock::ReceiveRow> pendingTransferFrameRows_;

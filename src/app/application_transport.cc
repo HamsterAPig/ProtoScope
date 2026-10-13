@@ -372,6 +372,7 @@ void Application::openTransport()
         replayReceiveHistory_ = false;
         dockStore_.waveState().rawCapture = {};
         retainedRawBytes_ = 0;
+        clearTransferHistoryStatus("重新连接实时来源");
         pendingTransferFrameRows_.clear();
         resetTransferFrameParser();
     }
@@ -550,6 +551,7 @@ void Application::resetTransferFrameParser()
 
 void Application::resetTransferFrameDisplayState()
 {
+    clearTransferHistoryStatus("展示状态重置");
     dockStore_.clearTransferFrameRows();
     pendingTransferFrameRows_.clear();
     resetTransferFrameParser();
@@ -629,7 +631,7 @@ void Application::rebuildTransferFrameRows()
 void Application::clearTransferLogHistory()
 {
     // 清空使历史切换任务/旧确认失效，过期结果不得提交到新来源。
-    invalidateHistorySwitchWork("清空");
+    clearTransferHistoryStatus("清空");
     dockStore_.clearReceiveRows();
     dockStore_.clearTransferFrameRows();
     pendingTransferFrameRows_.clear();
@@ -656,12 +658,66 @@ std::uint64_t Application::historySwitchGeneration() const
     return liveGeneration_;
 }
 
-void Application::invalidateHistorySwitchWork(const std::string_view reason)
+std::optional<Application::TransferHistoryStatus> Application::transferHistoryStatus() const
 {
+    auto status = transferHistoryStatus_;
+    if (!status) return status;
+    if (status->sourceGeneration != historySwitchGeneration() || status->loadedTimeline != rawCaptureReplay_.loaded)
+        return std::nullopt;
+    if (status->running()) status->elapsedSeconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - status->startedAt).count();
+    if (historyRebuild_) {
+        const auto& task = *historyRebuild_;
+        status->historyDone = task.eventCursor;
+        status->currentBytesDone = task.byteOffset;
+        status->followingPending = task.following.size();
+        status->followingBytesPending = task.followingBytes -
+            (task.eventCursor >= task.sourceCount ? task.byteOffset : 0);
+    }
+    return status;
+}
+
+void Application::dismissTransferHistoryStatus()
+{
+    if (transferHistoryStatus_ && !transferHistoryStatus_->running()) transferHistoryStatus_.reset();
+}
+
+void Application::clearTransferHistoryStatus(const std::string_view reason)
+{
+    invalidateHistorySwitchWork(reason);
+    transferHistoryStatus_.reset();
+}
+
+void Application::settleTransferHistoryRows(const std::size_t count, const bool discarded)
+{
+    if (!transferHistoryStatus_ || transferHistoryStatus_->phase != TransferHistoryPhase::Display) return;
+    auto& status = *transferHistoryStatus_;
+    // 交接时本次结果占队首前缀；后来的实时行只追加队尾，不延长本次结算。
+    const auto amount = (std::min)(count, status.displayPending);
+    status.displayPending -= amount;
+    if (discarded) status.discardedRows += amount;
+    else status.displaySubmitted += amount;
+    if (status.displayPending == 0) {
+        status.phase = TransferHistoryPhase::Completed;
+        status.elapsedSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - status.startedAt).count();
+        status.reason = status.discardedRows ? "本次结果已结算；部分展示行受保留上限或队列裁剪限制" :
+            (status.validFrames == 0 ? "转换完成，没有匹配协议的有效帧" : "本次结果已更新到逐帧列表");
+    }
+}
+
+void Application::invalidateHistorySwitchWork(const std::string_view reason, const TransferHistoryPhase phase)
+{
+    if (transferHistoryStatus_ && transferHistoryStatus_->running()) {
+        if (auto snapshot = transferHistoryStatus()) transferHistoryStatus_ = std::move(snapshot);
+        transferHistoryStatus_->phase = phase;
+        transferHistoryStatus_->reason = reason;
+    }
     if (historyRebuild_.has_value() || historySwitchConfirmationOpen_) {
         loggingFacade_.info("transfer", std::string("历史切换失效: ") + std::string(reason));
     }
     ++liveGeneration_;
+    if (transferHistoryStatus_ && !rawCaptureReplay_.loaded && !importedRebuildGeneration_)
+        transferHistoryStatus_->sourceGeneration = liveGeneration_;
     historyRebuild_.reset();
     historySwitchConfirmationOpen_ = false;
 }
@@ -696,6 +752,8 @@ bool Application::beginHistoryRebuild(const config::TransferLogHistoryScope scop
                                       const std::size_t upperBound)
 {
     // 只冻结位置与上界；字节由来源拥有，每轮读取一个有界切片，不同步复制历史。
+    historyRebuild_.reset();
+    transferHistoryStatus_.reset();
     const auto& capture = rawCaptureReplay_.loaded ? rawCaptureReplay_.capture : dockStore_.waveState().rawCapture;
     std::optional<TransferFrameParserState> parser;
     if (transferFrameParser_) {
@@ -705,7 +763,13 @@ bool Application::beginHistoryRebuild(const config::TransferLogHistoryScope scop
     } else if (!rawCaptureReplay_.loaded || rawCaptureReplay_.processing == OfflineReplayProcessing::BrowseRaw)
         parser = makeTransferFrameParserState();
     // 缺 schema 不创建空任务，尤其不能在后续 pump 中清掉仍可查看的旧帧。
-    if (!parser) return false;
+    if (!parser) {
+        transferHistoryStatus_ = TransferHistoryStatus{.taskId = ++transferHistoryTaskId_,
+            .sourceGeneration = generation, .scope = scope, .phase = TransferHistoryPhase::Failed,
+            .startedAt = std::chrono::steady_clock::now(), .reason = "当前来源没有可用 stream schema",
+            .previousResults = !dockStore_.receiveState().frameRows.empty(), .loadedTimeline = rawCaptureReplay_.loaded};
+        return false;
+    }
     if (parser) {
         parser->rx.reset(); parser->tx.reset();
         parser->rx.clearRuntimeProfiles(); parser->tx.clearRuntimeProfiles();
@@ -733,6 +797,9 @@ bool Application::beginHistoryRebuild(const config::TransferLogHistoryScope scop
     }
     if (task.legacyPayload) task.sourceCount = 1;
     // 旧 pending 不加入重建结果；保留至提交或取消，完成时统一替换，避免两次追加。
+    transferHistoryStatus_ = TransferHistoryStatus{.taskId = ++transferHistoryTaskId_,
+        .sourceGeneration = generation, .scope = scope, .startedAt = std::chrono::steady_clock::now(),
+        .historyTotal = task.sourceCount, .previousResults = !dockStore_.receiveState().frameRows.empty(), .loadedTimeline = rawCaptureReplay_.loaded};
     historyRebuild_ = std::move(task);
     return true;
 }
@@ -742,7 +809,12 @@ bool Application::pumpHistoryRebuild()
     if (!historyRebuild_) return false;
     auto& task = *historyRebuild_;
     const auto& capture = task.hasLoadedTimeline ? rawCaptureReplay_.capture : dockStore_.waveState().rawCapture;
-    if (task.generation != historySwitchGeneration() ||
+    if (task.generation != historySwitchGeneration()) {
+        clearTransferHistoryStatus("来源已替换");
+        dockStore_.waveState().statusMessage = "历史重建已取消：来源已替换";
+        return true;
+    }
+    if (
         (task.rowsOnly && task.sourceCount && (dockStore_.receiveState().rows.size() < task.sourceCount ||
           dockStore_.receiveState().rows.front().displayPosition != task.rowBegin)) ||
         (!task.rowsOnly && !task.legacyPayload && task.sourceCount && (capture.events.empty() ||
@@ -753,7 +825,7 @@ bool Application::pumpHistoryRebuild()
     }
     if (!task.parser) {
         // 防御失效任务：保留完整缓存和 pending，不以不可解析冒充成功的空结果。
-        historyRebuild_.reset();
+        invalidateHistorySwitchWork("当前来源没有可用 stream schema", TransferHistoryPhase::Failed);
         dockStore_.waveState().statusMessage = "历史重建已取消：当前来源没有可用 stream schema";
         return true;
     }
@@ -761,13 +833,23 @@ bool Application::pumpHistoryRebuild()
     std::size_t events = 0, bytes = 0;
     const auto keepRow = [&](dock::ReceiveRow row) {
         const auto limit = runtimeConfig_.gui.logHistory.transferFrameLimit;
-        if (!limit) return;
+        if (!limit) {
+            if (transferHistoryStatus_) ++transferHistoryStatus_->discardedRows;
+            return;
+        }
         task.rebuilt.push_back(std::move(row));
-        while (task.rebuilt.size() > limit) task.rebuilt.pop_front();
+        while (task.rebuilt.size() > limit) {
+            task.rebuilt.pop_front();
+            if (transferHistoryStatus_) ++transferHistoryStatus_->discardedRows;
+        }
     };
     while (events < kTransportEventsPerPump && bytes < kTransportBytesPerPump &&
            std::chrono::steady_clock::now() - started < kTransportEventBudget) {
         const bool historical = task.eventCursor < task.sourceCount;
+        if (transferHistoryStatus_) {
+            transferHistoryStatus_->phase = historical ? TransferHistoryPhase::History : TransferHistoryPhase::Following;
+            transferHistoryStatus_->currentBytesTotal = 0;
+        }
         // 面板最后一行之后仍可能接纳 profile 控制事件；在追赶前恢复冻结上界的 profile，保留尾半帧。
         if (!historical && task.rowsOnly) {
             if (!task.boundaryProfilesStarted) {
@@ -780,7 +862,7 @@ bool Application::pumpHistoryRebuild()
                 for (auto* parser : {&task.parser->rx, &task.parser->tx}) {
                     if (!parser->setRuntimeProfile(profile.frameName,
                         scripting::StreamRuntimeProfile{.length = profile.length, .channelMap = profile.channelMap}, error)) {
-                        invalidateHistorySwitchWork("上界 profile 无效");
+                        invalidateHistorySwitchWork("上界 profile 无效：" + error, TransferHistoryPhase::Failed);
                         dockStore_.waveState().statusMessage = "历史重建失败：" + error;
                         return true;
                     }
@@ -812,7 +894,7 @@ bool Application::pumpHistoryRebuild()
                 for (auto* parser : {&task.parser->rx, &task.parser->tx}) {
                     if (!parser->setRuntimeProfile(event.profile.frameName,
                         scripting::StreamRuntimeProfile{.length = event.profile.length, .channelMap = event.profile.channelMap}, error)) {
-                        invalidateHistorySwitchWork("面板 profile 基线无效");
+                        invalidateHistorySwitchWork("面板 profile 基线无效：" + error, TransferHistoryPhase::Failed);
                         dockStore_.waveState().statusMessage = "历史重建失败：" + error;
                         return true;
                     }
@@ -867,7 +949,7 @@ bool Application::pumpHistoryRebuild()
                 else ok = parser->clearRuntimeProfile(std::optional<std::string>{profile->frameName}, error) && ok;
             }
             if (!ok) {
-                invalidateHistorySwitchWork("历史 profile 无效");
+                invalidateHistorySwitchWork("历史 profile 无效：" + error, TransferHistoryPhase::Failed);
                 dockStore_.waveState().statusMessage = "历史重建失败：" + error;
                 return true;
             }
@@ -880,14 +962,21 @@ bool Application::pumpHistoryRebuild()
                 input->begin() + static_cast<std::ptrdiff_t>(task.byteOffset + amount));
             const auto batch = parser.pushBytes(slice);
             dock::ReceiveRow row{.timestampMs = timestamp, .direction = direction, .endpoint = endpoint};
+            if (transferHistoryStatus_) {
+                transferHistoryStatus_->currentBytesTotal = input->size();
+                transferHistoryStatus_->validFrames += batch.frames.size();
+                if (!historical) transferHistoryStatus_->followingBytesDone += amount;
+            }
             for (const auto& frame : batch.frames) keepRow(makeTransferFrameRow(row, frame));
             if (batch.frames.empty() && (!batch.errors.empty() || (direction == "TX" && batch.bufferSize == 0))) {
+                if (transferHistoryStatus_) ++transferHistoryStatus_->fallbackRows;
                 row.bytes = std::move(slice); keepRow(std::move(row));
             }
             task.byteOffset += amount; bytes += amount;
             if (task.byteOffset < input->size()) { ++events; continue; }
         }
         task.byteOffset = 0; ++events;
+        if (transferHistoryStatus_) transferHistoryStatus_->currentBytesTotal = 0;
         if (historical) {
             if (task.currentRow) {
                 task.currentRow.reset();
@@ -895,20 +984,36 @@ bool Application::pumpHistoryRebuild()
             ++task.eventCursor;
         }
         else {
+            if (transferHistoryStatus_) ++transferHistoryStatus_->followingDone;
             task.followingBytes -= task.following.front().byteSize;
             task.following.pop_front();
         }
+    }
+    if (transferHistoryStatus_ && task.eventCursor >= task.sourceCount) {
+        transferHistoryStatus_->phase = TransferHistoryPhase::Following;
+        if (task.byteOffset == 0) transferHistoryStatus_->currentBytesTotal = 0;
     }
     if (task.eventCursor < task.sourceCount || !task.following.empty() ||
         (task.rowsOnly && (!task.boundaryProfilesStarted ||
          (task.boundaryProfiles && task.boundaryProfileCursor < task.boundaryProfiles->size())))) return true;
     // 交接同一个 UI parser 的尾缓冲/profile；历史后的新字节已按接纳顺序追赶，不能重解析。
     transferFrameParser_ = std::move(task.parser);
+    if (transferHistoryStatus_) {
+        auto& status = *transferHistoryStatus_;
+        status.historyDone = task.eventCursor;
+        status.currentBytesTotal = status.currentBytesDone = 0;
+        status.followingPending = status.followingBytesPending = 0;
+        status.phase = TransferHistoryPhase::Display;
+        status.displayTotal = status.displayPending = task.rebuilt.size();
+        status.previousResults = false;
+    }
     dockStore_.clearTransferFrameRows();
     pendingTransferFrameRows_.clear();
     pendingTransferFrameRows_ = std::move(task.rebuilt);
     historyRebuild_.reset();
+    trimPendingTransferFrameRowsToLimit();
     flushPendingTransferFrameRows(transferFrameRowsPerPump());
+    settleTransferHistoryRows(0, false);
     return true;
 }
 std::string Application::parsedTransferUnavailableReason() const
@@ -965,7 +1070,7 @@ void Application::requestParsedHistorySwitch()
         case config::TransferLogHistoryOnParsedSwitch::SkipHistory:
             // 不使用历史：不重放旧字节，保留已有完整帧，只清残留半帧。
             receive.displayMode = dock::TransferLogDisplayMode::ParsedFrames;
-            historyRebuild_.reset();
+            clearTransferHistoryStatus("不使用历史");
             // 只清半帧；保留已有完整帧、待提交帧以及当前来源的 schema/runtime profiles。
             if (transferFrameParser_) {
                 transferFrameParser_->rx.reset();
@@ -998,7 +1103,7 @@ void Application::resolveHistorySwitch(const config::TransferLogHistoryOnParsedS
     }
     // 拒绝历史：切到逐帧且只清半帧；取消另走 cancelHistorySwitch，保持原始模式和缓存。
     receive.displayMode = dock::TransferLogDisplayMode::ParsedFrames;
-    historyRebuild_.reset();
+    clearTransferHistoryStatus("不使用历史");
     // 拒绝历史不丢完整帧，也不得用实时 schema 替换显式离线 parser。
     if (transferFrameParser_) {
         transferFrameParser_->rx.reset();
@@ -1407,6 +1512,7 @@ void Application::detachPendingRealtimeBacklogFromConnection()
 
 Application::RealtimeBacklogDiscardCounts Application::clearPendingRealtimeBacklog()
 {
+    invalidateHistorySwitchWork("待提交展示队列已按现有策略清除");
     RealtimeBacklogDiscardCounts counts{
         .transportEvents = pendingTransportEvents_.size(),
         .rxBytes = pendingRxByteCount(),
@@ -2161,6 +2267,7 @@ void Application::trimPendingTransferFrameRowsToLimit()
 {
     const auto limit = runtimeConfig_.gui.logHistory.transferFrameLimit;
     if (limit == 0U) {
+        settleTransferHistoryRows(pendingTransferFrameRows_.size(), true);
         pendingTransferFrameRows_.clear();
         return;
     }
@@ -2169,6 +2276,7 @@ void Application::trimPendingTransferFrameRowsToLimit()
         return;
     }
     auto excess = pendingTransferFrameRows_.size() - limit;
+    settleTransferHistoryRows(excess, true);
     while (excess > 0 && !pendingTransferFrameRows_.empty()) {
         pendingTransferFrameRows_.pop_front();
         --excess;
@@ -2186,7 +2294,9 @@ bool Application::flushPendingTransferFrameRows(std::size_t maxRows)
         rows.push_back(std::move(pendingTransferFrameRows_.front()));
         pendingTransferFrameRows_.pop_front();
     }
+    const auto submitted = rows.size();
     dockStore_.appendTransferFrameRows(std::move(rows));
+    settleTransferHistoryRows(submitted, false);
     trimPendingTransferFrameRowsToLimit();
     return true;
 }

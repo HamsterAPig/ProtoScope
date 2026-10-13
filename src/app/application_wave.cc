@@ -415,6 +415,8 @@ void Application::freezeImportedChannelLabels()
 
 void Application::switchToLiveWaveSource()
 {
+    if (importedRawAssociated_ || importedRebuildGeneration_ || rawCaptureReplay_.loaded)
+        clearTransferHistoryStatus("切换实时来源");
     importedRawAssociated_ = false;
     protocolSwitchReplay_ = false;
     if (!dockStore_.waveState().buffer.importedLabelsReadOnly()) return;

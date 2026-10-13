@@ -152,7 +152,7 @@ bool Application::importRawRecords(const plot::RawCaptureFileData& data, std::st
     // 使用单调递增计数器：同一事件数的再导入也必须让旧确认/旧任务失效。
     importedRebuildGeneration_ = ++importCounter_;
     // 重新导入使历史切换任务/旧确认失效，过期结果不得提交到新来源。
-    invalidateHistorySwitchWork("重新导入");
+    clearTransferHistoryStatus("重新导入");
     // 导入含原始字节后收发面板默认原始模式，保留字节、顺序、时间戳、端点与状态。
     dockStore_.receiveState().displayMode = dock::TransferLogDisplayMode::RawChunks;
     for (auto& event : dockStore_.waveState().rawCapture.events) {
@@ -281,6 +281,7 @@ bool Application::prepareOfflineReplayProtocol(const plot::RawCaptureFileData& c
 
 void Application::prepareRawCaptureBrowse(const plot::RawCaptureFileData& capture)
 {
+    clearTransferHistoryStatus("回放来源准备");
     dockStore_.clearScriptRows();
     const auto liveSnapshot = scriptWorker_.snapshot();
     static_cast<void>(scriptWorker_.drainOutputs());
@@ -343,7 +344,7 @@ void Application::prepareRawCaptureImportReplay(const plot::RawCaptureFileData& 
     dockStore_.waveState().buffer.setDataSource(plot::WaveDataSource::Imported);
     importedRebuildGeneration_ = rawCaptureReplay_.generation;
     // 重新导入/协议变更使历史切换任务/旧确认失效。
-    invalidateHistorySwitchWork("重新导入");
+    clearTransferHistoryStatus("重新导入");
     resetWaveHistoryForTrigger(WaveResetViewportTrigger::RawImport);
     dockStore_.waveState().defaultChannelSpecs.clear();
     dockStore_.clearReceiveRows();
@@ -888,6 +889,7 @@ void Application::finishRawCaptureImportReplay()
 
 void Application::cancelRawCaptureImportReplay()
 {
+    clearTransferHistoryStatus("回放来源取消或替换");
     ++rawCaptureReplay_.generation;
     rawCaptureReplay_.profileFence = {};
     suppressRawCaptureProfileEvents_ = false;
@@ -1071,7 +1073,7 @@ bool Application::seekRawCaptureReplay(const std::size_t eventIndex, std::string
     next.preparation = {};
     next.profileFence = {};
     // seek 使历史切换任务/旧确认失效，不能把过期结果提交到新来源；同时清过期逐帧结果并回原始视图。
-    invalidateHistorySwitchWork("seek");
+    clearTransferHistoryStatus("回放定位");
     dockStore_.clearTransferFrameRows();
     pendingTransferFrameRows_.clear();
     dockStore_.receiveState().displayMode = dock::TransferLogDisplayMode::RawChunks;

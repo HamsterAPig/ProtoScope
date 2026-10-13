@@ -703,6 +703,7 @@ void Application::confirmDataImport(const OfflineReplayProcessing processing, co
 
 void Application::resetDataImportGenerationState(const bool cleanupReplayResources)
 {
+    clearTransferHistoryStatus("导入来源重置");
     importReset_.reset();
     importProfile_.reset();
     if (importProtocolLoad_.valid()) {

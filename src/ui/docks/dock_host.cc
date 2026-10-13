@@ -794,8 +794,14 @@ void GuiRuntime::drawTransferLogSection(float logHeight)
 {
     auto& receive = application_.docks().receiveState();
     if (ImGui::BeginChild("##transfer_log_section", ImVec2(0.0F, logHeight), true)) {
-        if (ImGui::BeginTable(
-                "##transfer_log_toolbar", 12, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoSavedSettings)) {
+        const bool compactToolbar = ImGui::GetContentRegionAvail().x < 900.0F * ImGui::GetFontSize() / 18.0F;
+        if (ImGui::BeginTable("##transfer_log_toolbar", compactToolbar ? 3 : 12,
+                (compactToolbar ? ImGuiTableFlags_SizingStretchSame : ImGuiTableFlags_SizingFixedFit) |
+                ImGuiTableFlags_NoSavedSettings)) {
+            if (compactToolbar) {
+                for (int column = 0; column < 3; ++column)
+                    ImGui::TableSetupColumn(nullptr, ImGuiTableColumnFlags_WidthStretch);
+            } else {
             ImGui::TableSetupColumn("title", ImGuiTableColumnFlags_WidthStretch);
 
             ImGui::TableSetupColumn("keyword", ImGuiTableColumnFlags_WidthFixed);
@@ -810,36 +816,43 @@ void GuiRuntime::drawTransferLogSection(float logHeight)
             ImGui::TableSetupColumn("export", ImGuiTableColumnFlags_WidthFixed);
             ImGui::TableSetupColumn("clear", ImGuiTableColumnFlags_WidthFixed);
 
-            ImGui::TableNextRow();
+            }
+            const auto toolbarColumn = [compactToolbar](int index) {
+                if (!compactToolbar) { ImGui::TableSetColumnIndex(index); return; }
+                if (index % 3 == 0) ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(index % 3);
+            };
+            if (!compactToolbar) ImGui::TableNextRow();
 
-            ImGui::TableSetColumnIndex(0);
+            toolbarColumn(0);
             ImGui::TextUnformatted(PROTOSCOPE_ICON_EXCHANGE " 收发记录");
 
-            ImGui::TableSetColumnIndex(1);
-            drawLogKeywordFilterInput("关键字##transfer_log_keyword", receive.filter, 150.0F);
+            toolbarColumn(1);
+            drawLogKeywordFilterInput(compactToolbar ? "##transfer_log_keyword" : "关键字##transfer_log_keyword",
+                receive.filter, compactToolbar ? ImGui::GetContentRegionAvail().x : 150.0F);
 
-            ImGui::TableSetColumnIndex(2);
-            drawLogStatusFilterCombo("STATUS##transfer_log_status", receive.filter);
+            toolbarColumn(2);
+            drawLogStatusFilterCombo(compactToolbar ? "##transfer_log_status" : "STATUS##transfer_log_status", receive.filter);
 
-            ImGui::TableSetColumnIndex(3);
+            toolbarColumn(3);
             if (drawTransferToolbarButton(
                     "全部", "显示 RX、TX 和系统状态等全部收发记录。", receive.filter.status == dock::LogStatusFilter::All)) {
                 receive.filter.status = dock::LogStatusFilter::All;
             }
 
-            ImGui::TableSetColumnIndex(4);
+            toolbarColumn(4);
             if (drawTransferToolbarButton(
                     "RX", "只显示设备发来的 RX 数据记录。", receive.filter.status == dock::LogStatusFilter::Rx)) {
                 receive.filter.status = dock::LogStatusFilter::Rx;
             }
 
-            ImGui::TableSetColumnIndex(5);
+            toolbarColumn(5);
             if (drawTransferToolbarButton(
                     "TX", "只显示宿主发出的 TX 数据记录。", receive.filter.status == dock::LogStatusFilter::Tx)) {
                 receive.filter.status = dock::LogStatusFilter::Tx;
             }
 
-            ImGui::TableSetColumnIndex(6);
+            toolbarColumn(6);
             const bool parsedFrames = receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames;
             if (drawTransferToolbarButton(parsedFrames ? "逐帧" : "原始",
                                           parsedFrames ? "当前按 Lua stream() schema 逐帧显示；点击切回运输层原始分块。"
@@ -849,30 +862,30 @@ void GuiRuntime::drawTransferLogSection(float logHeight)
                 application_.requestParsedHistorySwitch();
             }
 
-            ImGui::TableSetColumnIndex(7);
+            toolbarColumn(7);
             drawTransferToolbarToggleButton(
                 "HEX", receive.showHex, receive.showHex ? "当前显示 HEX 字节；点击后隐藏字节列。"
                                                          : "当前隐藏 HEX 字节；点击后显示字节列。");
 
-            ImGui::TableSetColumnIndex(8);
+            toolbarColumn(8);
             drawTransferToolbarToggleButton("时间",
                                             receive.showTimestamps,
                                             receive.showTimestamps ? "当前显示时间戳；点击后隐藏时间列。"
                                                                    : "当前隐藏时间戳；点击后显示时间列。");
 
-            ImGui::TableSetColumnIndex(9);
+            toolbarColumn(9);
             drawTransferToolbarToggleButton(receive.pauseScroll ? "继续" : "暂停",
                                             receive.pauseScroll,
                                             receive.pauseScroll ? "恢复自动滚动，最新收发记录会回到底部可见。"
                                                                 : "暂停自动滚动，便于停在当前位置查看历史记录。");
 
-            ImGui::TableSetColumnIndex(10);
+            toolbarColumn(10);
             if (drawTransferToolbarButton("导出", "导出当前过滤结果中的收发记录。", false)) {
                 openUnifiedDataExport(application_.docks().receiveState().displayMode ==
                     dock::TransferLogDisplayMode::ParsedFrames ? 2 : 1);
             }
 
-            ImGui::TableSetColumnIndex(11);
+            toolbarColumn(11);
             if (drawTransferToolbarDangerButton(PROTOSCOPE_ICON_TRASH " 清空",
                                                 "清空收发记录和已解析帧缓存；不会断开连接。")) {
                 // 统一走 Application 清空入口：使历史切换任务/旧确认失效，并清原始行与逐帧展示。
@@ -880,6 +893,51 @@ void GuiRuntime::drawTransferLogSection(float logHeight)
             }
 
             ImGui::EndTable();
+        }
+
+        const auto historyStatus = application_.transferHistoryStatus();
+        if (historyStatus) {
+            ImGui::BeginChild("##transfer_history_status", ImVec2(0.0F, 0.0F), ImGuiChildFlags_AutoResizeY);
+            using Phase = app::Application::TransferHistoryPhase;
+            const auto& status = *historyStatus;
+            const char* phase = "解析历史";
+            switch (status.phase) {
+                case Phase::History: break;
+                case Phase::Following: phase = "处理转换期间新增数据"; break;
+                case Phase::Display: phase = "更新逐帧列表"; break;
+                case Phase::Completed: phase = "完成"; break;
+                case Phase::Cancelled: phase = "取消"; break;
+                case Phase::Failed: phase = "失败"; break;
+            }
+            ImGui::TextWrapped("转换状态：%s · 已用 %.1f 秒%s", phase, status.elapsedSeconds,
+                status.previousResults ? " · 列表为上次结果" : "");
+            if (status.phase == Phase::History) {
+                const auto percent = status.historyTotal ?
+                    100.0 * static_cast<double>(status.historyDone) / static_cast<double>(status.historyTotal) : 0.0;
+                ImGui::TextWrapped("历史记录 %zu / %zu（历史阶段 %.1f%%，非总进度）",
+                    status.historyDone, status.historyTotal, percent);
+            } else if (status.phase == Phase::Following) {
+                ImGui::TextWrapped("历史记录 %zu / %zu；新增已处理 %zu 条 / %zu 字节，待处理 %zu 条 / %zu 字节（含边界 profile）",
+                    status.historyDone, status.historyTotal, status.followingDone, status.followingBytesDone,
+                    status.followingPending, status.followingBytesPending);
+            } else if (status.phase == Phase::Display) {
+                ImGui::TextWrapped("本次列表更新 %zu / %zu 行，待结算 %zu 行；后续实时队列不计入本次完成条件",
+                    status.displayTotal - status.displayPending, status.displayTotal, status.displayPending);
+            }
+            if (status.phase == Phase::History && status.followingPending > 0)
+                ImGui::TextWrapped("新增待处理 %zu 条 / %zu 字节", status.followingPending, status.followingBytesPending);
+            if (status.running() && status.currentBytesTotal > 0)
+                ImGui::TextWrapped("当前记录字节 %zu / %zu", status.currentBytesDone, status.currentBytesTotal);
+            ImGui::TextWrapped("有效帧 %zu；回退展示行 %zu\n本次提交 %zu 行，裁剪 %zu 行\n列表保留 %zu 行，上限 %zu；不保证保留全部结果",
+                status.validFrames, status.fallbackRows, status.displaySubmitted, status.discardedRows,
+                receive.frameRows.size(), application_.captureConfig().gui.logHistory.transferFrameLimit);
+            if (!status.running() && (status.displayPending || status.followingPending))
+                ImGui::TextWrapped("终止时待处理新增 %zu 条 / %zu 字节，待更新列表 %zu 行",
+                    status.followingPending, status.followingBytesPending, status.displayPending);
+            if (!status.reason.empty()) ImGui::TextWrapped("原因：%s", status.reason.c_str());
+            if (!status.running() && ImGui::SmallButton("关闭转换状态")) application_.dismissTransferHistoryStatus();
+            ImGui::EndChild();
+            ImGui::Separator();
         }
 
         const auto& visibleRows =
@@ -899,7 +957,13 @@ void GuiRuntime::drawTransferLogSection(float logHeight)
         const char* emptyMessage = !visibleRows.empty() && filteredRows.rows.empty()
                                        ? "没有匹配当前筛选条件的记录"
                                        : (receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames
-                                              ? (hasStreamSchema ? "暂无已解析帧" : unavailableReason.c_str())
+                                              ? (!hasStreamSchema ? unavailableReason.c_str()
+                                                 : (historyStatus && historyStatus->running()
+                                                     ? "正在转换，尚无本次逐帧结果"
+                                                     : (historyStatus && historyStatus->phase == app::Application::TransferHistoryPhase::Completed
+                                                         ? (historyStatus->validFrames == 0 ? "转换完成，没有匹配协议的有效帧"
+                                                             : "转换完成，结果受保留上限或裁剪限制，当前列表为空")
+                                                         : "暂无已解析帧")))
                                               : "暂无 TX/RX 原始数据");
         drawTransferLogRows("transfer_rows",
                             filteredRows.rows,

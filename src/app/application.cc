@@ -339,7 +339,7 @@ bool Application::applyProtocolLoadResult(const std::string& resolvedDirText,
     applyLuaScriptSnapshot(loadResult.snapshot);
     lua.lastError.clear();
     if (!preserveImportedWave) refreshTransferFrameDisplayAfterProtocolReload();
-    else invalidateHistorySwitchWork("协议变更");
+    else clearTransferHistoryStatus("协议变更");
     loggingFacade_.info("protocol", "protocol loaded kind=protocol endpoint=" + resolvedDirText);
     if (preserveImportedWave) {
         // 加载 promise 先于输出发布完成；只丢初始化绘图，不能清空原快照等待离线准备。
@@ -353,7 +353,7 @@ bool Application::applyProtocolLoadResult(const std::string& resolvedDirText,
 void Application::refreshTransferFrameDisplayAfterProtocolReload()
 {
     // 协议变更使历史切换任务/旧确认失效，不能把过期结果提交到新 schema。
-    invalidateHistorySwitchWork("协议变更");
+    clearTransferHistoryStatus("协议变更");
     if (dockStore_.receiveState().displayMode == dock::TransferLogDisplayMode::ParsedFrames) {
         rebuildTransferFrameRows();
     } else {
@@ -423,7 +423,7 @@ bool Application::pumpOnce()
     changed = flushPendingTransferFrameRows(transferFrameRowsPerPump()) || changed;
     if (historyRebuild_.has_value()) {
         // 历史重建任务与实时数据共用主循环：新事件/字节先经 appendTransferRow 入 pending，再与重建结果整体替换。
-        pumpHistoryRebuild();
+        changed = pumpHistoryRebuild() || changed;
     }
     syncDockState();
     updateAdaptivePerformance();

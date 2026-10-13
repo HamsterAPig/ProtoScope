@@ -295,6 +295,16 @@ struct GuiRuntimeTestAccess {
             const bool popupOpen = historyPopupOpen();
             const bool confirmationPending = application.historySwitchConfirmationPending();
             if (toolbar && (popupOpen || confirmationPending)) return false;
+            if (std::strcmp(label, "关闭转换状态") == 0) {
+                for (int n = 0; n < GImGui->Windows.Size; ++n) {
+                    auto* window = GImGui->Windows[n];
+                    if (window->WasActive && std::strstr(window->Name, "##transfer_history_status")) {
+                        clickRect(itemRect(window, window->GetID(label)));
+                        return true;
+                    }
+                }
+                return false;
+            }
             if (!toolbar) {
                 if (!modal || !modal->Active || !popupOpen || !confirmationPending) return false;
                 clickRect(itemRect(modal, modal->GetID(label)));
@@ -313,7 +323,11 @@ struct GuiRuntimeTestAccess {
             if (section == nullptr) return false;
             const auto tableId = section->GetID("##transfer_log_toolbar");
             const auto buttonId = ImGui::GetIDWithSeed(label, nullptr, tableId);
-            clickRect(itemRect(section, buttonId));
+            const auto rect = itemRect(section, buttonId);
+            require(rect.Min.x >= section->ClipRect.Min.x && rect.Min.y >= section->ClipRect.Min.y &&
+                rect.Max.x <= section->ClipRect.Max.x && rect.Max.y <= section->ClipRect.Max.y,
+                "mode switch must be fully inside visible clipping region");
+            clickRect(rect);
             return true;
         };
 
@@ -510,6 +524,59 @@ struct GuiRuntimeTestAccess {
         requireNoMatches();
         require(renderedText.find("当前协议没有 stream schema") != std::string::npos,
                 "schema reason and filter no-matches message must coexist");
+        receive.filter = originalFilter;
+        require(application.reloadProtocolDirectory(protocol.generic_string(), true), "progress UI schema reload failed");
+        auto progressConfig = application.captureConfig();
+        progressConfig.gui.historyOnParsedSwitch = TransferLogHistoryOnParsedSwitch::UseHistory;
+        progressConfig.gui.historyScope = config::TransferLogHistoryScope::RetainedRows;
+        application.applyConfig(progressConfig);
+        replacement.events = {{.type = plot::RawCaptureEventType::RxBytes,
+            .bytes = std::vector<std::uint8_t>(4 * 1024 * 1024, 0), .endpoint = "progress"}};
+        require(application.importRawRecords(replacement, error), error.c_str());
+        receive.pauseScroll = true;
+        receive.frameRows.push_back({.message = "previous-progress-result"});
+        application.requestParsedHistorySwitch();
+        require(application.transferHistoryStatus() && application.transferHistoryStatus()->running(),
+            "UI first status must be available before pump");
+        io.DisplaySize = ImVec2(360, 480);
+        frame(&renderedText);
+        require(renderedText.find("转换状态：解析历史") != std::string::npos &&
+            renderedText.find("上次结果") != std::string::npos && renderedText.find("当前记录字节") != std::string::npos,
+            "small viewport must render phase, previous results and byte progress");
+        const auto bytesBefore = application.transferHistoryStatus()->currentBytesDone;
+        frame(&renderedText);
+        require(receive.pauseScroll && application.transferHistoryStatus()->currentBytesDone > bytesBefore,
+            "pause scrolling must not freeze conversion progress");
+        receive.frameRows.clear();
+        ++receive.frameRowsVersion;
+        frame(&renderedText);
+        require(renderedText.find("正在转换，尚无本次逐帧结果") != std::string::npos &&
+            renderedText.find("暂无已解析帧") == std::string::npos, "running empty list must not report no frames");
+        const auto requireStatusVisible = [&] {
+            ImGuiWindow* statusWindow = nullptr;
+            for (auto* window : GImGui->Windows)
+                if (window->Active && std::strstr(window->Name, "##transfer_history_status")) statusWindow = window;
+            require(statusWindow != nullptr, "status child must be active");
+            const auto clip = statusWindow->ClipRect;
+            const auto contentMin = statusWindow->DC.CursorStartPos;
+            const auto contentMax = statusWindow->DC.CursorMaxPos;
+            require(contentMin.x >= clip.Min.x && contentMin.y >= clip.Min.y &&
+                contentMax.x <= clip.Max.x + 1.0F && contentMax.y <= clip.Max.y + 1.0F,
+                "actual status content including phase and reason must fit visible clipping region");
+        };
+        frame(&renderedText);
+        requireStatusVisible();
+        require(clickItem("逐帧"), "360px mode switch must accept real mouse cancellation");
+        require(receive.displayMode == dock::TransferLogDisplayMode::RawChunks,
+            "narrow viewport real click must switch back to raw");
+        frame(&renderedText);
+        requireStatusVisible();
+        require(renderedText.find("转换状态：取消") != std::string::npos &&
+            renderedText.find("切回原始") != std::string::npos, "cancelled status must show its actual reason");
+        require(clickItem("关闭转换状态"), "terminal close button must accept real mouse interaction");
+        require(!application.transferHistoryStatus(), "closing terminal UI must dismiss only status");
+        io.DisplaySize = ImVec2(1280, 700);
+        receive.pauseScroll = false;
         receive.filter = originalFilter;
         application.shutdown();
     }
