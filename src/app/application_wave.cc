@@ -575,9 +575,40 @@ bool Application::requestOscilloscopeToggle(bool currentRunning, bool targetRunn
 }
 
 
+bool Application::validateImportedFrequency(const plot::RawCaptureFileData& capture, std::string& error)
+{
+    // 0 表示旧文件没有采样率；声明的负值和非有限值必须在替换旧数据之前拒绝。
+    const auto valid = [](double value) { return std::isfinite(value) && value >= 0.0; };
+    if (!valid(capture.sampleFrequencyHz) || (capture.waveform && !valid(capture.waveform->sampleFrequencyHz))) {
+        error = "导入文件 sample_frequency_hz 必须为有限非负数";
+        return false;
+    }
+    return true;
+}
+
+void Application::applyImportedFrequency(double valueHz)
+{
+    if (!std::isfinite(valueHz) || valueHz <= 0.0) return;
+    auto& view = dockStore_.waveState().view;
+    view.sampleFrequencyHz = valueHz;
+    view.sampleFrequencyInput = formatFrequencyInput(valueHz);
+    view.sampleFrequencyError.clear();
+}
+
+void Application::applyImportedFrequency(const plot::RawCaptureFileData& capture)
+{
+    // 内嵌波形优先，顶层回退；两者都没有有效值时保留唯一现有设置。
+    applyImportedFrequency(capture.waveform && capture.waveform->sampleFrequencyHz > 0.0
+        ? capture.waveform->sampleFrequencyHz : capture.sampleFrequencyHz);
+}
+
 bool Application::importWaveCsvData(const plot::WaveCsvData& data, std::string& error)
 {
     if (!validateOfflineReplayTransport(error)) return false;
+    if (!std::isfinite(data.sampleFrequencyHz) || data.sampleFrequencyHz < 0.0) {
+        error = "波形 CSV sample_frequency_hz 必须为有限非负数";
+        return false;
+    }
     if (data.channels.empty()) {
         error = "波形 CSV 未包含任何通道";
         return false;
@@ -622,9 +653,9 @@ bool Application::importWaveCsvData(const plot::WaveCsvData& data, std::string& 
     wave.analysisMarkers.clear();
     wave.channelSummaries.clear();
     wave.hiddenChannelIndices.clear();
-    wave.view.sampleFrequencyHz = data.timeAxis == "frequency" ? data.sampleFrequencyHz : 0.0;
-    wave.view.sampleFrequencyInput = formatFrequencyInput(wave.view.sampleFrequencyHz);
-    wave.view.timeAxisSource = data.timeAxis == "frequency" ? plot::WaveTimeAxisSource::SampleFrequency :
+    applyImportedFrequency(data.sampleFrequencyHz);
+    wave.view.timeAxisSource = wave.view.sampleFrequencyHz > 0.0 && std::isfinite(wave.view.sampleFrequencyHz)
+        ? plot::WaveTimeAxisSource::SampleFrequency :
         data.timeAxis == "index" ? plot::WaveTimeAxisSource::SampleIndex : plot::WaveTimeAxisSource::ScriptTime;
     wave.view.defaultViewportPending = true;
     wave.view.defaultViewportLegacyBehavior = false;

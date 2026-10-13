@@ -244,8 +244,9 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
             auto capture = rawCaptureReplay_.loaded ? rawCaptureReplay_.capture : dockStore_.waveState().rawCapture;
             if (!capture.events.empty() || !capture.payload.empty()) {
                 std::string replayError;
+                // 重算关联来源不是再次导入，不能用文件旧 Fs 撤销用户现有设置。
                 if (loadRawCaptureReplayTimeline(capture, OfflineReplayProcessing::CurrentProtocol,
-                                                 OfflineReplayPacing::FastBatchParse, replayError) &&
+                                                 OfflineReplayPacing::FastBatchParse, replayError, nullptr, false) &&
                     playRawCaptureReplay(replayError)) {
                     protocolSwitchReplay_ = true;
                     rawCaptureReplay_.replaceWaveLabels = true;

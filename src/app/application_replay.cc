@@ -135,7 +135,8 @@ bool Application::validateOfflineReplayTransport(std::string& error) const
 
 bool Application::importRawRecords(const plot::RawCaptureFileData& data, std::string& error)
 {
-    if (!validateOfflineReplayTransport(error)) return false;
+    if (!validateOfflineReplayTransport(error) || !validateImportedFrequency(data, error)) return false;
+    applyImportedFrequency(data);
     // 新原始导入取代旧 timeline 来源；先复制以兼容参数引用旧 timeline 成员。
     const auto imported = data;
     if (rawCaptureReplay_.loaded) unloadRawCaptureReplayTimeline();
@@ -174,13 +175,13 @@ bool Application::importRawRecords(const plot::RawCaptureFileData& data, std::st
 }
 
 
-bool Application::validateRawCaptureImport(const plot::RawCaptureFileData&, std::string& error) const
+bool Application::validateRawCaptureImport(const plot::RawCaptureFileData& capture, std::string& error) const
 {
     if (dataTransferStatus().active && !dataImportActive_) {
         error = "数据任务进行中，不能载入回放";
         return false;
     }
-    return validateOfflineReplayTransport(error);
+    return validateOfflineReplayTransport(error) && validateImportedFrequency(capture, error);
 }
 
 
@@ -293,9 +294,6 @@ void Application::prepareRawCaptureBrowse(const plot::RawCaptureFileData& captur
     replayReceiveHistory_ = true;
     auto& wave = dockStore_.waveState();
     wave.rawCapture = capture;
-    wave.view.sampleFrequencyHz = capture.sampleFrequencyHz;
-    wave.view.sampleFrequencyInput = formatFrequencyInput(capture.sampleFrequencyHz);
-    wave.view.sampleFrequencyError.clear();
 }
 
 
@@ -358,9 +356,6 @@ void Application::prepareRawCaptureImportReplay(const plot::RawCaptureFileData& 
     auto& wave = dockStore_.waveState();
     wave.rawCapture = capture;
     if (protocolSwitchReplay_) importedWaveIncomplete_ = true;
-    wave.view.sampleFrequencyHz = capture.sampleFrequencyHz;
-    wave.view.sampleFrequencyInput = formatFrequencyInput(capture.sampleFrequencyHz);
-    wave.view.sampleFrequencyError.clear();
     wave.buffer.setHistoryTrimSuspended(true);
     rawCaptureReplayChunkBytes_ = resolveRawCaptureReplayChunkBytes(
         offlineScriptWorker_ ? offlineScriptWorker_->snapshot().streamBuffer : std::nullopt);
@@ -907,8 +902,10 @@ void Application::cancelRawCaptureImportReplay()
 
 bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error)
 {
+    if (!validateRawCaptureImport(capture, error)) return false;
     if (capture.waveform) {
         if (!importWaveCsvData(*capture.waveform, error)) return false;
+        applyImportedFrequency(capture);
         return (capture.events.empty() && capture.payload.empty()) || importRawRecords(capture, error);
     }
     if (!loadRawCaptureReplayTimeline(capture,
@@ -933,7 +930,8 @@ bool Application::loadRawCaptureReplayTimeline(const plot::RawCaptureFileData& c
                                                const OfflineReplayProcessing processing,
                                                const OfflineReplayPacing pacing,
                                                std::string& error,
-                                               const session::SessionPackageData* package)
+                                               const session::SessionPackageData* package,
+                                               const bool initializeImportedFrequency)
 {
     if (!validateRawCaptureImport(capture, error)) return false;
     if (capture.events.empty() && capture.payload.empty()) {
@@ -978,6 +976,8 @@ bool Application::loadRawCaptureReplayTimeline(const plot::RawCaptureFileData& c
         rawCaptureReplay_.error = error;
         return false;
     }
+    // 仅新文件提交初始化 Fs；同来源协议重算及后续 prepare/seek/play 保留用户设置。
+    if (initializeImportedFrequency) applyImportedFrequency(rawCaptureReplay_.capture);
     if (processing == OfflineReplayProcessing::BrowseRaw) {
         prepareRawCaptureBrowse(rawCaptureReplay_.capture);
         rawCaptureReplay_.phase = OfflineReplayPhase::Paused;

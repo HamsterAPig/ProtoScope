@@ -175,7 +175,8 @@ public:
                                       OfflineReplayProcessing processing,
                                       OfflineReplayPacing pacing,
                                       std::string& error,
-                                      const session::SessionPackageData* package = nullptr);
+                                      const session::SessionPackageData* package = nullptr,
+                                      bool initializeImportedFrequency = true);
     void unloadRawCaptureReplayTimeline();
     bool playRawCaptureReplay(std::string& error);
     void pauseRawCaptureReplay();
@@ -232,6 +233,9 @@ private:
     static std::uint64_t nowUs();
     static std::string csvEscape(std::string_view text);
     static std::string formatFrequencyInput(double valueHz);
+    static bool validateImportedFrequency(const plot::RawCaptureFileData& capture, std::string& error);
+    void applyImportedFrequency(double valueHz);
+    void applyImportedFrequency(const plot::RawCaptureFileData& capture);
     static bool sameAppliedPlotSetup(const plot::WaveDockState& wave, const plot::RawCapturePlotSetupEventData& setup);
     static std::string payloadPreviewSuffix(const config::AppLoggingConfig& logging,
                                            const std::vector<std::uint8_t>& payload);

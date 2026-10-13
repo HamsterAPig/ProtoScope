@@ -857,6 +857,7 @@ bool Application::pumpDataImport()
             auto& receive = dockStore_.receiveState();
             if (batch->metadata) {
                 std::string error;
+                if (!validateImportedFrequency(*batch->metadata, error)) throw std::runtime_error(error);
                 pendingImportSession_ = batch->session;
                 if (batch->session && !importProtocolPrepared_) {
                     pendingImportPreviousConfig_ = runtimeConfig_;
@@ -888,6 +889,7 @@ bool Application::pumpDataImport()
                     importReplacedWave_ = true;
                     importedWaveIncomplete_ = true;
                 }
+                applyImportedFrequency(*batch->metadata);
                 if (status.includesRecords) {
                     pendingImportedCapture_ = *batch->metadata;
                     pendingImportedCapture_.events.clear();
@@ -1067,6 +1069,8 @@ bool Application::startDataExport(const std::filesystem::path& path, int content
         }
         if (textRows.empty()) { error = "没有逐帧分析结果"; return false; }
     }
+    // 导出发起时冻结唯一现有采样率，不能复用采集时的旧元数据。
+    capture.sampleFrequencyHz = dockStore_.waveState().view.sampleFrequencyHz;
     session::SessionPackageData package;
     if (content == 3) {
         std::string configYaml;
@@ -1286,6 +1290,10 @@ bool Application::applySessionPackage(const session::SessionPackageData& package
         return false;
     }
     if (!validateSessionPackageEntries(*package, error)) return false;
+    // 文件元数据必须在恢复配置及其历史上限之前校验，避免失败导入裁剪旧数据。
+    std::optional<plot::RawCaptureFileData> rawCapture;
+    if (restoreCapture && !decodeSessionRawCaptureEntry(*package, std::nullopt, rawCapture, error)) return false;
+    if (rawCapture && !validateImportedFrequency(*rawCapture, error)) return false;
     std::string selectedProtocol;
     std::filesystem::path extractedProtocol;
     if (!selectSessionImportProtocol(*package, selectedProtocol, extractedProtocol, error)) return false;
@@ -1325,8 +1333,6 @@ bool Application::applySessionPackage(const session::SessionPackageData& package
         resetTransferFrameParser();
     }
     if (!restoreSessionPackageContext(*package, allowMissingProtocol, importedMarkers, error)) return false;
-    std::optional<plot::RawCaptureFileData> rawCapture;
-    if (restoreCapture && !decodeSessionRawCaptureEntry(*package, std::nullopt, rawCapture, error)) return false;
     if (rawCapture.has_value()) {
         if (rawCapture->waveform) {
             if (!importWaveCsvData(*rawCapture->waveform, error) || !importRawRecords(*rawCapture, error)) return false;

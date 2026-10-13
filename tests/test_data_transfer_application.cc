@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <iostream>
 #include <fstream>
+#include <limits>
 #include <thread>
 #ifdef _WIN32
 #include <windows.h>
@@ -761,6 +762,8 @@ static void testImportedSourceLabelsAfterReplay()
     };
 
     tryLuaRename("首次重解析完成后");
+    application.docks().waveState().view.sampleFrequencyHz = 1600;
+    application.docks().waveState().view.sampleFrequencyInput = "1600";
     // 前缀中没有 setup，仅真实 Lua push(2) 隐式建立位置 0；不能用提前 setup 掩盖原名遗漏。
     require(application.seekRawCaptureReplay(1, error), error);
     waitFor(application, [&] {
@@ -788,6 +791,9 @@ static void testImportedSourceLabelsAfterReplay()
     require(application.playRawCaptureReplay(error), error);
     waitCompleted();
     tryLuaRename("短前缀继续完成后");
+    require(application.docks().waveState().view.sampleFrequencyHz == 1600 &&
+            application.docks().waveState().view.sampleFrequencyInput == "1600",
+            "解析模式重复准备及继续播放不得撤销现有采样率修改");
     for (int repeat = 0; repeat < 2; ++repeat) {
         require(application.seekRawCaptureReplay(application.rawCaptureReplayStatus().eventCount, error), error);
         waitCompleted();
@@ -1296,9 +1302,19 @@ static void testManualProtocolSwitchReplay()
     const auto protocol = std::filesystem::path(__FILE__).parent_path() / "fixtures/protocols/import_source_label";
     plot::RawCaptureFileData capture;
     capture.source = "关联导入";
+    capture.sampleFrequencyHz = 400;
     capture.events = {{.type = plot::RawCaptureEventType::RxBytes, .bytes = {11, 12, 13}, .sequence = 1}};
     require(application.importRawRecords(capture, error), error);
-    require(application.reloadProtocolDirectory(protocol.generic_string(), true), "手动切换失败");
+    auto& view = application.docks().waveState().view;
+    require(view.sampleFrequencyHz == 400, "新原始来源必须初始化文件采样率");
+    view.sampleFrequencyHz = 1600;
+    view.sampleFrequencyInput = "1600";
+    const auto requireEditedFrequency = [&] {
+        require(view.sampleFrequencyHz == 1600 && view.sampleFrequencyInput == "1600",
+                "同来源协议切换及强制重算不得恢复文件旧采样率");
+    };
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true, true), "手动切换失败");
+    requireEditedFrequency();
     waitFor(application, [&] { return app::ApplicationBackpressureTestAccess::switchReplayFinished(application); });
     const auto parsed = application.captureWaveData({}, error);
     require(parsed && parsed->channels.size() == 2 && parsed->channels[0].samples.size() == 3 &&
@@ -1311,14 +1327,18 @@ static void testManualProtocolSwitchReplay()
     require(application.applyConfig(application.captureConfig()), "配置应用失败");
     require(app::ApplicationBackpressureTestAccess::replayGeneration(application) == first,
         "配置应用不得触发手动重算");
-    require(application.reloadProtocolDirectory(protocol.generic_string(), true), "连续切换第一次失败");
+    requireEditedFrequency();
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true, true), "连续切换第一次失败");
+    requireEditedFrequency();
     const auto second = app::ApplicationBackpressureTestAccess::replayGeneration(application);
-    require(application.reloadProtocolDirectory(protocol.generic_string(), true), "连续切换第二次失败");
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true, true), "连续切换第二次失败");
+    requireEditedFrequency();
     require(app::ApplicationBackpressureTestAccess::replayGeneration(application) > second,
         "连续重算必须更新代次隔离旧 worker");
     waitFor(application, [&] { return app::ApplicationBackpressureTestAccess::switchReplayFinished(application); });
     const auto again = application.captureWaveData({}, error);
     require(again && again->channels[0].samples.size() == 3, "loaded timeline 重算不得重复追加旧结果");
+    requireEditedFrequency();
     // 切至不同 schema，完整关联数据必须用新 parser 更新帧。
     const auto streamProtocol = std::filesystem::path(__FILE__).parent_path() / "fixtures/protocols/stream_frame_only";
     std::vector<std::uint8_t> frame{0xAA, 0x55, 0x01, 0x07};
@@ -1359,9 +1379,182 @@ static void testManualProtocolSwitchReplay()
     application.shutdown();
 }
 
+// 采样率属于现有波形设置，不由 time_axis 或采集时的旧元数据决定。
+static void testImportedSamplingFrequency()
+{
+    app::Application application;
+    require(application.initialize(), "采样率回归初始化失败");
+    std::string error;
+    auto& wave = application.docks().waveState();
+    plot::WaveCsvData data;
+    data.channels.resize(1);
+    data.channels[0].samples = {{7, 1}, {8, 2}};
+    data.channels[0].sampleIndexOffset = 42;
+    for (const std::string axis : {"frequency", "script", "index"}) {
+        data.timeAxis = axis;
+        data.sampleFrequencyHz = 200;
+        wave.view.sampleFrequencyHz = 100;
+        wave.view.sampleFrequencyError = "旧错误";
+        require(application.importWaveCsvData(data, error), error);
+        require(wave.view.sampleFrequencyHz == 200 && wave.view.sampleFrequencyInput == "200" &&
+            wave.view.sampleFrequencyError.empty(), "有效采样率必须独立于 time_axis 覆盖现有设置");
+        data.sampleFrequencyHz = 0;
+        require(application.importWaveCsvData(data, error), error);
+        require(wave.view.sampleFrequencyHz == 200, "零采样率不得清除现有设置");
+    }
+    for (const double invalid : {-1.0, std::numeric_limits<double>::infinity(),
+                                 std::numeric_limits<double>::quiet_NaN()}) {
+        const auto epoch = wave.buffer.historyEpoch();
+        data.sampleFrequencyHz = invalid;
+        error.clear();
+        require(!application.importWaveCsvData(data, error) && !error.empty() &&
+                wave.buffer.historyEpoch() == epoch && wave.view.sampleFrequencyHz == 200,
+                "非法直接导入必须在清旧波形之前拒绝");
+    }
+    data.sampleFrequencyHz = 0;
+    wave.view.sampleFrequencyHz = 0;
+    wave.view.sampleFrequencyInput.clear();
+    require(application.importWaveCsvData(data, error), error);
+    require(wave.view.sampleFrequencyHz == 0 && wave.buffer.snapshot(-1e9, 1e9, false).channels[0].totalSamples == 2,
+            "两边无 Fs 仍必须允许时域导入");
+    plot::RawCaptureFileData capture;
+    capture.waveform = data;
+    capture.sampleFrequencyHz = 400;
+    require(application.importWaveRawCapture(capture, error), error);
+    require(wave.view.sampleFrequencyHz == 400, "纯波形 PSRAW 必须回退顶层采样率");
+    capture.waveform->sampleFrequencyHz = 800;
+    require(application.importWaveRawCapture(capture, error), error);
+    require(wave.view.sampleFrequencyHz == 800, "内嵌有效采样率必须优先于顶层");
+    capture.sampleFrequencyHz = -1;
+    const auto epoch = wave.buffer.historyEpoch();
+    error.clear();
+    require(!application.importWaveRawCapture(capture, error) && wave.buffer.historyEpoch() == epoch,
+            "非法顶层采样率不得先替换内嵌波形");
+    capture = {};
+    capture.sampleFrequencyHz = 400;
+    capture.events = {{.type = plot::RawCaptureEventType::RxBytes, .bytes = {1}}};
+    // 同步导出按 payload 保留窗口裁剪 RX 事件，夹具必须携带对应原始字节。
+    capture.payload = {1};
+    require(application.loadRawCaptureReplayTimeline(capture, error), error);
+    wave.view.sampleFrequencyHz = 1600;
+    wave.view.sampleFrequencyInput = "1600";
+    require(application.seekRawCaptureReplay(0, error) && application.playRawCaptureReplay(error), error);
+    require(wave.view.sampleFrequencyHz == 1600 && wave.view.sampleFrequencyInput == "1600",
+            "seek/play 不得恢复旧文件采样率");
+    application.unloadRawCaptureReplayTimeline();
+    require(application.importWaveCsvData(data, error), error);
+    wave.rawCapture = capture; // 采集时的旧 Fs 与发起导出时的设置不同。
+    tests::ScopedTempPath path(tests::makeUniqueTempFile("protoscope-sampling", ".psraw"));
+    for (const auto [content, format] : {std::pair{0, 0}, std::pair{0, 1}, std::pair{1, 0},
+                                       std::pair{1, 1}, std::pair{3, 3}}) {
+        wave.view.sampleFrequencyHz = 1600;
+        require(application.startDataExport(path.path(), content, format, {}, 0, 0, 0,
+                                            plot::WaveCsvShape::Long, error), error);
+        wave.view.sampleFrequencyHz = 3200; // 后台任务必须持有发起时的快照。
+        waitFor(application, [&] { return !application.dataTransferStatus().active; }, false);
+        if (format == 0 && content == 0) {
+            const auto decoded = plot::readWaveCsvFile(path.path(), error);
+            require(decoded && decoded->sampleFrequencyHz == 1600, "CSV 导出采样率快照错误");
+        } else {
+            std::optional<plot::RawCaptureFileData> decoded;
+            if (format == 3) {
+                const auto package = session::readSessionPackage(path.path(), error);
+                require(package.has_value(), error);
+                for (const auto& entry : package->entries) if (entry.name == "raw_capture.psraw")
+                    decoded = plot::decodeRawCaptureFile({reinterpret_cast<const char*>(entry.bytes.data()),
+                                                          entry.bytes.size()}, error);
+                for (const auto& entry : package->entries) if (entry.name == "manifest.yaml") {
+                    const std::string manifest(entry.bytes.begin(), entry.bytes.end());
+                    require(manifest.find("sample_frequency_hz: 1600") != std::string::npos,
+                            "现场包摘要采样率错误");
+                }
+            } else decoded = format == 0 ? plot::readRawCaptureCsvFile(path.path(), error) :
+                                           plot::readRawCaptureFile(path.path(), error);
+            require(decoded && decoded->sampleFrequencyHz == 1600, "导出顶层采样率快照错误");
+        }
+    }
+    wave.view.sampleFrequencyHz = 1600;
+    require(application.exportWaveRawCapture(path.path(), error), error);
+    require(plot::readRawCaptureFile(path.path(), error)->sampleFrequencyHz == 1600,
+            "同步 PSRAW 必须导出现有采样率");
+    require(application.exportRawCaptureCsv(path.path(), {}, error), error);
+    require(plot::readRawCaptureCsvFile(path.path(), error)->sampleFrequencyHz == 1600,
+            "同步记录 CSV 必须导出现有采样率");
+    require(application.exportWaveCsv(path.path(), plot::WaveCsvShape::Long, {}, error), error);
+    require(plot::readWaveCsvFile(path.path(), error)->sampleFrequencyHz == 1600,
+            "同步波形 CSV 必须导出现有采样率");
+    require(application.exportSessionPackage(path.path(), error), error);
+    const auto synchronousPackage = session::readSessionPackage(path.path(), error);
+    require(synchronousPackage.has_value(), error);
+    const auto* rawEntry = session::findSessionPackageEntry(*synchronousPackage, "raw_capture.psraw");
+    require(rawEntry != nullptr, "同步现场包缺少原始数据条目");
+    const auto synchronousCapture = plot::decodeRawCaptureFile(
+        {reinterpret_cast<const char*>(rawEntry->bytes.data()), rawEntry->bytes.size()}, error);
+    require(synchronousCapture && synchronousCapture->sampleFrequencyHz == 1600 &&
+            synchronousCapture->events.size() == 1 && synchronousCapture->events[0].bytes == capture.payload,
+            "同步现场包必须携带当前采样率并保留夹具 RX 事件");
+    wave.view.sampleFrequencyHz = 3200;
+    require(application.importSessionPackage(path.path(), error), error);
+    require(wave.view.sampleFrequencyHz == 1600, "同步现场包必须恢复顶层采样率");
+    // 流式 CSV 的外层默认 Fs=0 不能盖掉内嵌元数据；PSRAW 同时覆盖顶层回退。
+    for (const double embedded : {0.0, 800.0}) {
+        capture.waveform = data;
+        capture.waveform->sampleFrequencyHz = embedded;
+        require(plot::writeRawCaptureFile(path.path(), capture, error), error);
+        require(application.startDataImport(path.path(), error), error);
+        waitFor(application, [&] { return application.dataTransferStatus().awaitingConfirmation; });
+        application.confirmDataImport();
+        waitFor(application, [&] { const auto s = application.dataTransferStatus(); return s.complete && !s.active; });
+        require(wave.view.sampleFrequencyHz == (embedded > 0 ? embedded : 400), "异步采样率优先级错误");
+    }
+    data.sampleFrequencyHz = 200;
+    require(plot::writeWaveCsvFile(path.path(), data, plot::WaveCsvShape::Long, {}, error), error);
+    require(application.startDataImport(path.path(), error), error);
+    waitFor(application, [&] { return application.dataTransferStatus().awaitingConfirmation; });
+    application.confirmDataImport();
+    waitFor(application, [&] { const auto s = application.dataTransferStatus(); return s.complete && !s.active; });
+    require(wave.view.sampleFrequencyHz == 200, "流式 CSV 外层零值覆盖了有效 Fs");
+    const auto snapshot = wave.buffer.snapshot(-1e9, 1e9, false);
+    require(snapshot.channels[0].sampleIndexOffset == 42 && snapshot.channels[0].samples[0].time == 7,
+            "采样率导入不得改变样本序号偏移或原始时间");
+    // 缺字段兼容与声明非法字段严格区分，同时保留 PSRAW 其他必要字段校验。
+    for (const std::string value : {"", "-1", "nan", "inf", "1e9999", "12garbage"}) {
+        error.clear();
+        require(!plot::decodeWaveCsv("# sample_frequency_hz=" + value + "\ntime,value\n0,1\n", error),
+                "非法 CSV 采样率被接受");
+        std::ofstream(path.path(), std::ios::binary) << "# sample_frequency_hz=" << value
+            << "\nevent_type,timestamp_ms,bytes_hex\nrx_bytes,0,01\n";
+        require(!plot::readRawCaptureCsvFile(path.path(), error), "非法记录 CSV 采样率被接受");
+        std::vector<std::uint8_t> bytes;
+        capture = {};
+        require(plot::encodeRawCaptureFile(capture, bytes, error), error);
+        std::string text(bytes.begin(), bytes.end());
+        const auto start = text.find("sample_frequency_hz:");
+        const auto end = text.find('\n', start);
+        text.replace(start, end - start, "sample_frequency_hz: " + value);
+        text.resize(4096, '\0');
+        require(!plot::decodeRawCaptureFile(text, error), "非法 PSRAW 采样率被接受");
+    }
+    error.clear();
+    require(plot::decodeWaveCsv("time,value\n0,1\n", error).has_value(), "缺失 Fs 的旧 CSV 应可导入");
+    std::vector<std::uint8_t> bytes;
+    require(plot::encodeRawCaptureFile({}, bytes, error), error);
+    std::string text(bytes.begin(), bytes.end());
+    const auto start = text.find("sample_frequency_hz:");
+    text.erase(start, text.find('\n', start) - start + 1);
+    text.resize(4096, '\0');
+    require(plot::decodeRawCaptureFile(text, error).has_value(), "缺失 Fs 的旧 PSRAW 应可导入");
+    const auto version = text.find("version:");
+    text.erase(version, text.find('\n', version) - version + 1);
+    text.resize(4096, '\0');
+    require(!plot::decodeRawCaptureFile(text, error), "放宽 Fs 不得放宽其他必要头字段");
+    application.shutdown();
+}
+
 int main(int argc, char**)
 {
     try {
+        testImportedSamplingFrequency();
         testManualProtocolSwitchReplay();
         testLegacyReplayAndRetirementNonblocking();
         testSessionImportProtocolSelection();
