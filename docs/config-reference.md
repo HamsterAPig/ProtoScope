@@ -11,6 +11,33 @@
 - `app.config_hot_reload.enabled` 开启后，宿主会检测外部文件变化并提示用户处理；不会在用户未确认时覆盖当前未保存状态。
 - `performance.scale` 只影响未显式写出的吞吐预算项。某个预算项写入 YAML 后，该项优先于公共系数。启用 `performance.adaptive.enabled` 后，`performance.scale` 和自适应接管的热调预算不参与运行时调度。
 
+## 设置窗口与 YAML 边界
+
+`设置 → 应用设置…` 提供常规外观、波形偏好、日志历史、性能四页草稿。控件默认直接来自 `AppConfig{}`，应用做字段差异与三方合并，不以 YAML 往返或全量重载模拟热更新。恢复本页默认不重置其它页。应用与保存分离；保存包含最新完整运行态，自动保存不写草稿。启动窗口、渲染后端、中文字形需重启；倍率派生连接读取缓冲只在下次连接生效。
+
+设置窗口不承接通讯、协议、FFT、游标、测量和 Dock 布局；`gui.wave.downsample_mode`、`gui.wave.overview_show_bit_channels` 继续仅由 YAML 配置。当前兼容 `y_axis_double_click_adjust_offset` 不改变适配；图例自动折叠仅 double_click 模式生效；波形动画和交互反馈总开关共同决定动画有效状态。
+
+| 字段/类别 | 设置窗口范围与零值语义 |
+| --- | --- |
+| 启动宽高 | 正整数逻辑像素；重启生效 |
+| 提示/自动保存间隔 | 非负毫秒；0分别为无瞬时提示/无最小保存间隔 |
+| 固定卡宽/自适应比例 | 正有限数且转换/乘法安全；比例宽最终限制160–220像素 |
+| `performance.scale` | 有限正数；从内建基线重算未显式十类预算，拒绝不可安全转换的派生值 |
+| `adaptive.max_multiplier` | 有限0.25–4.0；不改既有自适应规则 |
+| `fps_limit` | 非负整数，0至少1FPS；高于1000时调度最小1ms |
+| 通道点数/总顶点 | 非负整数；0回退内建预算，不是无限 |
+| 概览桶数 | 非负整数；0只取消该项桶数限制 |
+| 三 per-pump 预算 | 非负；0有效至少1；追加操作数不是样本数 |
+| worker flush | 有限非负毫秒且转微秒不溢出；0无时间预算，可能影响响应性 |
+| 日志路径/预览 | 空路径关闭文件日志；相对可执行目录；预览0字节不代表无限 |
+| 轮转大小/份数 | 非负；份数至200000；0有效回退1byte/1份，活动文件另计 |
+| 五类日志历史 | 非负行数；0不保留；帧容量含待派生行；缩减须确认 |
+| 发送历史 | 非负条数；有效容量min(配置,200)，0清空 |
+
+窗口严格拒绝非法输入并保留草稿。手写 YAML 保留原兼容归一化策略：非法 scale 回退1，过大派生整数安全钳制；不要把容错读取当作窗口允许非法值。低频四项手动编辑建立显式覆盖，“跟随倍率”解除；资源安全边界仍受静态倍率/覆盖约束，自适应只接管八项热预算，不能越过队列、内存、背压和连接预算。
+
+保存检测外部快照不依赖热重载开关。独占创建唯一同目录临时文件，持有句柄写入并 flush/close 后替换；失败保留旧文件和本次临时文件，并在错误中报告临时文件路径；不删除文件。外部变化须明确覆盖或重载；坏 YAML 保留旧运行态。该本机防误覆盖机制不承诺抵御恶意跨进程写入的绝对事务隔离。
+
 ## performance
 
 ```yaml
@@ -205,7 +232,11 @@ gui:
   raw_capture:
     live_limit_bytes: 67108864
     recording_queue_limit_bytes: 268435456
+  data_import:
+    protocol_source: prefer_package
   transfer_log:
+    history_on_parsed_switch: ask
+    history_scope: retained_rows
     replay_raw_history_on_schema_switch: false
   realtime_backlog:
     mode: responsive
@@ -228,7 +259,33 @@ gui:
 - `log_history.*`：收发原始行、逐帧行、宿主日志和脚本日志保留上限。
 - `raw_capture.live_limit_bytes`：实时原始缓存上限。
 - `raw_capture.recording_queue_limit_bytes`：完整录制队列上限。
-- `transfer_log.replay_raw_history_on_schema_switch`：保留读写兼容的旧键；当前不影响界面行为（切换原始/逐帧视图不再重建逐帧行）。
+- `data_import.protocol_source`：本机导入来源偏好，默认 `prefer_package`（优先包内协议；缺失时用当前），可选 `current_protocol`（只用当前，不执行包 Lua）；非法值回退默认。所选包协议存在但损坏时失败，不按缺失回退。同步与 GUI 异步导入均先实际初始化协议再提交数据；确认提示外部 Lua 初始化风险，初次保持原始浏览和波形快照。现场包不覆盖此偏好。
+- `transfer_log.history_on_parsed_switch`：原始转逐帧切换的历史策略，默认 `ask`。可选 `ask`（当前来源有 stream schema 且有历史时每次询问）/ `use_history`（按所选范围重建替换）/ `skip_history`（只清半帧，不重放旧字节）；非法值回退 `ask`。
+- `transfer_log.history_scope`：历史范围，默认 `retained_rows`（只用收发面板保留的原始 RX/TX 行）；可选 `retained_capture`（底层仍保留的完整采集/导入历史；不保证找回已裁剪字节、不自动重读文件）。不受显示筛选影响。
+- `transfer_log.replay_raw_history_on_schema_switch`：保留读写兼容的旧键；仅当 `history_on_parsed_switch` 缺失时映射（`true`→`use_history`，`false`→`ask`），新键优先。
+
+手动成功切换协议后，仍保留且与当前导入关联的原始记录使用新协议分批重新解析，更新波形与帧；启动、配置应用、导入恢复、无变化加载和普通实时采集不触发此重算。只有波形快照而无关联原始数据时保留快照并提示不能重算，不借用旧采集。中途解析失败保留关联原始记录并标记结果不完整。
+
+无有效协议、协议加载失败且没有旧有效协议、有效协议未声明 stream，分别显示不可解析原因；最近一次失败不会否定旧有效 schema。无 schema 可进入逐帧提示视图，不创建历史任务、不清已有帧或 pending。确认生效时重新检查能力和历史。即使旧帧可见仍展示当前不可解析原因，筛选无匹配提示保持独立。
+
+历史确认窗口局部自适应，按字号缩放约 560 宽、320 最高，并限制在 viewport 工作区宽 90%/高 80% 内；说明可滚动、按钮可换行，不修改全局样式。相关新增回归本轮尚未构建或运行，自动化和人工小屏验证结论待集中验证。
+
+#### 原始转逐帧：配置合同与当前实现边界
+
+这两个枚举是本机展示偏好，入口为现有应用设置的日志历史页；沿用字段白名单、三方合并、草稿/运行态 dirty、枚举校验、应用、保存和恢复默认流程。现场包恢复保留本机这两个值。内建值与仓库 YAML 均为 `ask` / `retained_rows`。迁移旧配置时可删除旧 bool 并显式写入新枚举；保留旧键也不会覆盖新键。
+
+原始转逐帧按钮在实时连接、断开与暂停自动滚动时都进入同一个策略入口，不要求暂停采集。`ask` 在当前来源有有效 stream schema 且所选范围有历史时每次询问，确认前保持原始视图，采集继续；取消或 Escape 保持原始视图。自动使用历史在处理请求时固定上界，询问使用历史在选择生效时固定上界，包含弹窗期间已接纳的原始数据，不以物理到达时间推断队列归属。
+
+当前源码的行为与验证边界如下（实现不等于验收通过）：
+
+- `skip_history` 与询问中的“不使用历史”保留已有逐帧结果和已生成的完整待提交帧，只清 RX/TX parser 残留半帧；保留当前 schema/runtime profile，不重放旧字节，之后新数据照常解析。
+- `retained_rows` 从面板实际保留行取字节，保存接纳时的 profile 基线，底层裁剪不删除面板仍持有的字节。`retained_capture` 使用底层仍保留事件，兼容 legacy payload；loaded timeline 只使用 `[0,eventIndex)` 已回放前缀，不用面板行数截断事件，也不包含未来事件。
+- 原始行、帧行与底层原始字节限额各自生效。清空面板清展示、pending 和半帧，使确认/任务失效，但不删除底层 capture；选择 `retained_capture` 后，底层仍有历史时仍可询问恢复。已裁剪字节不能恢复，不自动重读文件。
+- 使用历史通过独立 UI `FrameStreamParser` 重建并替换结果，不重执行 Lua callback、不实际发送 TX、不改波形、不借 seek/replay 副作用生成展示。实时与 BrowseRaw 使用当前可用 schema，显式 CurrentProtocol/PackageProtocol 使用离线 schema；profile set/clear 按顺序作用于 RX/TX，面板起点仅恢复必要基线，不引入范围外字节。无 stream schema 时不能生成逐帧结果。
+- 来源启动仅冻结元数据；主循环每轮最多256步骤、64KiB字节、4ms时间预算检查，单大事件带 offset。协议成功重载也安排同一有界任务。重建追赶保存来源位置而不全量复制新增字节；来源替换/裁剪或追赶超预算会取消并提示。完成交接尾半帧/profile，结果及待提交队列有行数上限。4ms 是循环预算检查，不是单次 parser 调用或操作系统调度的硬实时保证；取消后不会恢复已经淘汰的字节。
+- 非法枚举文本记录警告并回退默认；`history_scope` 非法值回退 `retained_rows`。有新策略键时不再用旧 bool 决定运行策略，即使同时保留旧键也只作兼容存档。
+
+本轮统一验证日志 `cmake-build-debug/import-history-workflow-logs/focused-*-3.log` 记录配置、构建、专项及全量 CTest 均 exit 0，专项7/7、全量36/36目标通过。这是工作流实际命令日志的结果，不是文档编辑阶段重新执行测试。真实鼠标 GUI 自动化覆盖切换、确认、失效关闭和筛选无匹配提示；不等同于人工桌面截图、剪贴板或实机串口验证。发布说明及证据见 `out/import-transfer-history-publish-20261013-final.md`。
 - `realtime_backlog.mode`：实时追赶模式，默认 `responsive`。
 - `realtime_backlog.*_per_pump`：每轮 UI 追赶预算，缺省受 `performance.scale` 控制。默认偏向平滑刷新，`rx_chunk_bytes_per_pump` 为 `4096`，`plot_appends_per_pump` 为 `128`。
 - `realtime_backlog.raw_first_backlog_warn_bytes`：原始 backlog 首次告警阈值。

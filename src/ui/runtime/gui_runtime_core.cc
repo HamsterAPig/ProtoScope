@@ -672,8 +672,11 @@ const GuiRuntime::FilteredLogRowsCache& GuiRuntime::filteredLogRowsCached(Filter
     const bool sameSourceAndFilter = cache.source == &rows && cache.filter.keyword == filter.keyword &&
                                      cache.filter.status == filter.status &&
                                      cache.includeBytePreview == includeBytePreview;
-    const bool appendOnly = sameSourceAndFilter && cache.version != version && cache.rowCount <= rows.size() &&
-                            (cache.rowCount == 0U || (!rows.empty() && cache.firstRow == &rows.front()));
+    // clear 后 deque 可能复用首行地址；仅地址/行数相同不能证明旧行仍存在。
+    // 原始行逐条 append 增长一次版本；清空、替换或裁剪产生额外版本时全量重筛。
+    const bool appendOnly = sameSourceAndFilter && version > cache.version && cache.rowCount < rows.size() &&
+                            version - cache.version == rows.size() - cache.rowCount &&
+                            (cache.rowCount == 0U || cache.firstRow == &rows.front());
 
     if (appendOnly) {
         // 核心流程：高速收包时日志只追加未裁剪，过滤缓存增量处理新行，避免每帧全量扫描历史。
@@ -727,7 +730,8 @@ bool GuiRuntime::initialize()
     registerUiComponents();
     attachUiComponents();
     loadCurrentProtocolWorkspace();
-    configSnapshot_ = configStore_.snapshot(configStore_.defaultConfigPath());
+    configSnapshot_ = configStore_.snapshot(application_.docks().configState().loadedFromPath);
+    settingsStartupConfig_ = application_.captureConfig();
     running_ = true;
     return true;
 }
@@ -1034,7 +1038,7 @@ RuntimeUiContext GuiRuntime::makeUiContext()
 
 void GuiRuntime::processWaveFullscreenInput()
 {
-    if (waveFullscreenActive_ && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+    if (!settingsOwnInput() && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) && waveFullscreenActive_ && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
         application_.docks().waveState().suppressZoomSelectionEscapeThisFrame = true;
         exitWaveFullscreen();
     }
@@ -1195,10 +1199,18 @@ bool GuiRuntime::saveCurrentConfigToDisk()
 {
     std::string error;
     const auto path = std::filesystem::path(application_.docks().configState().loadedFromPath);
-    if (!configStore_.save(path, application_.captureConfig(), error)) {
+    if (application_.settingsSaveBlocked() || application_.dataTransferStatus().active) {
+        settingsError_ = "应用未完成或文件导入导出活动中，不能保存"; return false;
+    }
+    const auto& expected = settingsOverwriteSnapshot_ ? *settingsOverwriteSnapshot_ : configSnapshot_;
+    if (!configStore_.saveChecked(path, application_.captureConfig(), expected, error)) {
+        settingsError_ = error;
+        if (configStore_.hasChanged(configSnapshot_)) { openApplicationSettings(); settingsExternalConflict_ = true; }
         application_.setStatusMessage("保存配置失败: " + error, true);
         return false;
     }
+    settingsError_.clear();
+    application_.docks().clearPendingExternalReload();
     application_.docks().clearDirty("配置已保存");
     configSnapshot_ = configStore_.snapshot(path);
     application_.docks().configState().fileTimestampMs = configSnapshot_.timestampMs;
@@ -1427,6 +1439,7 @@ void GuiRuntime::dispatchBuiltinFileOperation()
 
 void GuiRuntime::renderFrame()
 {
+    processSettingsActions();
     themeManager_.applyPending();
     refreshWindowTitle();
     prepareBuiltinFileOperation();
@@ -1451,6 +1464,7 @@ void GuiRuntime::renderFrame()
     const bool previousShowWaveDock = showWaveDock_;
 
     application_.clearExpiredTransientStatus(nowMs());
+    waveDockRenderer_.setSettingsInputBlocked(settingsOwnInput());
     drawRegisteredDocks();
     const bool waveOverlayFullscreen =
         waveFullscreenActive_ && waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Overlay;
@@ -1466,6 +1480,7 @@ void GuiRuntime::renderFrame()
         waveDockRenderer_.drawOverlay(waveFullscreenActive_, &waveFullscreenToggleRequested_);
     }
     drawStatusBar();
+    drawApplicationSettings();
     drawRegisteredDialogs();
     if (waveFullscreenActive_ && waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus && !showWaveDock_) {
         waveFullscreenToggleRequested_ = true;

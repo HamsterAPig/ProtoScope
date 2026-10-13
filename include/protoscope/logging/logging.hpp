@@ -30,6 +30,11 @@ public:
 
     void bindDockStore(dock::DockStore* dockStore);
     void applyConfig(const config::AppLoggingConfig& config);
+    void setLevel(config::LogLevel level);
+    // 候选阶段不旋转、不截断，失败保持旧配置及后端。
+    bool prepareSettingsConfig(const config::AppLoggingConfig& config, std::string& error);
+    void commitSettingsConfig();
+    void discardSettingsConfig();
 
     void trace(std::string endpoint, std::string message);
     void debug(std::string endpoint, std::string message);

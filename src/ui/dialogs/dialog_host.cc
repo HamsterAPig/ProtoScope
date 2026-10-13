@@ -508,6 +508,13 @@ void GuiRuntime::saveFileDialogPreferences(const config::DataExportConfig* lastE
 {
     std::string error;
     const auto configPath = std::filesystem::u8path(application_.docks().configState().loadedFromPath);
+    // 专项目录保存不能掩盖既有外部更新，再刷新全局保存快照。
+    if (configStore_.hasChanged(configSnapshot_)) {
+        fileDialogPreferenceError_ = "保存文件目录偏好暂停：外部配置已变化";
+        application_.docks().setPendingExternalReload(configStore_.snapshot(configPath).timestampMs, fileDialogPreferenceError_);
+        application_.setStatusMessage(fileDialogPreferenceError_);
+        return;
+    }
     if (!configStore_.saveFileDialogPreferences(
             configPath, application_.runtimeConfig().gui.fileDialogs, error, lastExport)) {
         fileDialogPreferenceError_ = "保存文件目录偏好失败: " + error;
@@ -680,11 +687,15 @@ void GuiRuntime::drawUnifiedDataDialog()
             if (status.metadata.waveform)
                 ImGui::TextWrapped("波形范围: %s", status.metadata.waveform->rangeDescription.c_str());
             if (status.includesRecords) ImGui::TextWrapped("收发范围: %s", status.metadata.rangeDescription.c_str());
+            const bool packageSelected = status.hasPackageProtocol &&
+                application_.runtimeConfig().gui.importProtocolSource == config::ImportProtocolSource::PreferPackage;
+            ImGui::TextWrapped("导入协议来源：%s。确认后执行所选 Lua 初始化（包内 Lua 属于外部代码）；默认只浏览原始记录，不重算波形快照。可在应用设置修改持久偏好。",
+                packageSelected ? "现场包内协议" : "当前协议（不执行包内 Lua）");
             if (status.includesRecords && !status.metadata.waveform) {
-                ImGui::TextUnformatted("处理方式（互斥，默认不执行 Lua）");
+                ImGui::TextUnformatted("历史处理方式（互斥，默认不执行历史 Lua）");
                 ImGui::RadioButton("仅浏览原始 RX/TX", &importProcessingMode_, 0);
                 ImGui::RadioButton("使用当前磁盘协议重新解析", &importProcessingMode_, 1);
-                if (status.hasPackageProtocol) {
+                if (packageSelected) {
                     ImGui::RadioButton("使用现场包内协议重新解析（执行外部 Lua）", &importProcessingMode_, 2);
                 }
                 if (importProcessingMode_ != 0) {

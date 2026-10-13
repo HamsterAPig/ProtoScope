@@ -98,7 +98,7 @@ namespace {
 
 void GuiRuntime::handleGlobalShortcuts()
 {
-    if (globalShortcutInputBlocked()) {
+    if (settingsOwnInput() || globalShortcutInputBlocked()) {
         return;
     }
 

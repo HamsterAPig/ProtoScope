@@ -86,6 +86,9 @@ public:
     ScriptRuntimeWorker& operator=(const ScriptRuntimeWorker&) = delete;
 
     void configure(ScriptRuntimeWorkerConfig config);
+    // 只应用四项资源预算；不触碰脚本、存储、权限与线程配置。
+    [[nodiscard]] std::future<bool> applyBudgetSettingsAsync(std::size_t rxQueueBytes,
+        std::size_t memoryBytes, std::size_t outputLimit, std::size_t batchBytes);
     void setFileIoConfig(FileIoConfig config);
     [[nodiscard]] ScriptRuntimeLoadResult loadProtocolDirectory(const std::string& directory);
     [[nodiscard]] std::future<ScriptRuntimeLoadResult> loadProtocolDirectoryAsync(std::string directory);
@@ -126,6 +129,8 @@ public:
     [[nodiscard]] std::vector<ScriptRuntimeOutputBatch> drainOutputs();
     [[nodiscard]] std::optional<ScriptRuntimeOutputBatch> drainOneOutput();
     [[nodiscard]] ScriptRuntimeSnapshot snapshot() const;
+    // 只请求中断并唤醒队列，不等待线程退出；stop 仍负责 join。
+    void requestStop();
     void stop();
 
 private:

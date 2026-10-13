@@ -818,7 +818,6 @@ namespace {
         bool versionSeen{false};
         bool protocolNameSeen{false};
         bool protocolDirSeen{false};
-        bool sampleFrequencySeen{false};
         bool rawSizeSeen{false};
         bool capturedAtSeen{false};
     };
@@ -850,7 +849,11 @@ namespace {
             state.protocolDirSeen = true;
             header.capture.protocolDir = std::string(value);
         } else if (key == "sample_frequency_hz") {
-            state.sampleFrequencySeen = parseDouble(value, header.capture.sampleFrequencyHz);
+            if (!parseDouble(value, header.capture.sampleFrequencyHz) ||
+                !std::isfinite(header.capture.sampleFrequencyHz) || header.capture.sampleFrequencyHz < 0.0) {
+                error = "psraw sample_frequency_hz 格式错误";
+                return false;
+            }
         } else if (key == "payload_size" || key == "raw_size") {
             state.rawSizeSeen = parseUnsigned(value, header.payloadSize);
         } else if (key == "captured_at_ms") {
@@ -876,7 +879,8 @@ namespace {
             error = "psraw 文件头缺少空行分隔";
             return false;
         }
-        if (!state.versionSeen || !state.protocolNameSeen || !state.protocolDirSeen || !state.sampleFrequencySeen ||
+        // 仅采样率允许真正缺失；其他必要字段仍保持严格校验。
+        if (!state.versionSeen || !state.protocolNameSeen || !state.protocolDirSeen ||
             !state.rawSizeSeen || !state.capturedAtSeen) {
             error = "psraw 文件头缺少必要字段";
             return false;

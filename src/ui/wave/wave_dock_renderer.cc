@@ -1754,7 +1754,7 @@ public:
         // NewFrame 的导航可能已用这个 Escape 关闭最后一层 Popup，当前空栈不代表按键未被消费。
         const bool popupProtectedEscape = popupOpenBeforeDrawer || wave.toolsDrawerPopupOpenLastFrame;
         wave.toolsDrawerPopupOpenLastFrame = popupOpenBeforeDrawer;
-        if (!wave.toolsCollapsed && ImGui::IsKeyPressed(ImGuiKey_Escape) && !context.io.WantTextInput &&
+        if (!wave.suppressZoomSelectionEscapeThisFrame && !wave.toolsCollapsed && ImGui::IsKeyPressed(ImGuiKey_Escape) && !context.io.WantTextInput &&
             !popupProtectedEscape) {
             wave.toolsCollapsed = true;
         }
@@ -2159,7 +2159,7 @@ void WaveDockRenderer::drawContent(const ImVec2& available,
     const auto& config = wave.buffer.viewConfig();
     view.effectiveInteractionAnimationEnabled =
         application_.runtimeConfig().gui.interactionFeedback.enabled && view.interactionAnimationEnabled;
-    wave.suppressZoomSelectionEscapeThisFrame = wave.suppressZoomSelectionEscapeThisFrame || fullscreenActive;
+    wave.suppressZoomSelectionEscapeThisFrame = wave.suppressZoomSelectionEscapeThisFrame || fullscreenActive || settingsInputBlocked_;
 
     syncWaveViewToLatest();
     initializeWaveViewIfNeeded(view);
@@ -2203,7 +2203,7 @@ void WaveDockRenderer::handleWaveShortcuts(const bool dockFocused,
                                            bool* fullscreenToggleRequested)
 {
     const auto& io = ImGui::GetIO();
-    if (!dockFocused || io.WantTextInput ||
+    if (settingsInputBlocked_ || !dockFocused || io.WantTextInput ||
         ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
         return;
     }

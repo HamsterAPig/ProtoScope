@@ -43,6 +43,8 @@ struct RawCaptureEvent {
     std::string endpoint;
     std::uint64_t sequence{0};
     std::string writeStatus;
+    // 仅宿主内存中的来源位置，不序列化，不使用文件 sequence 或时间戳识别来源。
+    std::uint64_t displayPosition{0};
 };
 
 enum class WaveCsvShape { Wide, Long };

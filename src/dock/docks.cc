@@ -400,11 +400,23 @@ std::string formatRequestTraceRowsCsv(std::span<const RequestTraceRow> rows, boo
 
 std::string formatReceiveRowContent(const ReceiveRow& row, bool showHex)
 {
+    // 只对原始 TX 写入状态同时展示字节；系统与解析帧消息不得被附加字节改变格式。
+    if (row.messageIsWriteStatus && !row.message.empty() && !row.bytes.empty()) {
+        std::string text = flattenSingleLineText(row.message);
+        if (!row.bytes.empty()) {
+            const auto byteText = showHex ? protocol_utils::bytesToHex(row.bytes, true) : bytesToAsciiPreview(row.bytes);
+            if (!byteText.empty()) {
+                text.append(" | ");
+                text.append(byteText);
+            }
+        }
+        return text;
+    }
+    if (row.message.empty() && row.bytes.empty()) {
+        return {};
+    }
     if (!row.message.empty()) {
         return flattenSingleLineText(row.message);
-    }
-    if (row.bytes.empty()) {
-        return {};
     }
     return showHex ? protocol_utils::bytesToHex(row.bytes, true) : bytesToAsciiPreview(row.bytes);
 }

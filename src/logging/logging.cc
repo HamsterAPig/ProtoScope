@@ -51,6 +51,8 @@ struct LoggingFacade::Impl {
     std::shared_ptr<spdlog::sinks::stdout_color_sink_mt> consoleSink;
     std::shared_ptr<spdlog::sinks::rotating_file_sink_mt> fileSink;
     std::string activeFilePath;
+    std::unique_ptr<Impl> candidate;
+    std::optional<config::AppLoggingConfig> candidateConfig;
 };
 
 LoggingFacade::LoggingFacade() : impl_(std::make_unique<Impl>())
@@ -69,6 +71,65 @@ void LoggingFacade::applyConfig(const config::AppLoggingConfig& config)
 {
     config_ = config;
     rebuildLogger();
+}
+
+void LoggingFacade::setLevel(config::LogLevel level)
+{
+    config_.level = level;
+    const auto native = toSpdlogLevel(level);
+    impl_->logger->set_level(native);
+    impl_->consoleSink->set_level(native);
+    if (impl_->fileSink) impl_->fileSink->set_level(native);
+}
+
+bool LoggingFacade::prepareSettingsConfig(const config::AppLoggingConfig& value, std::string& error)
+{
+    discardSettingsConfig();
+    error.clear();
+    try {
+        auto candidate = std::make_unique<Impl>();
+        candidate->consoleSink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+        std::vector<spdlog::sink_ptr> sinks{candidate->consoleSink};
+        if (!value.filePath.empty()) {
+            const auto path = resolveLogFilePath(value.filePath);
+            // 文件 sink 以追加方式打开且禁止 rotate_on_open，预检不能修改旧日志内容。
+            if (value.filePath == config_.filePath && value.maxFileSizeBytes == config_.maxFileSizeBytes &&
+                value.maxFiles == config_.maxFiles && impl_->fileSink) {
+                candidate->fileSink = impl_->fileSink;
+            } else {
+                candidate->fileSink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
+                    path.string(), value.maxFileSizeBytes == 0 ? 1 : value.maxFileSizeBytes,
+                    value.maxFiles == 0 ? 1 : value.maxFiles, false);
+            }
+            candidate->activeFilePath = path.generic_string();
+            sinks.push_back(candidate->fileSink);
+        }
+        candidate->logger = std::make_shared<spdlog::logger>("protoscope", sinks.begin(), sinks.end());
+        candidate->logger->set_pattern("%Y-%m-%d %H:%M:%S.%e [%^%l%$] %v");
+        candidate->logger->set_level(toSpdlogLevel(value.level));
+        candidate->logger->flush_on(spdlog::level::trace);
+        impl_->candidate = std::move(candidate);
+        impl_->candidateConfig = value;
+        return true;
+    } catch (const std::exception& ex) { error = std::string("日志后端不可用: ") + ex.what(); return false; }
+}
+
+void LoggingFacade::commitSettingsConfig()
+{
+    if (!impl_->candidate || !impl_->candidateConfig) return;
+    auto value = std::move(*impl_->candidateConfig);
+    auto candidate = std::move(impl_->candidate);
+    candidate->consoleSink->set_level(toSpdlogLevel(value.level));
+    if (candidate->fileSink) candidate->fileSink->set_level(toSpdlogLevel(value.level));
+    spdlog::set_default_logger(candidate->logger);
+    config_ = std::move(value);
+    impl_ = std::move(candidate);
+}
+
+void LoggingFacade::discardSettingsConfig()
+{
+    impl_->candidate.reset();
+    impl_->candidateConfig.reset();
 }
 
 void LoggingFacade::trace(std::string endpoint, std::string message)

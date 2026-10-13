@@ -1,10 +1,15 @@
 #include "protoscope/app/application.hpp"
 #include "protoscope/plot/csv_data_file.hpp"
+#include "protoscope/protocol_utils/codec.hpp"
+#include "protoscope/dock/docks.hpp"
 #include "test_helpers.hpp"
 
 #include <chrono>
+#include <atomic>
 #include <algorithm>
 #include <iostream>
+#include <fstream>
+#include <limits>
 #include <thread>
 #ifdef _WIN32
 #include <windows.h>
@@ -51,6 +56,535 @@ static void require(bool value, const std::string& message)
     if (!value) throw std::runtime_error(message);
 }
 
+namespace protoscope::app {
+// 复用已有测试友元；验证独立离线 parser 不被切换入口替换，不调用 Lua。
+struct ApplicationBackpressureTestAccess {
+    static bool offlineInputIdle(const Application& application) {
+        return application.offlineScriptWorker_ && application.offlineScriptWorker_->inputIdle();
+    }
+    static std::size_t legacyOffset(const Application& application) { return application.rawCaptureReplay_.legacyByteOffset; }
+    static void postBlockedOfflineTx(Application& application, std::function<void()> hook) {
+        application.offlineScriptWorker_->setTxCallbackTestHookForTest(std::move(hook));
+        application.offlineScriptWorker_->postTxEvent(application.rawCaptureReplay_.context, scripting::TxEvent{});
+    }
+    static bool retirementPending(const Application& application) { return !application.retiringOfflineWorkers_.empty(); }
+    static bool switchReplayFinished(const Application& application) {
+        return application.rawCaptureReplay_.phase == Application::OfflineReplayPhase::Completed ||
+               application.rawCaptureReplay_.phase == Application::OfflineReplayPhase::Failed;
+    }
+    static std::uint64_t replayGeneration(const Application& application) { return application.rawCaptureReplay_.generation; }
+    static bool switchReplayFailed(const Application& application) {
+        return application.rawCaptureReplay_.phase == Application::OfflineReplayPhase::Failed;
+    }
+    static std::uint64_t runtimeGeneration(const Application& application) {
+        return application.scriptWorker_.snapshot().runtimeGeneration;
+    }
+    static void restoreBrowseSchema(Application& application) { application.resetTransferFrameParser(); }
+    static void replaceHistoryProtocol(Application& application, const std::string& directory) {
+        const auto result = application.scriptWorker_.loadProtocolDirectory(directory);
+        if (!result.ok) throw std::runtime_error("确认期间协议替换失败");
+        application.resetTransferFrameParser();
+    }
+    static void verifyMissingParserPreservesCache(Application& application) {
+        application.transferFrameParser_.reset();
+        application.pendingTransferFrameRows_.push_back({.message = "pending-without-schema"});
+        const auto frames = application.dockStore_.receiveState().frameRows.size();
+        const auto pending = application.pendingTransferFrameRows_.size();
+        if (application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedRows,
+                application.historySwitchGeneration(), application.dockStore_.receiveState().rows.size()))
+            throw std::runtime_error("无 schema 不得创建历史任务");
+        application.historyRebuild_ = Application::HistoryRebuildTask{};
+        application.historyRebuild_->generation = application.historySwitchGeneration();
+        application.pumpHistoryRebuild();
+        if (application.dockStore_.receiveState().frameRows.size() != frames ||
+            application.pendingTransferFrameRows_.size() != pending)
+            throw std::runtime_error("无 parser 的防御分支不得清缓存");
+    }
+    static void verifyHistoryProgress(Application& application)
+    {
+        using Phase = Application::TransferHistoryPhase;
+        const auto previousBudget = application.runtimeConfig_.gui.realtimeBacklog.transferFrameRowsPerPump;
+        application.runtimeConfig_.gui.realtimeBacklog.transferFrameRowsPerPump = 1;
+        scripting::StreamFrameDefinition frame;
+        frame.name = "progress"; frame.header = {0xFA}; frame.size = 3;
+        scripting::FrameStreamParser parser(scripting::StreamBufferDefinition{.capacity = 4096}, {frame});
+        application.transferFrameParser_ = Application::TransferFrameParserState{.rx = parser, .tx = parser};
+        auto& capture = application.dockStore_.waveState().rawCapture;
+        capture = {};
+        capture.events = {{.type = plot::RawCaptureEventType::RxBytes,
+            .bytes = std::vector<std::uint8_t>(256 * 1024, 0), .displayPosition = 1}};
+        application.dockStore_.appendTransferFrameRows({{.message = "previous-result"}});
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedCapture,
+            application.historySwitchGeneration(), 1);
+        auto status = application.transferHistoryStatus();
+        require(status && status->phase == Phase::History && status->historyTotal == 1 &&
+            status->historyDone == 0 && status->previousResults, "任务返回前必须可查询首轮真实状态并保留旧帧");
+        const auto firstId = status->taskId;
+        application.pumpHistoryRebuild();
+        status = application.transferHistoryStatus();
+        require(status && status->currentBytesDone > 0 && status->currentBytesDone <= 64 * 1024 &&
+            status->currentBytesTotal == 256 * 1024 && status->historyDone == 0,
+            "单大记录必须显示实际字节进度，不能提前完成记录");
+        application.invalidateHistorySwitchWork("测试取消");
+        require(application.transferHistoryStatus()->phase == Phase::Cancelled, "取消必须留下明确终态");
+        application.dismissTransferHistoryStatus();
+        require(!application.transferHistoryStatus(), "终态必须可关闭");
+
+        capture.events = {{.type = plot::RawCaptureEventType::RxBytes, .displayPosition = 2}};
+        for (int i = 0; i < 900; ++i) {
+            capture.events.front().bytes.insert(capture.events.front().bytes.end(), {0xFA, 1, 2});
+        }
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedCapture,
+            application.historySwitchGeneration(), 1);
+        require(application.transferHistoryStatus()->taskId > firstId, "同来源的新任务也必须隔离编号");
+        for (int i = 0; i < 100 && application.historyRebuild_; ++i) application.pumpHistoryRebuild();
+        status = application.transferHistoryStatus();
+        require(status && status->phase == Phase::Display && status->displayPending > 0 &&
+            status->validFrames == 900 && status->fallbackRows == 0,
+            "解析结束但结果未展示结算不能报成功，帧数不等于已提交数");
+        // 实时队列永不为空也不能阻止本次结果完成。
+        while (application.transferHistoryStatus()->phase == Phase::Display) {
+            application.enqueueTransferFrameRows({{.message = "realtime"}});
+            application.flushPendingTransferFrameRows(1);
+        }
+        require(application.transferHistoryStatus()->phase == Phase::Completed &&
+            !application.pendingTransferFrameRows_.empty(), "完成只等待本次前缀，不等待实时队列为空");
+
+        capture.events = {{.type = plot::RawCaptureEventType::RxBytes, .bytes = {0}, .displayPosition = 3},
+            {.type = plot::RawCaptureEventType::TxBytes, .bytes = {0}, .displayPosition = 4}};
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedCapture,
+            application.historySwitchGeneration(), 2);
+        while (application.historyRebuild_) application.pumpHistoryRebuild();
+        application.flushPendingTransferFrameRows(100);
+        status = application.transferHistoryStatus();
+        require(status->validFrames == 0 && status->fallbackRows > 0 && status->phase == Phase::Completed,
+            "零匹配与回退展示行必须分开统计");
+
+        capture.events.front().bytes = {0xFA, 1, 2};
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedCapture,
+            application.historySwitchGeneration(), 1);
+        std::string profileError;
+        require(application.applyTransferFrameRuntimeProfileEvent({.cleared = true}, profileError), profileError);
+        application.pumpHistoryRebuild();
+        require(application.transferHistoryStatus()->followingDone > 0, "新增 profile 也必须真实追赶计数");
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedCapture,
+            application.historySwitchGeneration(), 1);
+        for (int i = 0; i < 300; ++i) {
+            application.queueHistoryFollowing({.type = plot::RawCaptureEventType::ProfileClear});
+        }
+        application.pumpHistoryRebuild();
+        require(application.transferHistoryStatus()->phase == Phase::Following &&
+            application.transferHistoryStatus()->followingPending > 0, "追赶阶段必须显示动态待处理记录而非假百分比");
+        application.invalidateHistorySwitchWork("替换前取消");
+        require(application.transferHistoryStatus()->phase == Phase::Cancelled &&
+            application.transferHistoryStatus()->followingPending > 0, "取消保留真实剩余量和明确终态");
+
+        // 结算前缀全部被上限裁掉也必须结束，不因未提交行永久挂起。
+        capture.events.front().bytes.clear();
+        for (int i = 0; i < 20; ++i) capture.events.front().bytes.insert(capture.events.front().bytes.end(), {0xFA, 1, 2});
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedCapture,
+            application.historySwitchGeneration(), 1);
+        while (application.historyRebuild_) application.pumpHistoryRebuild();
+        require(application.transferHistoryStatus()->phase == Phase::Display, "裁剪测试必须先有待结算结果");
+        const auto oldLimit = application.runtimeConfig_.gui.logHistory.transferFrameLimit;
+        application.runtimeConfig_.gui.logHistory.transferFrameLimit = 0;
+        application.trimPendingTransferFrameRowsToLimit();
+        require(application.transferHistoryStatus()->phase == Phase::Completed &&
+            application.transferHistoryStatus()->discardedRows > 0, "提交队列裁剪必须真实结算并完成");
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedCapture,
+            application.historySwitchGeneration(), 1);
+        while (application.historyRebuild_) application.pumpHistoryRebuild();
+        require(application.transferHistoryStatus()->validFrames == 20 &&
+            application.transferHistoryStatus()->discardedRows == 20, "零保留上限不能把生成帧计数伪造为零");
+        application.runtimeConfig_.gui.logHistory.transferFrameLimit = oldLimit;
+        capture.events = {{.type = plot::RawCaptureEventType::ProfileSet,
+            .profile = {.frameName = "missing-frame", .length = 3}, .displayPosition = 5}};
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedCapture,
+            application.historySwitchGeneration(), 1);
+        application.pumpHistoryRebuild();
+        require(application.transferHistoryStatus()->phase == Phase::Failed &&
+            !application.transferHistoryStatus()->reason.empty(), "历史 profile 错误必须是带原因的失败，不是完成");
+        application.clearTransferLogHistory();
+        require(!application.transferHistoryStatus(), "清空必须清除旧状态");
+        capture.events = {{.type = plot::RawCaptureEventType::RxBytes,
+            .bytes = std::vector<std::uint8_t>(256 * 1024, 0), .displayPosition = 6}};
+        const auto start = [&] {
+            require(application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedCapture,
+                application.historySwitchGeneration(), 1), "失效测试须成功创建任务");
+        };
+        start();
+        application.resetDataImportGenerationState(false);
+        require(!application.transferHistoryStatus() && !application.historyRebuild_, "导入重置必须清除旧任务和状态");
+        start();
+        application.cancelRawCaptureImportReplay();
+        require(!application.transferHistoryStatus() && !application.historyRebuild_, "回放取消必须立即清除旧状态");
+        start();
+        application.clearPendingRealtimeBacklog();
+        require(application.transferHistoryStatus()->phase == Phase::Cancelled && !application.historyRebuild_,
+            "清除待提交队列必须结束活动状态");
+        start();
+        application.dockStore_.receiveState().displayMode = dock::TransferLogDisplayMode::RawChunks;
+        application.refreshTransferFrameDisplayAfterProtocolReload();
+        require(!application.transferHistoryStatus() && !application.historyRebuild_, "原始视图协议切换必须清旧状态");
+        application.transferFrameParser_ = Application::TransferFrameParserState{.rx = parser, .tx = parser};
+        start();
+        application.importedRawAssociated_ = true;
+        application.switchToLiveWaveSource();
+        require(!application.transferHistoryStatus() && !application.historyRebuild_, "切实时的提前返回也必须清状态");
+        start();
+        application.historyRebuild_->parser.reset();
+        application.pumpHistoryRebuild();
+        require(application.transferHistoryStatus()->phase == Phase::Failed, "活动任务缺 parser 必须明确失败");
+        application.clearTransferHistoryStatus("测试结束");
+        application.transferFrameParser_ = Application::TransferFrameParserState{.rx = parser, .tx = parser};
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedCapture,
+            application.historySwitchGeneration(), 0);
+        application.queueHistoryFollowing({.type = plot::RawCaptureEventType::RxBytes,
+            .position = 999, .byteSize = 3, .rowIndex = 999});
+        application.pumpHistoryRebuild();
+        require(application.transferHistoryStatus()->phase == Phase::Cancelled &&
+            application.transferHistoryStatus()->reason.find("追赶来源") != std::string::npos,
+            "历史已结束的追赶来源裁剪必须明确取消");
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedCapture,
+            application.historySwitchGeneration(), 0);
+        application.queueHistoryFollowing({.type = plot::RawCaptureEventType::ProfileSet,
+            .profile = {.frameName = "missing-profile", .length = 3}});
+        application.pumpHistoryRebuild();
+        require(application.transferHistoryStatus()->phase == Phase::Failed,
+            "追赶 profile 无效必须是失败");
+        application.dockStore_.clearReceiveRows();
+        application.transferProfiles_ = std::make_shared<const std::vector<plot::RawCaptureEvent>>(
+            std::vector<plot::RawCaptureEvent>{{.type = plot::RawCaptureEventType::ProfileSet,
+                .profile = {.frameName = "missing-profile", .length = 3}}});
+        application.appendHistoryReceiveRow({.direction = "RX", .bytes = {0xFA, 1, 2}});
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedRows,
+            application.historySwitchGeneration(), 1);
+        application.pumpHistoryRebuild();
+        require(application.transferHistoryStatus()->phase == Phase::Failed &&
+            application.transferHistoryStatus()->reason.find("基线") != std::string::npos,
+            "面板行 profile 基线失效必须结束状态");
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedRows,
+            application.historySwitchGeneration(), 0);
+        application.pumpHistoryRebuild();
+        require(application.transferHistoryStatus()->phase == Phase::Failed &&
+            application.transferHistoryStatus()->reason.find("上界") != std::string::npos,
+            "历史上界 profile 无效必须结束状态");
+        application.transferProfiles_.reset();
+        application.clearTransferHistoryStatus("失效回归结束");
+        application.runtimeConfig_.gui.realtimeBacklog.transferFrameRowsPerPump = previousBudget;
+    }
+    static void verifyDisplayInvalidation(Application& application)
+    {
+        using Phase = Application::TransferHistoryPhase;
+        const auto budget = application.runtimeConfig_.gui.realtimeBacklog.transferFrameRowsPerPump;
+        application.runtimeConfig_.gui.realtimeBacklog.transferFrameRowsPerPump = 1;
+        scripting::StreamFrameDefinition definition;
+        definition.name = "display_boundary"; definition.header = {0xFA}; definition.size = 3;
+        scripting::FrameStreamParser parser(scripting::StreamBufferDefinition{.capacity = 4096}, {definition});
+        const auto startDisplay = [&] {
+            application.clearTransferHistoryStatus("测试准备");
+            application.transferProfiles_.reset();
+            application.transferFrameParser_ = Application::TransferFrameParserState{.rx = parser, .tx = parser};
+            application.dockStore_.receiveState().displayMode = dock::TransferLogDisplayMode::ParsedFrames;
+            auto& capture = application.dockStore_.waveState().rawCapture;
+            capture = {};
+            capture.events = {{.type = plot::RawCaptureEventType::RxBytes, .displayPosition = 10}};
+            for (int i = 0; i < 20; ++i) capture.events.front().bytes.insert(capture.events.front().bytes.end(), {0xFA, 1, 2});
+            require(application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedCapture,
+                application.historySwitchGeneration(), 1), "展示失效测试必须成功启动");
+            for (int i = 0; i < 100 && application.historyRebuild_; ++i) application.pumpHistoryRebuild();
+            const auto status = application.transferHistoryStatus();
+            require(!application.historyRebuild_ && status && status->phase == Phase::Display &&
+                status->displayPending > 0, "每个失效入口必须从独立 Display 阶段开始");
+            return status->taskId;
+        };
+        startDisplay();
+        const auto original = application.dockStore_.waveState().rawCapture.events.front().bytes;
+        application.requestParsedHistorySwitch();
+        require(application.transferHistoryStatus()->phase == Phase::Cancelled &&
+            application.dockStore_.waveState().rawCapture.events.front().bytes == original,
+            "展示中切回原始必须取消但保留原始数据");
+        application.appendTransferRow({.direction = "RX", .bytes = {0xFA, 3, 4}});
+        require(application.dockStore_.receiveState().rows.back().bytes == std::vector<std::uint8_t>({0xFA, 3, 4}),
+            "取消后当前新输入仍须保留");
+        application.flushPendingTransferFrameRows(100);
+        require(application.transferHistoryStatus()->phase == Phase::Cancelled, "旧队列提交不得把取消变成成功");
+
+        startDisplay();
+        application.clearTransferLogHistory();
+        require(!application.transferHistoryStatus() && application.pendingTransferFrameRows_.empty() &&
+            application.dockStore_.waveState().rawCapture.events.front().bytes == original,
+            "展示中清空遵守现有面板清理策略，不删除底层 raw");
+        startDisplay();
+        application.clearPendingRealtimeBacklog();
+        require(application.transferHistoryStatus()->phase == Phase::Cancelled &&
+            application.pendingTransferFrameRows_.empty(), "展示中清 backlog 必须结束状态");
+        const auto oldId = startDisplay();
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedCapture,
+            application.historySwitchGeneration(), 1);
+        require(application.transferHistoryStatus()->taskId > oldId &&
+            application.transferHistoryStatus()->displaySubmitted == 0, "新任务不得继承旧前缀结算");
+        require(!application.flushPendingTransferFrameRows(100), "新任务解析中旧 pending 不得提前提交");
+        for (int i = 0; i < 100 && application.historyRebuild_; ++i) application.pumpHistoryRebuild();
+        require(application.transferHistoryStatus()->displaySubmitted == 1 &&
+            application.transferHistoryStatus()->displayPending == 19, "新任务只能结算自己的展示前缀");
+
+        std::string error;
+        plot::RawCaptureFileData replacement;
+        replacement.events = {{.type = plot::RawCaptureEventType::RxBytes, .bytes = {0xFA, 5, 6}}};
+        startDisplay();
+        require(application.importRawRecords(replacement, error), error);
+        require(!application.transferHistoryStatus() && application.pendingTransferFrameRows_.empty() &&
+            application.dockStore_.receiveState().rows.back().bytes == replacement.events.front().bytes,
+            "展示中重新导入必须清旧状态并完整保留新来源字节");
+        startDisplay();
+        const auto protocol = std::filesystem::path(__FILE__).parent_path() / "fixtures/protocols/stream_frame_only";
+        require(application.reloadProtocolDirectory(protocol.generic_string(), true, false), "成功协议切换测试失败");
+        const auto reloaded = application.transferHistoryStatus();
+        require(!reloaded || reloaded->phase != Phase::Display, "成功协议切换必须替换旧 Display 状态");
+        startDisplay();
+        require(application.loadRawCaptureReplayTimeline(replacement, error), error);
+        require(!application.transferHistoryStatus(), "展示中载入时间轴必须清旧状态");
+        // 回放 prefix 尚为0，直接使用面板范围构造独立展示阶段，不播放未来事件。
+        const auto timelineDisplay = [&] {
+            application.transferFrameParser_ = Application::TransferFrameParserState{.rx = parser, .tx = parser};
+            application.dockStore_.clearReceiveRows();
+            for (int i = 0; i < 20; ++i) application.appendHistoryReceiveRow({.direction = "RX", .bytes = {0xFA, 1, 2}});
+            application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedRows,
+                application.historySwitchGeneration(), 20);
+            for (int i = 0; i < 100 && application.historyRebuild_; ++i) application.pumpHistoryRebuild();
+            require(!application.historyRebuild_ && application.transferHistoryStatus()->phase == Phase::Display &&
+                application.transferHistoryStatus()->displayPending > 0, "时间轴失效须确实进入 Display");
+        };
+        timelineDisplay();
+        require(application.seekRawCaptureReplay(0, error), error);
+        require(!application.transferHistoryStatus(), "展示中 seek 必须清旧状态");
+        timelineDisplay();
+        application.unloadRawCaptureReplayTimeline();
+        require(!application.transferHistoryStatus(), "展示中卸载必须清旧状态");
+        application.clearTransferLogHistory();
+        application.runtimeConfig_.gui.realtimeBacklog.transferFrameRowsPerPump = budget;
+    }
+    static bool historyActive(const Application& application) { return application.historyRebuild_.has_value(); }
+    static bool historyOutputPending(const Application& application) { return !application.pendingTransferFrameRows_.empty(); }
+    static void verifyReloadHistoryDeferred(const Application& application, bool beforePump)
+    {
+        if (!application.historyRebuild_)
+            throw std::runtime_error("协议重载大历史必须保留有界任务");
+        const auto& task = *application.historyRebuild_;
+        if (beforePump && (task.eventCursor != 0 || task.byteOffset != 0 || !task.rebuilt.empty()))
+            throw std::runtime_error("协议重载返回前不得复制并同步解析历史");
+        if (!beforePump && (task.eventCursor > 1 || task.byteOffset > 64 * 1024))
+            throw std::runtime_error("协议重载历史每轮必须受字节预算限制");
+    }
+    static void verifyHistoryBudgetsAndHandoff(Application& application)
+    {
+        scripting::StreamFrameDefinition frame;
+        frame.name = "offline_profile"; frame.header = {0xFA}; frame.runtimeProfile = true;
+        scripting::FrameStreamParser parser(scripting::StreamBufferDefinition{.capacity = 4096}, {frame});
+        application.transferFrameParser_ = Application::TransferFrameParserState{.rx = parser, .tx = parser};
+        auto& capture = application.dockStore_.waveState().rawCapture;
+        capture = {};
+        capture.source = "budget";
+        capture.events = {
+            {.type = plot::RawCaptureEventType::ProfileSet, .profile = {.frameName = frame.name, .length = 3}, .displayPosition = 1},
+            {.type = plot::RawCaptureEventType::RxBytes, .bytes = {0xFA, 0x01, 0x02}, .displayPosition = 2},
+            {.type = plot::RawCaptureEventType::RxBytes, .bytes = {0xFA, 0x03}, .displayPosition = 3}};
+        application.dockStore_.clearReceiveRows();
+        application.rememberTransferProfile(capture.events.front());
+        application.appendHistoryReceiveRow({.direction = "RX", .bytes = {0xFA, 0x03}, .displayPosition = 3});
+        const auto retainedCapture = capture.events;
+        capture.events.clear(); // 底层已裁剪，面板仍保留：不能借底层字节或 profile 重建。
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedRows,
+                                        application.historySwitchGeneration(), 1);
+        application.appendTransferRow({.direction = "RX", .bytes = {0x04}, .displayPosition = 4});
+        for (int i = 0; i < 100 && application.historyRebuild_; ++i) application.pumpHistoryRebuild();
+        if (application.historyRebuild_ || application.dockStore_.receiveState().frameRows.size() != 1 ||
+            application.dockStore_.receiveState().frameRows.front().bytes != std::vector<std::uint8_t>({0xFA, 0x03, 0x04}))
+            throw std::runtime_error("面板范围只解析保留字节，折叠起点 profile，历史半帧和新字节连续生成一帧");
+        // 面板已清空而底层仍保留，完整范围仍能恢复；不会重放面板已裁剪字节到面板范围。
+        capture.events = retainedCapture;
+        application.dockStore_.clearReceiveRows();
+        // 完整范围不得复制旧 pending 再追加两次。
+        application.pendingTransferFrameRows_.push_back({.bytes = {0x99}});
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedCapture,
+                                        application.historySwitchGeneration(), 3);
+        for (int i = 0; i < 100 && application.historyRebuild_; ++i) application.pumpHistoryRebuild();
+        if (application.dockStore_.receiveState().frameRows.size() != 1 || !application.pendingTransferFrameRows_.empty())
+            throw std::runtime_error("完整范围替换结果不能重复旧 pending");
+        // 完成后的历史尾半帧直接交接给同一 UI parser。
+        application.appendTransferFrameRows({.direction = "RX", .bytes = {0x04}});
+        application.flushPendingTransferFrameRows(256);
+        if (application.dockStore_.receiveState().frameRows.size() != 2 ||
+            application.dockStore_.receiveState().frameRows.back().bytes != std::vector<std::uint8_t>({0xFA, 0x03, 0x04}))
+            throw std::runtime_error("历史完成必须交接尾半帧和 profile，新字节只解析一次");
+        // 一个超大事件必须带 offset 留到下一轮，不能一次解析全部字节。
+        capture.events[1].bytes.assign(256 * 1024, 0);
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedCapture,
+                                        application.historySwitchGeneration(), 3);
+        application.pumpHistoryRebuild();
+        if (!application.historyRebuild_ || application.historyRebuild_->eventCursor > 1 ||
+            application.historyRebuild_->byteOffset > 64 * 1024)
+            throw std::runtime_error("单大事件每轮必须受 64KiB 切片预算约束");
+        application.cancelHistorySwitch(); // modal 取消不操作任务，此处显式来源取消。
+        application.invalidateHistorySwitchWork("测试取消");
+        // legacy payload 没有事件仍必须可用完整范围重建。
+        capture.events.clear(); capture.payload = {0xFA, 0x01, 0x02};
+        frame.runtimeProfile = false; frame.size = 3;
+        scripting::FrameStreamParser fixed(scripting::StreamBufferDefinition{.capacity = 4096}, {frame});
+        application.transferFrameParser_ = Application::TransferFrameParserState{.rx = fixed, .tx = fixed};
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedCapture,
+                                        application.historySwitchGeneration(), 0);
+        for (int i = 0; i < 100 && application.historyRebuild_; ++i) application.pumpHistoryRebuild();
+        if (application.dockStore_.receiveState().frameRows.size() != 1)
+            throw std::runtime_error("legacy payload 必须进入完整范围历史");
+        // timeline 控制事件与行数不同；面板只选位置2，未来位置4不解析。
+        application.rawCaptureReplay_.loaded = true;
+        application.rawCaptureReplay_.processing = Application::OfflineReplayProcessing::PackageProtocol;
+        frame.runtimeProfile = true; frame.size.reset();
+        scripting::FrameStreamParser offline(scripting::StreamBufferDefinition{.capacity = 4096}, {frame});
+        application.transferFrameParser_ = Application::TransferFrameParserState{.rx = offline, .tx = offline};
+        application.rawCaptureReplay_.capture.events = {
+            {.type = plot::RawCaptureEventType::ProfileSet, .profile = {.frameName = "offline_profile", .length = 3}, .displayPosition = 1},
+            {.type = plot::RawCaptureEventType::RxBytes, .bytes = {0xFA, 0x05, 0x06}, .displayPosition = 2},
+            {.type = plot::RawCaptureEventType::PlotSetup, .displayPosition = 3},
+            {.type = plot::RawCaptureEventType::RxBytes, .bytes = {0xFA, 0x07, 0x08}, .displayPosition = 4}};
+        application.rawCaptureReplay_.eventIndex = 3;
+        application.dockStore_.clearReceiveRows();
+        application.rememberTransferProfile(application.rawCaptureReplay_.capture.events.front());
+        application.appendHistoryReceiveRow({.direction = "RX", .bytes = {0xFA, 0x05, 0x06}, .displayPosition = 2});
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedRows,
+                                        application.historySwitchGeneration(), 1);
+        // 重建期间 profile 与 TX 必须顺序追赶，并对两个方向生效。
+        std::string profileError;
+        application.applyTransferFrameRuntimeProfileEvent({.frameName = "offline_profile", .length = 3}, profileError);
+        application.appendTransferRow({.direction = "TX", .bytes = {0xFA, 0x09, 0x0A}, .displayPosition = 5});
+        for (int i = 0; i < 100 && application.historyRebuild_; ++i) application.pumpHistoryRebuild();
+        const auto& timelineRows = application.dockStore_.receiveState().frameRows;
+        if (timelineRows.size() != 2 || timelineRows.front().bytes != std::vector<std::uint8_t>({0xFA, 0x05, 0x06}) ||
+            timelineRows.back().direction != "TX")
+            throw std::runtime_error("timeline面板范围不能拿行数截断控制事件，也不能引入未来prefix，新增TX不得丢失");
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedCapture,
+            application.historySwitchGeneration(), application.rawCaptureReplay_.eventIndex);
+        for (int i = 0; i < 100 && application.historyRebuild_; ++i) application.pumpHistoryRebuild();
+        if (application.historyRebuild_ || application.dockStore_.receiveState().frameRows.size() != 1 ||
+            application.dockStore_.receiveState().frameRows.front().bytes != std::vector<std::uint8_t>({0xFA, 0x05, 0x06}))
+            throw std::runtime_error("完整 timeline 范围只解析 eventIndex 前缀，不能包含未来 RX 或范围外 TX");
+        application.rawCaptureReplay_.loaded = false;
+        // 每行基线必须保留 set/clear 顺序，两个方向均不能用最新 profile 解释旧行。
+        application.dockStore_.clearReceiveRows();
+        application.transferProfiles_.reset();
+        application.rememberTransferProfile({.type = plot::RawCaptureEventType::ProfileSet,
+            .profile = {.frameName = frame.name, .length = 3}});
+        application.appendHistoryReceiveRow({.direction = "RX", .bytes = {0xFA, 1, 2}});
+        application.rememberTransferProfile({.type = plot::RawCaptureEventType::ProfileClear,
+            .profile = {.frameName = frame.name}});
+        application.appendHistoryReceiveRow({.direction = "TX", .bytes = {0xFA, 3, 4}});
+        application.rememberTransferProfile({.type = plot::RawCaptureEventType::ProfileSet,
+            .profile = {.frameName = frame.name, .length = 4}});
+        application.appendHistoryReceiveRow({.direction = "TX", .bytes = {0xFA, 5, 6, 7}});
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedRows,
+            application.historySwitchGeneration(), 3);
+        for (int i = 0; i < 100 && application.historyRebuild_; ++i) application.pumpHistoryRebuild();
+        const auto& profileRows = application.dockStore_.receiveState().frameRows;
+        if (application.historyRebuild_ || profileRows.size() != 3 ||
+            profileRows.front().bytes != std::vector<std::uint8_t>({0xFA, 1, 2}) ||
+            !profileRows[1].message.empty() || profileRows[1].bytes != std::vector<std::uint8_t>({0xFA, 3, 4}) ||
+            profileRows.back().bytes != std::vector<std::uint8_t>({0xFA, 5, 6, 7}) ||
+            profileRows.back().message.find(frame.name) == std::string::npos)
+            throw std::runtime_error("面板 profile set/clear 必须按接纳顺序作用于 RX/TX");
+        // 无字节的尾部 clear 也属于上界 profile，必须交接到随后新数据。
+        application.rememberTransferProfile({.type = plot::RawCaptureEventType::ProfileClear});
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedRows,
+            application.historySwitchGeneration(), 3);
+        for (int i = 0; i < 100 && application.historyRebuild_; ++i) application.pumpHistoryRebuild();
+        const auto cleared = application.transferFrameParser_->rx.pushBytes({0xFA, 8, 9, 10});
+        if (!cleared.frames.empty() || cleared.errors.empty())
+            throw std::runtime_error("面板上界尾部 profile clear 必须交接，不能沿用最后一行 profile");
+        // 追赶队列只保留元数据，来源裁剪必须取消而不是持有已淘汰字节。
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedRows,
+            application.historySwitchGeneration(), 3);
+        application.appendTransferRow({.direction = "RX", .bytes = std::vector<std::uint8_t>(4096, 0)});
+        if (!application.historyRebuild_ || application.historyRebuild_->following.front().byteSize != 4096)
+            throw std::runtime_error("追赶必须接纳新增来源位置和大小");
+        application.dockStore_.receiveState().rows.pop_front();
+        application.pumpHistoryRebuild();
+        if (application.historyRebuild_) throw std::runtime_error("面板持续裁剪必须有界取消旧任务");
+        require(application.transferHistoryStatus()->phase == Application::TransferHistoryPhase::Cancelled,
+            "面板裁剪必须终止反馈状态");
+        // 超追赶预算取消任务，但当前新帧仍由原 UI parser 接纳并能提交。
+        frame.runtimeProfile = false; frame.size = 3;
+        scripting::FrameStreamParser pressure(scripting::StreamBufferDefinition{.capacity = 4096}, {frame});
+        application.transferFrameParser_ = Application::TransferFrameParserState{.rx = pressure, .tx = pressure};
+        application.dockStore_.receiveState().displayMode = dock::TransferLogDisplayMode::ParsedFrames;
+        const auto oldByteLimit = application.runtimeConfig_.gui.rawCapture.liveLimitBytes;
+        application.runtimeConfig_.gui.rawCapture.liveLimitBytes = 2;
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedRows,
+            application.historySwitchGeneration(), application.dockStore_.receiveState().rows.size());
+        application.appendTransferRow({.direction = "RX", .bytes = {0xFA, 11, 12}});
+        if (application.historyRebuild_) throw std::runtime_error("超预算追赶必须显式取消");
+        require(application.transferHistoryStatus()->phase == Application::TransferHistoryPhase::Cancelled &&
+            application.transferHistoryStatus()->reason.find("保留预算") != std::string::npos,
+            "追赶超限必须保留实际取消原因");
+        application.flushPendingTransferFrameRows(256);
+        if (application.dockStore_.receiveState().frameRows.back().bytes != std::vector<std::uint8_t>({0xFA, 11, 12}))
+            throw std::runtime_error("取消追赶不能丢失当前新帧");
+        application.runtimeConfig_.gui.rawCapture.liveLimitBytes = oldByteLimit;
+        // 来源裁剪取消任务，不持有或访问旧 vector 引用。
+        capture.events = {{.bytes = std::vector<std::uint8_t>(256 * 1024, 0), .displayPosition = 10}};
+        application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedCapture,
+                                        application.historySwitchGeneration(), 1);
+        capture.events.front().displayPosition = 11;
+        application.pumpHistoryRebuild();
+        if (application.historyRebuild_) throw std::runtime_error("来源裁剪必须取消旧任务");
+        require(application.transferHistoryStatus()->phase == Application::TransferHistoryPhase::Cancelled,
+            "底层来源裁剪不得报告完成");
+    }
+    static void verifySkipPreservesFramesAndProfile(Application& application, bool automatic)
+    {
+        scripting::StreamFrameDefinition frame;
+        frame.name = "offline_profile";
+        frame.header = {0xFA};
+        frame.runtimeProfile = true;
+        scripting::FrameStreamParser parser(scripting::StreamBufferDefinition{.capacity = 64}, {frame});
+        std::string error;
+        if (!parser.setRuntimeProfile(frame.name, scripting::StreamRuntimeProfile{.length = 3}, error))
+            throw std::runtime_error(error);
+        parser.pushBytes({0xFA, 0x01}); // 切换前半帧必须丢弃，但 profile 要保留。
+        application.transferFrameParser_ = Application::TransferFrameParserState{.rx = parser, .tx = parser};
+        auto& receive = application.dockStore_.receiveState();
+        receive.displayMode = dock::TransferLogDisplayMode::RawChunks;
+        application.dockStore_.appendTransferFrameRows({{.direction = "RX", .bytes = {0x10}, .message = "existing"}});
+        application.pendingTransferFrameRows_.push_back({.direction = "TX", .bytes = {0x20}, .message = "pending"});
+        application.runtimeConfig_.gui.historyOnParsedSwitch = automatic
+            ? config::TransferLogHistoryOnParsedSwitch::SkipHistory : config::TransferLogHistoryOnParsedSwitch::Ask;
+        application.requestParsedHistorySwitch();
+        if (!automatic) {
+            application.cancelHistorySwitch();
+            if (receive.displayMode != dock::TransferLogDisplayMode::RawChunks ||
+                receive.frameRows.back().message != "existing" || application.pendingTransferFrameRows_.back().message != "pending")
+                throw std::runtime_error("取消必须保留模式、缓存与完整 pending 帧");
+            application.requestParsedHistorySwitch();
+            application.resolveHistorySwitch(config::TransferLogHistoryOnParsedSwitch::SkipHistory);
+        }
+        if (receive.displayMode != dock::TransferLogDisplayMode::ParsedFrames ||
+            receive.frameRows.back().message != "existing" || application.pendingTransferFrameRows_.back().message != "pending")
+            throw std::runtime_error("不使用历史必须保留已有帧和完整 pending 帧");
+        auto& state = *application.transferFrameParser_;
+        for (auto* direction : {&state.rx, &state.tx}) {
+            if (!direction->pushBytes({0x02}).frames.empty())
+                throw std::runtime_error("切换前半帧不得与切换后尾字节拼接");
+            const auto parsed = direction->pushBytes({0xFA, 0x03, 0x04});
+            if (parsed.frames.size() != 1 || parsed.frames.front().raw != std::vector<std::uint8_t>({0xFA, 0x03, 0x04}))
+                throw std::runtime_error("拒绝必须保留离线 schema 和 runtime profile，之后新帧照常解析");
+        }
+        application.flushPendingTransferFrameRows(1);
+        if (receive.frameRows.back().message != "pending")
+            throw std::runtime_error("已生成完整 pending 帧必须仍可提交");
+    }
+};
+}
+
 static void waitFor(app::Application& app, const std::function<bool()>& ready, bool pump = true)
 {
     const auto deadline = Clock::now() + std::chrono::seconds(40);
@@ -61,6 +595,378 @@ static void waitFor(app::Application& app, const std::function<bool()>& ready, b
         require(!status.complete || status.canceled || status.error.empty(), status.error);
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+}
+
+// 用户主诉回归：导入含原始字节的记录后，收发面板必须默认原始模式显示原始 RX/TX，
+// 且带 TX 状态的行不得遮蔽原始字节（显示/复制/单行导出路径都要保护字节与状态共存）。
+static void testImportedRawRecordsVisibleAndTxBytesPreserved()
+{
+    app::Application application;
+    require(application.initialize(), "导入可见性回归初始化失败");
+    // 面板此前停在逐帧视图：导入后必须被切回原始模式，否则原始行不可见。
+    application.docks().receiveState().displayMode = dock::TransferLogDisplayMode::ParsedFrames;
+
+    plot::RawCaptureFileData data;
+    data.source = "uart0";
+    data.capturedAtMs = 1000;
+    // 顺序：RX 2 字节 -> TX 3 字节（带状态，端点为空须回退 data.source）-> RX 1 字节。
+    data.events = {
+        {.type = plot::RawCaptureEventType::RxBytes, .timestampMs = 1001, .bytes = {0x01, 0x02}, .endpoint = "uart0"},
+        {.type = plot::RawCaptureEventType::TxBytes, .timestampMs = 1002, .bytes = {0x0A, 0x0B, 0x0C},
+         .writeStatus = "写入失败"},
+        {.type = plot::RawCaptureEventType::RxBytes, .timestampMs = 1003, .bytes = {0x03}, .endpoint = "uart0"},
+    };
+    std::string error;
+    require(application.importRawRecords(data, error), error);
+
+    // 1. 导入后默认使用原始模式。
+    require(application.docks().receiveState().displayMode == dock::TransferLogDisplayMode::RawChunks,
+            "导入含原始字节记录后必须使用原始模式");
+    const auto& rows = application.docks().receiveState().rows;
+    require(rows.size() == 3, "导入必须生成全部 RX/TX 原始行");
+
+    // 2. 字节、顺序、时间戳、端点与状态全部保留。
+    require(rows[0].bytes == std::vector<std::uint8_t>({0x01, 0x02}) && rows[0].timestampMs == 1001 &&
+                rows[0].direction == "RX" && rows[0].endpoint == "uart0",
+            "第一行 RX 字节/顺序/时间戳/端点必须保留");
+    require(rows[1].bytes == std::vector<std::uint8_t>({0x0A, 0x0B, 0x0C}) && rows[1].timestampMs == 1002 &&
+                rows[1].direction == "TX" && rows[1].message == "写入失败",
+            "TX 行字节与状态必须同时保留");
+    require(rows[2].bytes == std::vector<std::uint8_t>({0x03}) && rows[2].timestampMs == 1003,
+            "第三行 RX 字节/时间戳必须保留");
+    require(rows[1].endpoint == "uart0", "TX 事件端点为空时必须回退 data.source");
+
+    // 3. TX 状态不得遮蔽原始字节：内容/单行/整段导出都必须同时带状态与字节。
+    const auto content = dock::formatReceiveRowContent(rows[1], true);
+    require(content.find("写入失败") != std::string::npos && content.find("0A") != std::string::npos,
+            "带状态 TX 行的内容格式化不得遮蔽原始字节");
+    const auto singleLine = dock::formatReceiveRowSingleLine(rows[1], true, true);
+    require(singleLine.find("TX") != std::string::npos && singleLine.find("写入失败") != std::string::npos &&
+                singleLine.find("0A") != std::string::npos,
+            "带状态 TX 行的单行导出不得遮蔽原始字节");
+    std::vector<dock::ReceiveRow> rowCopy(rows.begin(), rows.end());
+    const auto exported = dock::formatReceiveRowsText(rowCopy, true, true);
+    require(exported.find("写入失败") != std::string::npos && exported.find("0A") != std::string::npos &&
+                exported.find("01") != std::string::npos && exported.find("03") != std::string::npos,
+            "整段导出必须同时保留 TX 状态与全部原始字节");
+    // 纯字节行（无状态）保持原有格式。
+    require(dock::formatReceiveRowContent(rows[0], true).find("01") != std::string::npos,
+            "无状态 RX 行按字节格式化");
+
+    application.shutdown();
+}
+
+// 三态历史切换回归：ask 询问/接受/拒绝/取消、use_history 按范围重建替换、skip_history 只清半帧、
+// 来源代次失效（seek/重新导入）。覆盖面板行与 timeline 事件前缀两种范围。
+static void testParsedHistorySwitchTriState()
+{
+    using protoscope::config::TransferLogHistoryOnParsedSwitch;
+    using protoscope::config::TransferLogHistoryScope;
+    app::Application application;
+    require(application.initialize(), "三态历史切换回归初始化失败");
+    const auto protocol = std::filesystem::path(__FILE__).parent_path() / "fixtures/protocols/stream_frame_only";
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true), "stream fixture 加载失败");
+
+    // 载入含 RX 原始字节的 timeline（BrowseRaw），推进前缀使历史可选。
+    plot::RawCaptureFileData capture;
+    capture.source = "probe";
+    // stream_sample 帧：AA 55 len(=0) value crc_lo crc_hi；CRC 校验失败也生成帧行，仍验证重建路径。
+    capture.events = {
+        {.type = plot::RawCaptureEventType::RxBytes, .timestampMs = 10, .bytes = {0xAA, 0x55, 0x00, 0x07, 0x00, 0x00}, .endpoint = "probe"},
+        {.type = plot::RawCaptureEventType::RxBytes, .timestampMs = 20, .bytes = {0xAA, 0x55, 0x00, 0x08, 0x00, 0x00}, .endpoint = "probe"},
+        {.type = plot::RawCaptureEventType::RxBytes, .timestampMs = 30, .bytes = {0xAA, 0x55, 0x00, 0x09, 0x00, 0x00}, .endpoint = "probe"},
+    };
+    std::string error;
+    require(application.loadRawCaptureReplayTimeline(capture, error), error);
+    // 推进到前缀 eventIndex=2（两个事件），第三个是未来数据不得进入历史。
+    require(application.seekRawCaptureReplay(2, error), error);
+    for (int i = 0; i < 200 && application.rawCaptureReplayStatus().eventIndex < 2; ++i) application.pumpOnce();
+    require(application.rawCaptureReplayStatus().eventIndex == 2, "前缀推进到 eventIndex=2 失败");
+    const auto generationBefore = application.rawCaptureReplayStatus().eventCount > 0
+                                      ? application.docks().receiveState().rows.size()
+                                      : 0;
+
+    // 默认 ask：有历史时弹确认，确认前保持原始模式。
+    require(application.historySwitchStrategy() == TransferLogHistoryOnParsedSwitch::Ask, "缺省必须是 ask");
+    application.requestParsedHistorySwitch();
+    require(application.historySwitchConfirmationPending(), "ask 策略必须有历史时打开确认");
+    require(application.docks().receiveState().displayMode == dock::TransferLogDisplayMode::RawChunks,
+            "确认前必须保持原始模式");
+
+    // 取消（Escape 等同）：保持原始模式，关闭 modal。
+    application.cancelHistorySwitch();
+    require(!application.historySwitchConfirmationPending() &&
+                application.docks().receiveState().displayMode == dock::TransferLogDisplayMode::RawChunks,
+            "取消后必须保持原始模式");
+
+    // 再次请求并拒绝（不使用历史）：切到逐帧但不重建（保留既有 frameRows 为空）。
+    const auto framesBeforeReject = application.docks().receiveState().frameRows.size();
+    application.requestParsedHistorySwitch();
+    require(application.historySwitchConfirmationPending(), "再次请求应重新打开确认");
+    application.resolveHistorySwitch(TransferLogHistoryOnParsedSwitch::SkipHistory);
+    require(!application.historySwitchConfirmationPending(), "拒绝后 modal 必须关闭");
+    require(application.docks().receiveState().displayMode == dock::TransferLogDisplayMode::ParsedFrames,
+            "拒绝后切到逐帧视图");
+    require(application.docks().receiveState().frameRows.size() == framesBeforeReject,
+            "不使用历史不得重建或删除已有帧结果");
+
+    // 自动与询问拒绝均保留完整帧/pending、清半帧但保留离线 schema/profile。
+    application.requestParsedHistorySwitch(); // 切回原始
+    app::ApplicationBackpressureTestAccess::verifySkipPreservesFramesAndProfile(application, true);
+    application.requestParsedHistorySwitch();
+    app::ApplicationBackpressureTestAccess::verifySkipPreservesFramesAndProfile(application, false);
+    application.docks().clearTransferFrameRows();
+
+    // 切回原始使任务/旧确认失效。
+    application.requestParsedHistorySwitch();
+    require(!application.historySwitchConfirmationPending() &&
+                application.docks().receiveState().displayMode == dock::TransferLogDisplayMode::RawChunks,
+            "切回原始应直接切换且失效旧确认");
+
+    // 前面的拒绝隔离测试显式注入了另一离线 schema；恢复当前 BrowseRaw 来源 schema。
+    app::ApplicationBackpressureTestAccess::restoreBrowseSchema(application);
+    // 询问接受（使用历史）：timeline 范围只允许 [0,eventIndex) 前缀，不提前显示未来数据。
+    application.requestParsedHistorySwitch();
+    application.resolveHistorySwitch(TransferLogHistoryOnParsedSwitch::UseHistory);
+    for (int i = 0; i < 50 && application.docks().receiveState().frameRows.empty(); ++i) application.pumpOnce();
+    const auto& frameRows = application.docks().receiveState().frameRows;
+    require(!frameRows.empty(), "使用历史必须重建出帧结果");
+    for (const auto& row : frameRows) {
+        require(row.timestampMs == 10 || row.timestampMs == 20, "未来事件（timestampMs=30）不得进入历史帧结果");
+    }
+    static_cast<void>(generationBefore);
+
+    // seek 使任务/旧确认失效：过期结果不得提交到新来源；逐帧行被清且视图回原始。
+    require(application.seekRawCaptureReplay(1, error), error);
+    require(application.docks().receiveState().frameRows.empty() &&
+                application.docks().receiveState().displayMode == dock::TransferLogDisplayMode::RawChunks,
+            "seek 后必须清过期帧结果并回原始视图");
+
+    application.shutdown();
+
+    // 面板行范围（retained_rows）：纯导入无 timeline，使用历史按面板行重建。
+    app::Application app2;
+    require(app2.initialize(), "面板行范围回归初始化失败");
+    require(app2.reloadProtocolDirectory(protocol.generic_string(), true), "stream fixture 二次加载失败");
+    plot::RawCaptureFileData data;
+    data.source = "uart0";
+    data.events = {
+        {.type = plot::RawCaptureEventType::RxBytes, .timestampMs = 1, .bytes = {0xAA, 0x55, 0x00, 0x07, 0x00, 0x00}, .endpoint = "uart0"},
+    };
+    require(app2.importRawRecords(data, error), error);
+    require(app2.docks().receiveState().displayMode == dock::TransferLogDisplayMode::RawChunks, "导入后默认原始模式");
+    // 自动 use_history 策略。
+    config::AppConfig strategyConfig;
+    strategyConfig.gui.historyOnParsedSwitch = TransferLogHistoryOnParsedSwitch::UseHistory;
+    strategyConfig.gui.historyScope = TransferLogHistoryScope::RetainedRows;
+    app2.applyConfig(strategyConfig);
+    app2.requestParsedHistorySwitch();
+    for (int i = 0; i < 50 && app2.docks().receiveState().frameRows.empty(); ++i) app2.pumpOnce();
+    require(!app2.docks().receiveState().frameRows.empty(), "retained_rows 范围必须按面板行重建帧结果");
+
+    // 同事件数再导入必须让旧确认/旧任务失效：旧帧结果不得残留。
+    app2.requestParsedHistorySwitch();
+    require(app2.historySwitchConfirmationPending() ||
+                app2.docks().receiveState().displayMode == dock::TransferLogDisplayMode::RawChunks,
+            "重建完成后再请求应回到可询问/原始状态");
+    require(app2.importRawRecords(data, error), error);
+    require(!app2.historySwitchConfirmationPending(), "再导入必须使旧确认失效");
+    require(app2.docks().receiveState().frameRows.empty(), "再导入必须清旧逐帧结果");
+    require(app2.docks().receiveState().displayMode == dock::TransferLogDisplayMode::RawChunks, "再导入后默认原始模式");
+
+    // 清空入口：使旧确认失效并清原始行与逐帧展示。
+    // 恢复 ask 策略使确认 modal 可弹出（applyConfig 已把运行时策略持久为 use_history）。
+    config::AppConfig askConfig;
+    askConfig.gui.historyOnParsedSwitch = TransferLogHistoryOnParsedSwitch::Ask;
+    askConfig.gui.historyScope = TransferLogHistoryScope::RetainedRows;
+    app2.applyConfig(askConfig);
+    app2.requestParsedHistorySwitch();
+    require(app2.historySwitchConfirmationPending(), "清空前应可打开确认");
+    app2.clearTransferLogHistory();
+    require(!app2.historySwitchConfirmationPending(), "清空必须使旧确认失效");
+    require(app2.docks().receiveState().rows.empty() && app2.docks().receiveState().frameRows.empty(),
+            "清空必须同时清原始行与逐帧展示");
+    app2.shutdown();
+}
+
+static void testParsedSwitchWithoutSchema()
+{
+    app::Application application;
+    require(application.initialize(), "无 schema 切换初始化失败");
+    const auto fixtures = std::filesystem::path(__FILE__).parent_path() / "fixtures/protocols";
+    require(application.reloadProtocolDirectory((fixtures / "import_source_label").generic_string(), true, false),
+            "无 stream 协议加载失败");
+    plot::RawCaptureFileData capture;
+    capture.events = {{.type = plot::RawCaptureEventType::RxBytes, .bytes = {11}}};
+    std::string error;
+    require(application.importRawRecords(capture, error), error);
+    auto& receive = application.docks().receiveState();
+    receive.pauseScroll = false;
+    receive.frameRows.push_back({.message = "cached-frame"});
+    application.requestParsedHistorySwitch();
+    require(!application.historySwitchConfirmationPending() &&
+            receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames &&
+            !app::ApplicationBackpressureTestAccess::historyActive(application),
+            "无 schema 应直接进入提示视图，不询问不创建任务");
+    require(application.parsedTransferUnavailableReason().find("没有 stream schema") != std::string::npos,
+            "有效无 stream 协议必须与未加载区分");
+    app::ApplicationBackpressureTestAccess::verifyMissingParserPreservesCache(application);
+    application.requestParsedHistorySwitch();
+    app::ApplicationBackpressureTestAccess::replaceHistoryProtocol(application,
+        (fixtures / "stream_frame_only").generic_string());
+    application.requestParsedHistorySwitch();
+    require(application.historySwitchConfirmationPending(), "非暂停且非时间轴历史同样必须询问");
+    app::ApplicationBackpressureTestAccess::replaceHistoryProtocol(application,
+        (fixtures / "import_source_label").generic_string());
+    application.resolveHistorySwitch(config::TransferLogHistoryOnParsedSwitch::UseHistory);
+    require(!app::ApplicationBackpressureTestAccess::historyActive(application) &&
+            !receive.frameRows.empty(), "确认生效需重查 schema 并保留旧帧");
+    app::ApplicationBackpressureTestAccess::replaceHistoryProtocol(application,
+        (fixtures / "stream_frame_only").generic_string());
+    tests::ScopedTempPath brokenProtocol(tests::makeUniqueTempDir("protoscope-invalid-schema-switch"));
+    const auto brokenScript = brokenProtocol.path() / "main.lua";
+    std::ofstream(brokenScript) << "function stream(\n";
+    require(!application.reloadProtocolDirectory(brokenProtocol.path().generic_string(), true, false),
+            "存在但损坏的协议应加载失败");
+    require(application.parsedTransferUnavailableReason().empty(), "最近失败不得误判仍有效的旧 stream 协议");
+    application.shutdown();
+}
+
+static void testProtocolReloadDefersLargeHistory()
+{
+    app::Application application;
+    require(application.initialize(), "协议重载预算回归初始化失败");
+    const auto protocol = std::filesystem::path(__FILE__).parent_path() / "fixtures/protocols/stream_frame_only";
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true), "初始协议加载失败");
+    plot::RawCaptureFileData capture;
+    capture.source = "reload-budget";
+    capture.events = {{.type = plot::RawCaptureEventType::RxBytes,
+        .bytes = std::vector<std::uint8_t>(256 * 1024, 0)}};
+    // fixture 的 len 为 payload 长度，value 占一字节；CRC 覆盖头、长度和 value。
+    std::vector<std::uint8_t> frame{0xAA, 0x55, 0x01, 0x07};
+    const auto crc = protocol_utils::crc16Modbus(frame);
+    frame.push_back(static_cast<std::uint8_t>(crc & 0xFFU));
+    frame.push_back(static_cast<std::uint8_t>((crc >> 8U) & 0xFFU));
+    capture.events.front().bytes.insert(capture.events.front().bytes.end(), frame.begin(), frame.end());
+    std::string error;
+    require(application.importRawRecords(capture, error), error);
+    application.docks().receiveState().displayMode = dock::TransferLogDisplayMode::ParsedFrames;
+    // 真实入口：成功重新加载协议触发 refreshTransferFrameDisplayAfterProtocolReload。
+    // 此用例验证 UI parser 的旧路径，而非本次手动重算入口。
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true, false), "重载协议失败");
+    app::ApplicationBackpressureTestAccess::verifyReloadHistoryDeferred(application, true);
+    application.pumpOnce();
+    app::ApplicationBackpressureTestAccess::verifyReloadHistoryDeferred(application, false);
+    // 历史解析完成只交接 pending；噪声行与末尾合法帧仍按既有主循环预算分批提交。
+    waitFor(application, [&] {
+        return !app::ApplicationBackpressureTestAccess::historyActive(application) &&
+               !app::ApplicationBackpressureTestAccess::historyOutputPending(application);
+    });
+    const auto& rows = application.docks().receiveState().frameRows;
+    const auto parsedCount = std::count_if(rows.begin(), rows.end(), [&](const auto& row) {
+        return row.bytes == frame && !row.message.empty();
+    });
+    require(!rows.empty() && rows.back().bytes == frame && parsedCount == 1,
+        "协议重载分批完成后必须替换出唯一匹配历史帧，不丢不重；噪声仍允许错误展示行");
+    application.shutdown();
+}
+
+static void testPackageHistoryUsesOfflineSchema()
+{
+    app::Application application;
+    require(application.initialize(), "包内历史回归初始化失败");
+    const auto live = std::filesystem::path(__FILE__).parent_path() / "fixtures/protocols/stream_frame_only";
+    require(application.reloadProtocolDirectory(live.generic_string(), true), "实时 schema 加载失败");
+    const std::string script = R"lua(
+function stream()
+  return { buffer = { capacity = 64, overflow = "drop_oldest" },
+    frames = { { name = "package_history", header = { 0xFA }, size = 3,
+      on_frame = function(ctx, frame) proto.emit("history_callback", frame.name) end } } }
+end
+)lua";
+    session::SessionPackageData package;
+    package.entries.push_back({.name = "protocol/main.lua", .bytes = {script.begin(), script.end()}});
+    plot::RawCaptureFileData capture;
+    capture.events = {{.type = plot::RawCaptureEventType::RxBytes, .timestampMs = 10, .bytes = {0xFA, 1, 2}},
+                      {.type = plot::RawCaptureEventType::RxBytes, .timestampMs = 20, .bytes = {0xFA, 3, 4}}};
+    std::string error;
+    require(application.loadRawCaptureReplayTimeline(capture, app::Application::OfflineReplayProcessing::PackageProtocol,
+        app::Application::OfflineReplayPacing::FastBatchParse, error, &package), error);
+    const auto waitForReplayPrefix = [&] {
+        waitFor(application, [&] {
+            const auto status = application.rawCaptureReplayStatus();
+            require(status.error.empty(), status.error);
+            require(status.phase != app::Application::OfflineReplayPhase::Failed, "离线回放不得进入失败态");
+            // inputBacklog 是未来时间轴事件数，不能要求未回放的后缀为零。
+            return status.phase == app::Application::OfflineReplayPhase::Paused && status.eventIndex == 1 &&
+                   status.inputBacklog == status.eventCount - status.eventIndex &&
+                   status.workerBacklog == 0 && status.outputBacklog == 0;
+        });
+    };
+    require(application.seekRawCaptureReplay(1, error), error);
+    waitForReplayPrefix();
+    // 真实流回调必须已执行，不能用没有回调的空日志基线证明历史非重入。
+    const auto& scriptLog = application.docks().scriptState().rows;
+    const auto callbackRows = std::count_if(scriptLog.begin(), scriptLog.end(), [](const auto& row) {
+        return row.message.find("history_callback") != std::string::npos;
+    });
+    require(callbackRows == 1, "包内协议已回放前缀必须恰好执行一次真实流回调");
+    const auto scriptRows = scriptLog.size();
+    const auto samples = application.docks().waveState().buffer.snapshot(-1e9, 1e9, false);
+    application.requestParsedHistorySwitch();
+    require(application.historySwitchConfirmationPending(), "包内前缀必须询问历史");
+    application.resolveHistorySwitch(config::TransferLogHistoryOnParsedSwitch::UseHistory);
+    waitFor(application, [&] { return !app::ApplicationBackpressureTestAccess::historyActive(application); });
+    const auto& rows = application.docks().receiveState().frameRows;
+    require(rows.size() == 1 && rows.front().bytes == std::vector<std::uint8_t>({0xFA, 1, 2}) &&
+        rows.front().message.find("package_history") != std::string::npos,
+        "真实 PackageProtocol 历史必须用包内 schema，只解析已回放前缀");
+    const auto& afterScriptLog = application.docks().scriptState().rows;
+    require(afterScriptLog.size() == scriptRows &&
+        std::count_if(afterScriptLog.begin(), afterScriptLog.end(), [](const auto& row) {
+            return row.message.find("history_callback") != std::string::npos;
+        }) == callbackRows, "独立 UI 历史不得重入 Lua callback");
+    const auto after = application.docks().waveState().buffer.snapshot(-1e9, 1e9, false);
+    require(after.channels.size() == samples.channels.size(), "UI 历史不得修改波形通道");
+    for (std::size_t i = 0; i < samples.channels.size(); ++i)
+        require(after.channels[i].totalSamples == samples.channels[i].totalSamples, "UI 历史不得修改波形样本");
+    // CurrentProtocol 也走真实离线加载，切换后的 UI 历史不使用上一个包内 schema。
+    application.unloadRawCaptureReplayTimeline();
+    std::vector<std::uint8_t> currentFrame{0xAA, 0x55, 0x01, 0x07};
+    const auto currentCrc = protocol_utils::crc16Modbus(currentFrame);
+    currentFrame.push_back(static_cast<std::uint8_t>(currentCrc & 0xFFU));
+    currentFrame.push_back(static_cast<std::uint8_t>((currentCrc >> 8U) & 0xFFU));
+    capture.events = {{.type = plot::RawCaptureEventType::RxBytes, .timestampMs = 30,
+                       .bytes = currentFrame},
+                      {.type = plot::RawCaptureEventType::RxBytes, .timestampMs = 40,
+                       .bytes = currentFrame}};
+    require(application.loadRawCaptureReplayTimeline(capture, app::Application::OfflineReplayProcessing::CurrentProtocol,
+        app::Application::OfflineReplayPacing::FastBatchParse, error), error);
+    require(application.seekRawCaptureReplay(1, error), error);
+    waitForReplayPrefix();
+    require(application.rawCaptureReplayStatus().hasStreamSchema, "CurrentProtocol 必须实际加载离线 stream schema");
+    const auto& currentScriptLog = application.docks().scriptState().rows;
+    require(std::any_of(currentScriptLog.begin(), currentScriptLog.end(), [](const auto& row) {
+        return row.message.find("stream_frame") != std::string::npos;
+    }), "CurrentProtocol 已回放前缀必须执行真实 stream 回调");
+    const auto currentScriptRows = currentScriptLog.size();
+    const auto currentSamples = application.docks().waveState().buffer.snapshot(-1e9, 1e9, false);
+    application.requestParsedHistorySwitch();
+    require(application.historySwitchConfirmationPending(), "CurrentProtocol 前缀必须询问");
+    application.resolveHistorySwitch(config::TransferLogHistoryOnParsedSwitch::UseHistory);
+    waitFor(application, [&] { return !app::ApplicationBackpressureTestAccess::historyActive(application); });
+    require(application.docks().receiveState().frameRows.size() == 1 &&
+        application.docks().receiveState().frameRows.front().bytes == capture.events.front().bytes &&
+        application.docks().receiveState().frameRows.front().message.find("stream_sample") != std::string::npos,
+        "真实 CurrentProtocol 历史必须使用其离线 schema，且只解析已回放前缀");
+    require(application.docks().scriptState().rows.size() == currentScriptRows,
+        "CurrentProtocol 的 UI 历史不得重入 Lua callback");
+    const auto currentAfter = application.docks().waveState().buffer.snapshot(-1e9, 1e9, false);
+    require(currentAfter.channels.size() == currentSamples.channels.size(), "CurrentProtocol UI 历史不得修改波形通道");
+    for (std::size_t i = 0; i < currentSamples.channels.size(); ++i)
+        require(currentAfter.channels[i].totalSamples == currentSamples.channels[i].totalSamples,
+            "CurrentProtocol UI 历史不得修改波形样本");
+    application.shutdown();
 }
 
 static void testImportedSourceLabelsAfterReplay()
@@ -128,6 +1034,8 @@ static void testImportedSourceLabelsAfterReplay()
     };
 
     tryLuaRename("首次重解析完成后");
+    application.docks().waveState().view.sampleFrequencyHz = 1600;
+    application.docks().waveState().view.sampleFrequencyInput = "1600";
     // 前缀中没有 setup，仅真实 Lua push(2) 隐式建立位置 0；不能用提前 setup 掩盖原名遗漏。
     require(application.seekRawCaptureReplay(1, error), error);
     waitFor(application, [&] {
@@ -155,6 +1063,9 @@ static void testImportedSourceLabelsAfterReplay()
     require(application.playRawCaptureReplay(error), error);
     waitCompleted();
     tryLuaRename("短前缀继续完成后");
+    require(application.docks().waveState().view.sampleFrequencyHz == 1600 &&
+            application.docks().waveState().view.sampleFrequencyInput == "1600",
+            "解析模式重复准备及继续播放不得撤销现有采样率修改");
     for (int repeat = 0; repeat < 2; ++repeat) {
         require(application.seekRawCaptureReplay(application.rawCaptureReplayStatus().eventCount, error), error);
         waitCompleted();
@@ -163,8 +1074,10 @@ static void testImportedSourceLabelsAfterReplay()
         waitCompleted();
         tryLuaRename("完成后再次播放");
     }
-    require(application.reloadProtocolDirectory(protocol.generic_string(), true), "导入后的普通 reload 失败");
-    tryLuaRename("普通 reload 后");
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true), "导入后的手动 reload 失败");
+    // 手动成功重载现在真正重算关联raw；准备阶段重置旧日志，须待新代次完成再测控件保护。
+    waitCompleted();
+    tryLuaRename("手动 reload 重算完成后");
     plot::WaveCsvData invalid;
     error.clear();
     require(!application.importWaveCsvData(invalid, error), "零通道导入应被拒绝");
@@ -463,11 +1376,475 @@ static void testImportedLuaBitToggle()
     application.shutdown();
 }
 
+// 同步/异步必须实际加载选定协议，而非仅把 UI 的目录指向包内路径。
+static void testSessionImportProtocolSelection()
+{
+    config::ConfigStore store;
+    std::string yaml, error;
+    require(store.saveText(config::AppConfig{}, yaml, error), error);
+    session::SessionPackageData package;
+    package.entries.push_back({"config.yaml", {yaml.begin(), yaml.end()}});
+    const std::string script = "local marker = 'package-initialized'\n";
+    package.entries.push_back({"protocol/main.lua", {script.begin(), script.end()}});
+    plot::RawCaptureFileData capture;
+    capture.source = "导入协议测试";
+    capture.events.push_back({.type = plot::RawCaptureEventType::RxBytes, .timestampMs = 1, .bytes = {42}});
+    plot::WaveCsvData waveform;
+    waveform.channels.resize(1);
+    waveform.channels[0].label = "包快照";
+    waveform.channels[0].samples = {{0, 321}};
+    capture.waveform = waveform;
+    std::vector<std::uint8_t> raw;
+    require(plot::encodeRawCaptureFile(capture, raw, error), error);
+    package.entries.push_back({"raw_capture.psraw", raw});
+    tests::ScopedTempPath path(tests::makeUniqueTempFile("protoscope-import-protocol-choice", ".pssession"));
+    require(session::writeSessionPackage(path.path(), package, error), error);
+    for (const bool asynchronous : {false, true}) {
+        app::Application application;
+        require(application.initialize(), "协议选择测试初始化失败");
+        const auto oldDirectory = application.docks().luaState().protocolDir;
+        const auto oldGeneration = app::ApplicationBackpressureTestAccess::runtimeGeneration(application);
+        if (asynchronous) {
+            require(application.startDataImport(path.path(), error), error);
+            waitFor(application, [&] { return application.dataTransferStatus().awaitingConfirmation; });
+            application.confirmDataImport();
+            waitFor(application, [&] { const auto status = application.dataTransferStatus(); return status.complete && !status.active; });
+        } else require(application.importSessionPackage(path.path(), error), error);
+        const auto selected = application.docks().luaState().protocolDir;
+        require(app::ApplicationBackpressureTestAccess::runtimeGeneration(application) > oldGeneration,
+            "必须真正加载 worker 协议，不能只改路径");
+        require(selected != oldDirectory && application.docks().luaState().loaded &&
+            std::filesystem::is_regular_file(std::filesystem::path(selected) / "main.lua"),
+            "默认必须实际加载包内协议并保留提取目录");
+        const auto data = application.captureWaveData({}, error);
+        require(data && data->channels[0].samples.size() == 1 && data->channels[0].samples[0].value == 321,
+            "协议初始化不得重算包内波形快照");
+        require(application.docks().receiveState().displayMode == dock::TransferLogDisplayMode::RawChunks,
+            "初次导入必须原始浏览");
+        application.unloadRawCaptureReplayTimeline();
+        require(std::filesystem::is_regular_file(std::filesystem::path(selected) / "main.lua"),
+            "卸载离线 timeline 不得删除当前包协议目录");
+        application.shutdown();
+    }
+    app::Application current;
+    require(current.initialize(), "当前来源测试初始化失败");
+    const auto baseline = current.captureConfig();
+    auto draft = baseline;
+    draft.gui.importProtocolSource = config::ImportProtocolSource::CurrentProtocol;
+    require(current.applySettingsChanges(baseline, draft).status == app::SettingsApplyStatus::Applied,
+        "应用当前协议偏好失败");
+    // 包内坏 Lua：选择当前必须完全忽略它，默认选包则必须失败且保留已显示的数据。
+    const std::string broken = "this is not valid lua !!!";
+    package.entries[1].bytes.assign(broken.begin(), broken.end());
+    require(session::writeSessionPackage(path.path(), package, error), error);
+    require(current.importSessionPackage(path.path(), error), error);
+    require(current.captureConfig().gui.importProtocolSource == config::ImportProtocolSource::CurrentProtocol &&
+        current.docks().luaState().protocolDir == baseline.protocol.selectedDir,
+        "导入不得覆盖本机偏好或执行坏包 Lua");
+    auto prefer = current.captureConfig();
+    prefer.gui.importProtocolSource = config::ImportProtocolSource::PreferPackage;
+    require(current.applySettingsChanges(current.captureConfig(), prefer).status == app::SettingsApplyStatus::Applied,
+        "应用优先包偏好失败");
+    // 包上限小于旧数据，坏 Lua 准备失败不得提前裁剪任何旧展示数据。
+    auto restrictive = config::AppConfig{};
+    restrictive.gui.logHistory.transferRawLimit = 0;
+    restrictive.gui.logHistory.transferFrameLimit = 0;
+    restrictive.gui.logHistory.scriptLimit = 0;
+    restrictive.gui.logHistory.hostLimit = 0;
+    restrictive.gui.wave.maxTotalSamples = 1;
+    require(store.saveText(restrictive, yaml, error), error);
+    package.entries[0].bytes.assign(yaml.begin(), yaml.end());
+    require(session::writeSessionPackage(path.path(), package, error), error);
+    auto& oldReceive = current.docks().receiveState();
+    oldReceive.frameRows.push_back({.message = "保留旧帧"});
+    auto oldWave = waveform;
+    oldWave.channels[0].samples = {{0, 321}, {1, 654}, {2, 987}};
+    require(current.importWaveCsvData(oldWave, error), error);
+    const auto oldRows = oldReceive.rows;
+    const auto oldFrames = oldReceive.frameRows;
+    const auto requirePreserved = [&] {
+        const auto data = current.captureWaveData({}, error);
+        require(data && data->channels[0].samples.size() == 3 &&
+                data->channels[0].samples[0].value == 321 && data->channels[0].samples[1].value == 654 &&
+                data->channels[0].samples[2].value == 987, "坏包小上限不得裁剪旧波形");
+        require(oldReceive.rows.size() == oldRows.size() && oldReceive.frameRows.size() == oldFrames.size(),
+                "坏包小上限不得裁剪旧原始行/帧");
+        for (std::size_t i = 0; i < oldRows.size(); ++i)
+            require(oldReceive.rows[i].bytes == oldRows[i].bytes && oldReceive.rows[i].message == oldRows[i].message,
+                    "坏包失败原始内容必须不变");
+        require(oldReceive.frameRows.back().message == "保留旧帧", "坏包失败帧内容必须不变");
+    };
+    error.clear();
+    require(!current.importSessionPackage(path.path(), error) && !error.empty(), "坏包协议不得按缺失回退");
+    requirePreserved();
+    const auto retained = current.captureWaveData({}, error);
+    require(retained && retained->channels[0].samples[0].value == 321, "协议加载失败必须保留旧波形");
+    error.clear();
+    require(current.startDataImport(path.path(), error), error);
+    waitFor(current, [&] { return current.dataTransferStatus().awaitingConfirmation; });
+    current.confirmDataImport();
+    const auto deadline = Clock::now() + std::chrono::seconds(40);
+    while (current.dataTransferStatus().active) {
+        require(Clock::now() < deadline, "异步坏协议任务超时");
+        current.pumpOnce();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    current.pumpOnce();
+    require(!current.dataTransferStatus().error.empty() &&
+        current.captureWaveData({}, error)->channels[0].samples[0].value == 321,
+        "异步坏包协议必须明确失败且不提交新波形");
+    requirePreserved();
+    // 存在协议条目但缺少 main.lua 也属于损坏，不得回退。
+    package.entries[1].name = "protocol/other.lua";
+    require(!current.applySessionPackage(package, true, error), "缺 main.lua 的所选包协议不得回退");
+    package.entries[1].name = "protocol/../main.lua";
+    require(!current.applySessionPackage(package, true, error), "协议提取必须保留路径穿越校验");
+    // 无协议条目才允许使用当前协议。
+    package.entries.erase(package.entries.begin() + 1);
+    require(session::writeSessionPackage(path.path(), package, error), error);
+    require(current.importSessionPackage(path.path(), error), error);
+    current.shutdown();
+}
+
+static void testLegacyReplayAndRetirementNonblocking()
+{
+    app::Application application;
+    require(application.initialize(), "legacy 非阻塞测试初始化失败");
+    const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures/protocols/stream_frame_only";
+    require(application.reloadProtocolDirectory(fixture.generic_string(), true, false), "legacy schema 加载失败");
+    auto config = application.captureConfig();
+    config.scripting.workerOutputQueueLimit = 1;
+    require(application.applyConfig(config, false), "背压预算应用失败");
+    plot::RawCaptureFileData capture;
+    for (int i = 0; i < 128; ++i)
+        capture.payload.insert(capture.payload.end(), {0xAA, 0x55, 0, 7, 0, 0});
+    std::string error;
+    require(application.loadRawCaptureReplayTimeline(capture, app::Application::OfflineReplayProcessing::CurrentProtocol,
+        app::Application::OfflineReplayPacing::FastBatchParse, error), error);
+    require(application.playRawCaptureReplay(error), error);
+    waitFor(application, [&] { return application.rawCaptureReplayStatus().phase !=
+        app::Application::OfflineReplayPhase::Preparing; });
+    bool sawPartial = app::ApplicationBackpressureTestAccess::legacyOffset(application) > 0;
+    const auto deadline = Clock::now() + std::chrono::seconds(20);
+    while (!app::ApplicationBackpressureTestAccess::switchReplayFinished(application)) {
+        const auto start = Clock::now();
+        application.pumpOnce();
+        require(Clock::now() - start < std::chrono::milliseconds(500), "输出背压下 pump 不得等待 worker");
+        const auto offset = app::ApplicationBackpressureTestAccess::legacyOffset(application);
+        sawPartial = sawPartial || (offset > 0 && application.rawCaptureReplayStatus().eventIndex == 0);
+        require(Clock::now() < deadline, "legacy 背压回放应最终完成");
+        std::this_thread::yield();
+    }
+    require(sawPartial && !application.docks().receiveState().frameRows.empty(),
+            "超过 schema 容量的 legacy 必须分轮解析并产生帧");
+    // 旧 worker 的回调故意等待有限时间；取消返回后应仍有后台退场任务。
+    const auto txFixture = std::filesystem::path(__FILE__).parent_path() / "fixtures/protocols/data_transfer";
+    require(application.reloadProtocolDirectory(txFixture.generic_string(), true, false), "退场fixture加载失败");
+    require(application.loadRawCaptureReplayTimeline(capture, app::Application::OfflineReplayProcessing::CurrentProtocol,
+        app::Application::OfflineReplayPacing::FastBatchParse, error), error);
+    require(application.playRawCaptureReplay(error), error);
+    waitFor(application, [&] { return app::ApplicationBackpressureTestAccess::offlineInputIdle(application) &&
+        application.rawCaptureReplayStatus().phase != app::Application::OfflineReplayPhase::Preparing; });
+    const auto entered = std::make_shared<std::atomic<bool>>(false);
+    const auto release = std::make_shared<std::atomic<bool>>(false);
+    app::ApplicationBackpressureTestAccess::postBlockedOfflineTx(application, [entered, release] {
+        entered->store(true);
+        const auto until = Clock::now() + std::chrono::seconds(2);
+        while (!release->load() && Clock::now() < until) std::this_thread::yield();
+    });
+    const auto hookDeadline = Clock::now() + std::chrono::seconds(5);
+    while (!entered->load() && Clock::now() < hookDeadline) std::this_thread::yield();
+    require(entered->load(), "退场钩子必须进入执行态");
+    const auto cancelStart = Clock::now();
+    application.unloadRawCaptureReplayTimeline();
+    const auto cancelElapsed = Clock::now() - cancelStart;
+    const bool pending = app::ApplicationBackpressureTestAccess::retirementPending(application);
+    release->store(true);
+    require(cancelElapsed < std::chrono::milliseconds(500) && pending,
+            "取消不能在UI join旧worker，必须持有后台退场任务");
+    waitFor(application, [&] { return !app::ApplicationBackpressureTestAccess::retirementPending(application); });
+    application.shutdown();
+}
+
+static void testManualProtocolSwitchReplay()
+{
+    app::Application application;
+    require(application.initialize(), "手动切协议重算初始化失败");
+    std::string error;
+    const auto protocol = std::filesystem::path(__FILE__).parent_path() / "fixtures/protocols/import_source_label";
+    plot::RawCaptureFileData capture;
+    capture.source = "关联导入";
+    capture.sampleFrequencyHz = 400;
+    capture.events = {{.type = plot::RawCaptureEventType::RxBytes, .bytes = {11, 12, 13}, .sequence = 1}};
+    require(application.importRawRecords(capture, error), error);
+    auto& view = application.docks().waveState().view;
+    require(view.sampleFrequencyHz == 400, "新原始来源必须初始化文件采样率");
+    view.sampleFrequencyHz = 1600;
+    view.sampleFrequencyInput = "1600";
+    const auto requireEditedFrequency = [&] {
+        require(view.sampleFrequencyHz == 1600 && view.sampleFrequencyInput == "1600",
+                "同来源协议切换及强制重算不得恢复文件旧采样率");
+    };
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true, true), "手动切换失败");
+    requireEditedFrequency();
+    waitFor(application, [&] { return app::ApplicationBackpressureTestAccess::switchReplayFinished(application); });
+    const auto parsed = application.captureWaveData({}, error);
+    require(parsed && parsed->channels.size() == 2 && parsed->channels[0].samples.size() == 3 &&
+        parsed->channels[0].samples[0].value == 11 && parsed->channels[1].samples[0].value == 111,
+        "纯原始导入手动切换必须真正重算波形");
+    const auto first = app::ApplicationBackpressureTestAccess::replayGeneration(application);
+    require(application.reloadProtocolDirectory(protocol.generic_string(), false), "无变化 reload 失败");
+    require(app::ApplicationBackpressureTestAccess::replayGeneration(application) == first,
+        "无变化 reload 不得重算");
+    require(application.applyConfig(application.captureConfig()), "配置应用失败");
+    require(app::ApplicationBackpressureTestAccess::replayGeneration(application) == first,
+        "配置应用不得触发手动重算");
+    requireEditedFrequency();
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true, true), "连续切换第一次失败");
+    requireEditedFrequency();
+    const auto second = app::ApplicationBackpressureTestAccess::replayGeneration(application);
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true, true), "连续切换第二次失败");
+    requireEditedFrequency();
+    require(app::ApplicationBackpressureTestAccess::replayGeneration(application) > second,
+        "连续重算必须更新代次隔离旧 worker");
+    waitFor(application, [&] { return app::ApplicationBackpressureTestAccess::switchReplayFinished(application); });
+    const auto again = application.captureWaveData({}, error);
+    require(again && again->channels[0].samples.size() == 3, "loaded timeline 重算不得重复追加旧结果");
+    requireEditedFrequency();
+    // 切至不同 schema，完整关联数据必须用新 parser 更新帧。
+    const auto streamProtocol = std::filesystem::path(__FILE__).parent_path() / "fixtures/protocols/stream_frame_only";
+    std::vector<std::uint8_t> frame{0xAA, 0x55, 0x01, 0x07};
+    const auto crc = protocol_utils::crc16Modbus(frame);
+    frame.push_back(static_cast<std::uint8_t>(crc & 0xFFU));
+    frame.push_back(static_cast<std::uint8_t>((crc >> 8U) & 0xFFU));
+    auto framed = capture;
+    framed.events.front().bytes = frame;
+    require(application.importRawRecords(framed, error), error);
+    require(application.reloadProtocolDirectory(streamProtocol.generic_string(), true), "新 schema 切换失败");
+    waitFor(application, [&] { return app::ApplicationBackpressureTestAccess::switchReplayFinished(application); });
+    require(!application.docks().receiveState().frameRows.empty() &&
+        application.docks().receiveState().frameRows.back().message.find("stream_sample") != std::string::npos,
+        "手动切换必须使用新 schema 更新关联原始数据的协议帧");
+    // 波形单独导入解除关联，即使旧 raw 留在应用中也不得误用。
+    plot::WaveCsvData snapshot;
+    snapshot.channels.resize(1);
+    snapshot.channels[0].samples = {{0, 999}};
+    require(application.importWaveCsvData(snapshot, error), error);
+    const auto beforeSnapshotSwitch = app::ApplicationBackpressureTestAccess::replayGeneration(application);
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true), "快照切协议失败");
+    application.pumpOnce();
+    const auto retained = application.captureWaveData({}, error);
+    require(retained && retained->channels[0].samples[0].value == 999 &&
+        app::ApplicationBackpressureTestAccess::replayGeneration(application) == beforeSnapshotSwitch,
+        "无关联 raw 的快照必须保留且不能重放旧采集");
+    // 不兼容 profile 在新 parser 中明确失败，保留完整 raw 并标记结果不完整。
+    capture.events.push_back({.type = plot::RawCaptureEventType::ProfileSet,
+        .profile = {.frameName = "不存在的新协议帧", .length = 3}});
+    require(application.importRawRecords(capture, error), error);
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true), "失败重算切换失败");
+    waitFor(application, [&] { return app::ApplicationBackpressureTestAccess::switchReplayFinished(application); });
+    application.pumpOnce();
+    require(app::ApplicationBackpressureTestAccess::switchReplayFailed(application) &&
+        application.docks().waveState().rawCapture.events.size() == capture.events.size() &&
+        application.docks().waveState().statusMessage.find("不完整") != std::string::npos,
+        "中途不兼容必须明确失败、不完整并保留 raw");
+    application.shutdown();
+}
+
+// 采样率属于现有波形设置，不由 time_axis 或采集时的旧元数据决定。
+static void testImportedSamplingFrequency()
+{
+    app::Application application;
+    require(application.initialize(), "采样率回归初始化失败");
+    std::string error;
+    auto& wave = application.docks().waveState();
+    plot::WaveCsvData data;
+    data.channels.resize(1);
+    data.channels[0].samples = {{7, 1}, {8, 2}};
+    data.channels[0].sampleIndexOffset = 42;
+    for (const std::string axis : {"frequency", "script", "index"}) {
+        data.timeAxis = axis;
+        data.sampleFrequencyHz = 200;
+        wave.view.sampleFrequencyHz = 100;
+        wave.view.sampleFrequencyError = "旧错误";
+        require(application.importWaveCsvData(data, error), error);
+        require(wave.view.sampleFrequencyHz == 200 && wave.view.sampleFrequencyInput == "200" &&
+            wave.view.sampleFrequencyError.empty(), "有效采样率必须独立于 time_axis 覆盖现有设置");
+        data.sampleFrequencyHz = 0;
+        require(application.importWaveCsvData(data, error), error);
+        require(wave.view.sampleFrequencyHz == 200, "零采样率不得清除现有设置");
+    }
+    for (const double invalid : {-1.0, std::numeric_limits<double>::infinity(),
+                                 std::numeric_limits<double>::quiet_NaN()}) {
+        const auto epoch = wave.buffer.historyEpoch();
+        data.sampleFrequencyHz = invalid;
+        error.clear();
+        require(!application.importWaveCsvData(data, error) && !error.empty() &&
+                wave.buffer.historyEpoch() == epoch && wave.view.sampleFrequencyHz == 200,
+                "非法直接导入必须在清旧波形之前拒绝");
+    }
+    data.sampleFrequencyHz = 0;
+    wave.view.sampleFrequencyHz = 0;
+    wave.view.sampleFrequencyInput.clear();
+    require(application.importWaveCsvData(data, error), error);
+    require(wave.view.sampleFrequencyHz == 0 && wave.buffer.snapshot(-1e9, 1e9, false).channels[0].totalSamples == 2,
+            "两边无 Fs 仍必须允许时域导入");
+    plot::RawCaptureFileData capture;
+    capture.waveform = data;
+    capture.sampleFrequencyHz = 400;
+    require(application.importWaveRawCapture(capture, error), error);
+    require(wave.view.sampleFrequencyHz == 400, "纯波形 PSRAW 必须回退顶层采样率");
+    capture.waveform->sampleFrequencyHz = 800;
+    require(application.importWaveRawCapture(capture, error), error);
+    require(wave.view.sampleFrequencyHz == 800, "内嵌有效采样率必须优先于顶层");
+    capture.sampleFrequencyHz = -1;
+    const auto epoch = wave.buffer.historyEpoch();
+    error.clear();
+    require(!application.importWaveRawCapture(capture, error) && wave.buffer.historyEpoch() == epoch,
+            "非法顶层采样率不得先替换内嵌波形");
+    capture = {};
+    capture.sampleFrequencyHz = 400;
+    capture.events = {{.type = plot::RawCaptureEventType::RxBytes, .bytes = {1}}};
+    // 同步导出按 payload 保留窗口裁剪 RX 事件，夹具必须携带对应原始字节。
+    capture.payload = {1};
+    require(application.loadRawCaptureReplayTimeline(capture, error), error);
+    wave.view.sampleFrequencyHz = 1600;
+    wave.view.sampleFrequencyInput = "1600";
+    require(application.seekRawCaptureReplay(0, error) && application.playRawCaptureReplay(error), error);
+    require(wave.view.sampleFrequencyHz == 1600 && wave.view.sampleFrequencyInput == "1600",
+            "seek/play 不得恢复旧文件采样率");
+    application.unloadRawCaptureReplayTimeline();
+    require(application.importWaveCsvData(data, error), error);
+    wave.rawCapture = capture; // 采集时的旧 Fs 与发起导出时的设置不同。
+    tests::ScopedTempPath path(tests::makeUniqueTempFile("protoscope-sampling", ".psraw"));
+    for (const auto [content, format] : {std::pair{0, 0}, std::pair{0, 1}, std::pair{1, 0},
+                                       std::pair{1, 1}, std::pair{3, 3}}) {
+        wave.view.sampleFrequencyHz = 1600;
+        require(application.startDataExport(path.path(), content, format, {}, 0, 0, 0,
+                                            plot::WaveCsvShape::Long, error), error);
+        wave.view.sampleFrequencyHz = 3200; // 后台任务必须持有发起时的快照。
+        waitFor(application, [&] { return !application.dataTransferStatus().active; }, false);
+        if (format == 0 && content == 0) {
+            const auto decoded = plot::readWaveCsvFile(path.path(), error);
+            require(decoded && decoded->sampleFrequencyHz == 1600, "CSV 导出采样率快照错误");
+        } else {
+            std::optional<plot::RawCaptureFileData> decoded;
+            if (format == 3) {
+                const auto package = session::readSessionPackage(path.path(), error);
+                require(package.has_value(), error);
+                for (const auto& entry : package->entries) if (entry.name == "raw_capture.psraw")
+                    decoded = plot::decodeRawCaptureFile({reinterpret_cast<const char*>(entry.bytes.data()),
+                                                          entry.bytes.size()}, error);
+                for (const auto& entry : package->entries) if (entry.name == "manifest.yaml") {
+                    const std::string manifest(entry.bytes.begin(), entry.bytes.end());
+                    require(manifest.find("sample_frequency_hz: 1600") != std::string::npos,
+                            "现场包摘要采样率错误");
+                }
+            } else decoded = format == 0 ? plot::readRawCaptureCsvFile(path.path(), error) :
+                                           plot::readRawCaptureFile(path.path(), error);
+            require(decoded && decoded->sampleFrequencyHz == 1600, "导出顶层采样率快照错误");
+        }
+    }
+    wave.view.sampleFrequencyHz = 1600;
+    require(application.exportWaveRawCapture(path.path(), error), error);
+    require(plot::readRawCaptureFile(path.path(), error)->sampleFrequencyHz == 1600,
+            "同步 PSRAW 必须导出现有采样率");
+    require(application.exportRawCaptureCsv(path.path(), {}, error), error);
+    require(plot::readRawCaptureCsvFile(path.path(), error)->sampleFrequencyHz == 1600,
+            "同步记录 CSV 必须导出现有采样率");
+    require(application.exportWaveCsv(path.path(), plot::WaveCsvShape::Long, {}, error), error);
+    require(plot::readWaveCsvFile(path.path(), error)->sampleFrequencyHz == 1600,
+            "同步波形 CSV 必须导出现有采样率");
+    require(application.exportSessionPackage(path.path(), error), error);
+    const auto synchronousPackage = session::readSessionPackage(path.path(), error);
+    require(synchronousPackage.has_value(), error);
+    const auto* rawEntry = session::findSessionPackageEntry(*synchronousPackage, "raw_capture.psraw");
+    require(rawEntry != nullptr, "同步现场包缺少原始数据条目");
+    const auto synchronousCapture = plot::decodeRawCaptureFile(
+        {reinterpret_cast<const char*>(rawEntry->bytes.data()), rawEntry->bytes.size()}, error);
+    require(synchronousCapture && synchronousCapture->sampleFrequencyHz == 1600 &&
+            synchronousCapture->events.size() == 1 && synchronousCapture->events[0].bytes == capture.payload,
+            "同步现场包必须携带当前采样率并保留夹具 RX 事件");
+    wave.view.sampleFrequencyHz = 3200;
+    require(application.importSessionPackage(path.path(), error), error);
+    require(wave.view.sampleFrequencyHz == 1600, "同步现场包必须恢复顶层采样率");
+    // 流式 CSV 的外层默认 Fs=0 不能盖掉内嵌元数据；PSRAW 同时覆盖顶层回退。
+    for (const double embedded : {0.0, 800.0}) {
+        capture.waveform = data;
+        capture.waveform->sampleFrequencyHz = embedded;
+        require(plot::writeRawCaptureFile(path.path(), capture, error), error);
+        require(application.startDataImport(path.path(), error), error);
+        waitFor(application, [&] { return application.dataTransferStatus().awaitingConfirmation; });
+        application.confirmDataImport();
+        waitFor(application, [&] { const auto s = application.dataTransferStatus(); return s.complete && !s.active; });
+        require(wave.view.sampleFrequencyHz == (embedded > 0 ? embedded : 400), "异步采样率优先级错误");
+    }
+    data.sampleFrequencyHz = 200;
+    require(plot::writeWaveCsvFile(path.path(), data, plot::WaveCsvShape::Long, {}, error), error);
+    require(application.startDataImport(path.path(), error), error);
+    waitFor(application, [&] { return application.dataTransferStatus().awaitingConfirmation; });
+    application.confirmDataImport();
+    waitFor(application, [&] { const auto s = application.dataTransferStatus(); return s.complete && !s.active; });
+    require(wave.view.sampleFrequencyHz == 200, "流式 CSV 外层零值覆盖了有效 Fs");
+    const auto snapshot = wave.buffer.snapshot(-1e9, 1e9, false);
+    require(snapshot.channels[0].sampleIndexOffset == 42 && snapshot.channels[0].samples[0].time == 7,
+            "采样率导入不得改变样本序号偏移或原始时间");
+    // 缺字段兼容与声明非法字段严格区分，同时保留 PSRAW 其他必要字段校验。
+    for (const std::string value : {"", "-1", "nan", "inf", "1e9999", "12garbage"}) {
+        error.clear();
+        require(!plot::decodeWaveCsv("# sample_frequency_hz=" + value + "\ntime,value\n0,1\n", error),
+                "非法 CSV 采样率被接受");
+        std::ofstream(path.path(), std::ios::binary) << "# sample_frequency_hz=" << value
+            << "\nevent_type,timestamp_ms,bytes_hex\nrx_bytes,0,01\n";
+        require(!plot::readRawCaptureCsvFile(path.path(), error), "非法记录 CSV 采样率被接受");
+        std::vector<std::uint8_t> bytes;
+        capture = {};
+        require(plot::encodeRawCaptureFile(capture, bytes, error), error);
+        std::string text(bytes.begin(), bytes.end());
+        const auto start = text.find("sample_frequency_hz:");
+        const auto end = text.find('\n', start);
+        text.replace(start, end - start, "sample_frequency_hz: " + value);
+        text.resize(4096, '\0');
+        require(!plot::decodeRawCaptureFile(text, error), "非法 PSRAW 采样率被接受");
+    }
+    error.clear();
+    require(plot::decodeWaveCsv("time,value\n0,1\n", error).has_value(), "缺失 Fs 的旧 CSV 应可导入");
+    std::vector<std::uint8_t> bytes;
+    require(plot::encodeRawCaptureFile({}, bytes, error), error);
+    std::string text(bytes.begin(), bytes.end());
+    const auto start = text.find("sample_frequency_hz:");
+    text.erase(start, text.find('\n', start) - start + 1);
+    text.resize(4096, '\0');
+    require(plot::decodeRawCaptureFile(text, error).has_value(), "缺失 Fs 的旧 PSRAW 应可导入");
+    const auto version = text.find("version:");
+    text.erase(version, text.find('\n', version) - version + 1);
+    text.resize(4096, '\0');
+    require(!plot::decodeRawCaptureFile(text, error), "放宽 Fs 不得放宽其他必要头字段");
+    application.shutdown();
+}
+
 int main(int argc, char**)
 {
     try {
+        testImportedSamplingFrequency();
+        testManualProtocolSwitchReplay();
+        testLegacyReplayAndRetirementNonblocking();
+        testSessionImportProtocolSelection();
         testImportedSourceLabelsAfterReplay();
         testImportedLuaBitToggle();
+        testImportedRawRecordsVisibleAndTxBytesPreserved();
+        testParsedHistorySwitchTriState();
+        testParsedSwitchWithoutSchema();
+        testPackageHistoryUsesOfflineSchema();
+        testProtocolReloadDefersLargeHistory();
+        {
+            app::Application historyApplication;
+            require(historyApplication.initialize(), "历史预算回归初始化失败");
+            app::ApplicationBackpressureTestAccess::verifyHistoryProgress(historyApplication);
+            app::ApplicationBackpressureTestAccess::verifyHistoryBudgetsAndHandoff(historyApplication);
+            app::ApplicationBackpressureTestAccess::verifyDisplayInvalidation(historyApplication);
+            historyApplication.shutdown();
+        }
         const bool benchmark = argc > 1;
         const std::size_t sampleCount = benchmark ? 1000000 : 25000;
         const std::size_t recordCount = benchmark ? 100000 : 600;

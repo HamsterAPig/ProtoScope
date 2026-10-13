@@ -216,7 +216,27 @@ struct GuiFileDialogConfig {
     std::string lastExportDirectory;
 };
 
+// 收发面板原始->逐帧切换的历史策略：ask 每次询问，use_history 按范围重建，skip_history 只清半帧。
+enum class TransferLogHistoryOnParsedSwitch {
+    Ask,
+    UseHistory,
+    SkipHistory,
+};
+
+// 历史范围：retained_rows 只用收发面板保留行，retained_capture 用底层保留的完整采集/导入历史。
+enum class TransferLogHistoryScope {
+    RetainedRows,
+    RetainedCapture,
+};
+
+// 导入协议来源是本机偏好，不随现场包配置恢复。
+enum class ImportProtocolSource {
+    PreferPackage,
+    CurrentProtocol,
+};
+
 struct GuiConfig {
+    ImportProtocolSource importProtocolSource{ImportProtocolSource::PreferPackage};
     GuiFileDialogConfig fileDialogs{};
     DataExportConfig lastDataExport{};
     std::string theme{"professional_dark"};
@@ -233,7 +253,10 @@ struct GuiConfig {
     bool luaDockLayoutDebug{false};
     bool luaDockRenderCopyMode{true};
     std::size_t sendHistoryLimit{20};
+    // 旧 YAML 字段兼容存档（保留 roundtrip）；运行时唯一策略是 historyOnParsedSwitch。
     bool replayRawHistoryOnSchemaSwitch{false};
+    TransferLogHistoryOnParsedSwitch historyOnParsedSwitch{TransferLogHistoryOnParsedSwitch::Ask};
+    TransferLogHistoryScope historyScope{TransferLogHistoryScope::RetainedRows};
 };
 
 struct ProtocolTxConfig {
@@ -307,6 +330,8 @@ struct FileSnapshot {
     std::filesystem::path path;
     std::uint64_t timestampMs{0};
     bool exists{false};
+    std::string contents;
+    std::string error;
 };
 
 class ConfigStore {
@@ -317,6 +342,9 @@ public:
     ConfigLoadResult loadText(std::string_view yamlText, const std::filesystem::path& sourcePath = {}) const;
     bool save(const std::filesystem::path& path, const AppConfig& config, std::string& error) const;
     bool saveText(const AppConfig& config, std::string& yamlText, std::string& error) const;
+    // 明确覆盖也应传入用户确认时的最新快照；替换前再次检查，不能静默覆盖新修改。
+    bool saveChecked(const std::filesystem::path& path, const AppConfig& config,
+                     const FileSnapshot& expected, std::string& error) const;
     bool saveFileDialogPreferences(const std::filesystem::path& path,
                                    const GuiFileDialogConfig& preferences, std::string& error,
                                    const DataExportConfig* lastExport = nullptr) const;
@@ -336,6 +364,7 @@ public:
 
     void applyToDock(const AppConfig& config, dock::DockStore& dockStore) const;
     AppConfig captureFromDock(const dock::DockStore& dockStore) const;
+    AppConfig captureFromDock(const dock::DockStore& dockStore, AppConfig baseline) const;
 
     const std::filesystem::path& defaultConfigPath() const;
     const std::filesystem::path& defaultProtocolDir() const;

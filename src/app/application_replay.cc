@@ -99,6 +99,26 @@ namespace {
 
 } // namespace
 
+bool Application::selectSessionImportProtocol(const session::SessionPackageData& package, std::string& directory,
+                                               std::filesystem::path& extractedDirectory, std::string& error)
+{
+    directory = dockStore_.luaState().protocolDir;
+    extractedDirectory.clear();
+    const auto entries = collectSessionProtocolEntries(package);
+    if (runtimeConfig_.gui.importProtocolSource == config::ImportProtocolSource::CurrentProtocol || entries.empty())
+        return true;
+    // 调用方先校验所有条目名称；存在但缺 main.lua 的包协议不能伪装成“缺失”回退。
+    if (std::none_of(entries.begin(), entries.end(), [](const auto* entry) { return entry->name == "protocol/main.lua"; })) {
+        error = "现场包协议损坏：缺少 protocol/main.lua";
+        return false;
+    }
+    extractedDirectory = std::filesystem::temp_directory_path() /
+        ("ProtoScope-import-protocol-" + std::to_string(nowUs()));
+    if (!releaseSessionProtocolEntries(entries, extractedDirectory, error)) return false;
+    directory = extractedDirectory.generic_string();
+    return true;
+}
+
 bool Application::validateOfflineReplayTransport(std::string& error) const
 {
     if (!transport_) {
@@ -115,32 +135,53 @@ bool Application::validateOfflineReplayTransport(std::string& error) const
 
 bool Application::importRawRecords(const plot::RawCaptureFileData& data, std::string& error)
 {
-    if (!validateOfflineReplayTransport(error)) return false;
+    if (!validateOfflineReplayTransport(error) || !validateImportedFrequency(data, error)) return false;
+    applyImportedFrequency(data);
+    // 新原始导入取代旧 timeline 来源；先复制以兼容参数引用旧 timeline 成员。
+    const auto imported = data;
+    if (rawCaptureReplay_.loaded) unloadRawCaptureReplayTimeline();
     dockStore_.clearReceiveRows();
+    dockStore_.clearTransferFrameRows();
     resetTransferFrameParser();
     pendingTransferFrameRows_.clear();
-    dockStore_.waveState().rawCapture = data;
+    dockStore_.waveState().rawCapture = imported;
+    importedRawAssociated_ = !imported.events.empty() || !imported.payload.empty();
+    transferProfiles_.reset();
     replayReceiveHistory_ = true;
-    for (const auto& event : data.events) {
+    // 纯导入也建立导入代次来源键，供历史切换与失效判定；不加载 timeline、不改时间轴起点行为。
+    // 使用单调递增计数器：同一事件数的再导入也必须让旧确认/旧任务失效。
+    importedRebuildGeneration_ = ++importCounter_;
+    // 重新导入使历史切换任务/旧确认失效，过期结果不得提交到新来源。
+    clearTransferHistoryStatus("重新导入");
+    // 导入含原始字节后收发面板默认原始模式，保留字节、顺序、时间戳、端点与状态。
+    dockStore_.receiveState().displayMode = dock::TransferLogDisplayMode::RawChunks;
+    for (auto& event : dockStore_.waveState().rawCapture.events) {
+        event.displayPosition = ++transferPosition_;
+        rememberTransferProfile(event);
         if (event.type != plot::RawCaptureEventType::RxBytes && event.type != plot::RawCaptureEventType::TxBytes) continue;
-        dockStore_.appendReceiveRow({.timestampMs = event.timestampMs,
+        // 事件端点缺失时回退到记录来源，保证 RX/TX 行端点信息完整。
+        auto endpoint = event.endpoint;
+        if (endpoint.empty()) endpoint = imported.source;
+        appendHistoryReceiveRow({.timestampMs = event.timestampMs,
             .direction = event.type == plot::RawCaptureEventType::TxBytes ? "TX" : "RX",
-            .endpoint = event.endpoint, .bytes = event.bytes, .message = event.writeStatus});
+            .endpoint = std::move(endpoint), .bytes = event.bytes, .message = event.writeStatus,
+            .messageIsWriteStatus = event.type == plot::RawCaptureEventType::TxBytes,
+            .displayPosition = event.displayPosition});
     }
-    if (data.events.empty() && !data.payload.empty())
-        dockStore_.appendReceiveRow({.timestampMs = data.capturedAtMs, .direction = "RX",
-            .endpoint = data.source, .bytes = data.payload});
+    if (imported.events.empty() && !imported.payload.empty())
+        appendHistoryReceiveRow({.timestampMs = imported.capturedAtMs, .direction = "RX",
+            .endpoint = imported.source, .bytes = imported.payload, .displayPosition = ++transferPosition_});
     return true;
 }
 
 
-bool Application::validateRawCaptureImport(const plot::RawCaptureFileData&, std::string& error) const
+bool Application::validateRawCaptureImport(const plot::RawCaptureFileData& capture, std::string& error) const
 {
     if (dataTransferStatus().active && !dataImportActive_) {
         error = "数据任务进行中，不能载入回放";
         return false;
     }
-    return validateOfflineReplayTransport(error);
+    return validateOfflineReplayTransport(error) && validateImportedFrequency(capture, error);
 }
 
 
@@ -240,6 +281,7 @@ bool Application::prepareOfflineReplayProtocol(const plot::RawCaptureFileData& c
 
 void Application::prepareRawCaptureBrowse(const plot::RawCaptureFileData& capture)
 {
+    clearTransferHistoryStatus("回放来源准备");
     dockStore_.clearScriptRows();
     const auto liveSnapshot = scriptWorker_.snapshot();
     static_cast<void>(scriptWorker_.drainOutputs());
@@ -247,14 +289,12 @@ void Application::prepareRawCaptureBrowse(const plot::RawCaptureFileData& captur
     logRealtimeBacklogDiscard(discarded);
     resetWaveHistoryForTrigger(WaveResetViewportTrigger::RawImport);
     dockStore_.clearReceiveRows();
+    transferProfiles_.reset();
     pendingTransferFrameRows_.clear();
     transferFrameParser_ = makeTransferFrameParserState(liveSnapshot);
     replayReceiveHistory_ = true;
     auto& wave = dockStore_.waveState();
     wave.rawCapture = capture;
-    wave.view.sampleFrequencyHz = capture.sampleFrequencyHz;
-    wave.view.sampleFrequencyInput = formatFrequencyInput(capture.sampleFrequencyHz);
-    wave.view.sampleFrequencyError.clear();
 }
 
 
@@ -264,24 +304,27 @@ void Application::cleanupOfflineReplayResources()
     importedRebuildGeneration_.reset();
     rawCaptureReplay_.preparation = {};
     rawCaptureReplay_.profileFence = {};
-    if (offlineScriptWorker_) {
-        auto retiringWorker = std::move(offlineScriptWorker_);
-        offlineScriptWorker_.reset();
-        retiringWorker->stop();
-    }
-    const auto removeTemporaryDirectory = [this](std::filesystem::path& path, std::string_view label) {
-        if (path.empty()) return;
-        std::error_code removeError;
-        std::filesystem::remove_all(path, removeError);
-        if (removeError) {
-            const auto message = std::string("清理离线") + std::string(label) + "目录失败: " + removeError.message();
-            loggingFacade_.warn("raw_capture", message);
-            if (rawCaptureReplay_.error.empty()) rawCaptureReplay_.error = message;
-        }
-        path.clear();
-    };
-    removeTemporaryDirectory(rawCaptureReplay_.temporaryProtocolDir, "协议");
-    removeTemporaryDirectory(rawCaptureReplay_.temporaryStorageDir, "存储");
+    auto worker = std::move(offlineScriptWorker_);
+    auto protocolDir = std::move(rawCaptureReplay_.temporaryProtocolDir);
+    auto storageDir = std::move(rawCaptureReplay_.temporaryStorageDir);
+    rawCaptureReplay_.temporaryProtocolDir.clear();
+    rawCaptureReplay_.temporaryStorageDir.clear();
+    if (!worker && protocolDir.empty() && storageDir.empty()) return;
+    if (worker) worker->requestStop();
+    // UI 仅请求停止；后台 join 完成后才按原生命周期清理专属目录，不接触新代次输出。
+    retiringOfflineWorkers_.push_back(std::async(std::launch::async,
+        [worker = std::move(worker), protocolDir = std::move(protocolDir),
+         storageDir = std::move(storageDir)]() mutable {
+            if (worker) { worker->stop(); worker.reset(); }
+            std::string errors;
+            for (const auto& path : {protocolDir, storageDir}) {
+                if (path.empty()) continue;
+                std::error_code ec;
+                std::filesystem::remove_all(path, ec);
+                if (ec) errors += "清理离线临时目录失败: " + ec.message() + "；";
+            }
+            return errors;
+        }));
 }
 
 
@@ -300,18 +343,20 @@ void Application::prepareRawCaptureImportReplay(const plot::RawCaptureFileData& 
     }
     dockStore_.waveState().buffer.setDataSource(plot::WaveDataSource::Imported);
     importedRebuildGeneration_ = rawCaptureReplay_.generation;
+    // 重新导入/协议变更使历史切换任务/旧确认失效。
+    clearTransferHistoryStatus("重新导入");
     resetWaveHistoryForTrigger(WaveResetViewportTrigger::RawImport);
     dockStore_.waveState().defaultChannelSpecs.clear();
     dockStore_.clearReceiveRows();
+    dockStore_.clearTransferFrameRows();
+    transferProfiles_.reset();
     pendingTransferFrameRows_.clear();
     transferFrameParser_ = offlineScriptWorker_ ? makeTransferFrameParserState(offlineScriptWorker_->snapshot())
                                                 : std::nullopt;
     replayReceiveHistory_ = true;
     auto& wave = dockStore_.waveState();
     wave.rawCapture = capture;
-    wave.view.sampleFrequencyHz = capture.sampleFrequencyHz;
-    wave.view.sampleFrequencyInput = formatFrequencyInput(capture.sampleFrequencyHz);
-    wave.view.sampleFrequencyError.clear();
+    if (protocolSwitchReplay_) importedWaveIncomplete_ = true;
     wave.buffer.setHistoryTrimSuspended(true);
     rawCaptureReplayChunkBytes_ = resolveRawCaptureReplayChunkBytes(
         offlineScriptWorker_ ? offlineScriptWorker_->snapshot().streamBuffer : std::nullopt);
@@ -374,8 +419,10 @@ bool Application::pumpRawCaptureReplay(std::string& error)
         return false;
     }
     if (rawCaptureReplay_.phase == OfflineReplayPhase::Preparing) {
+        if (offlineScriptWorker_) static_cast<void>(offlineScriptWorker_->drainOutputs());
         if (!rawCaptureReplay_.preparation.valid() ||
-            rawCaptureReplay_.preparation.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            rawCaptureReplay_.preparation.wait_for(std::chrono::seconds(0)) != std::future_status::ready ||
+            (offlineScriptWorker_ && !offlineScriptWorker_->inputIdle())) {
             return true;
         }
         const auto result = rawCaptureReplay_.preparation.get();
@@ -442,9 +489,10 @@ bool Application::pumpRawCaptureReplay(std::string& error)
             }
         }
         if (rawCaptureReplay_.targetEventIndex > 0 &&
-            rawCaptureReplay_.eventIndex >= rawCaptureReplay_.targetEventIndex &&
-            (rawCaptureReplay_.processing == OfflineReplayProcessing::BrowseRaw ||
-             rawCaptureReplay_.completedLuaInputs >= rawCaptureReplay_.targetEventIndex)) {
+            rawCaptureReplay_.eventIndex >= rawCaptureReplay_.targetEventIndex) {
+            // 已提交到 seek 的半开上界后只排空，不能因 worker 尚忙继续投递未来事件。
+            if (rawCaptureReplay_.processing != OfflineReplayProcessing::BrowseRaw &&
+                rawCaptureReplay_.completedLuaInputs < rawCaptureReplay_.targetEventIndex) break;
             rawCaptureReplay_.playing = rawCaptureReplay_.resumeAfterSeek;
             rawCaptureReplay_.phase = OfflineReplayPhase::Draining;
             rawCaptureReplay_.pacing = rawCaptureReplay_.pacingAfterSeek;
@@ -453,8 +501,14 @@ bool Application::pumpRawCaptureReplay(std::string& error)
             break;
         }
         const auto& current = rawCaptureReplay_.capture.events[rawCaptureReplay_.eventIndex];
+        const auto streamBuffer = offlineScriptWorker_ ? offlineScriptWorker_->snapshot().streamBuffer : std::nullopt;
+        const bool slicedLegacy = current.type == plot::RawCaptureEventType::RxBytes && current.sequence == 0 &&
+            streamBuffer && current.bytes.size() > streamBuffer->capacity;
+        if (rawCaptureReplay_.processing != OfflineReplayProcessing::BrowseRaw && slicedLegacy &&
+            !offlineScriptWorker_->inputIdle()) break;
         double waitMs = 0.0;
-        if (rawCaptureReplay_.pacing == OfflineReplayPacing::OriginalTimeline) {
+        if (rawCaptureReplay_.pacing == OfflineReplayPacing::OriginalTimeline &&
+            !rawCaptureReplay_.legacyEventStarted) {
             const auto previousTimestamp = rawCaptureReplay_.eventIndex == 0
                                                ? rawCaptureReplay_.capture.capturedAtMs
                                                : rawCaptureReplay_.capture.events[rawCaptureReplay_.eventIndex - 1].timestampMs;
@@ -471,7 +525,8 @@ bool Application::pumpRawCaptureReplay(std::string& error)
                 break;
             }
         }
-        if (!replayRawCaptureEventAt(rawCaptureReplay_.eventIndex, error)) {
+        const auto submittedIndex = rawCaptureReplay_.eventIndex;
+        if (!replayRawCaptureEventAt(submittedIndex, error)) {
             rawCaptureReplay_.playing = false;
             rawCaptureReplay_.phase = OfflineReplayPhase::Failed;
             rawCaptureReplay_.error = error;
@@ -480,6 +535,8 @@ bool Application::pumpRawCaptureReplay(std::string& error)
         ++events;
         bytes += current.bytes.size();
         changed = true;
+        // 同一个 legacy 事件每轮至多投递一个有界切片，不忙等 worker 或绕过 pump 预算。
+        if (rawCaptureReplay_.eventIndex == submittedIndex) break;
         if (rawCaptureReplay_.targetEventIndex > 0 &&
             rawCaptureReplay_.eventIndex >= rawCaptureReplay_.targetEventIndex) {
             // 已提交到半开前缀边界；等待该输入的 callback/output 完整 drain 后再宣布 seek 完成。
@@ -490,8 +547,12 @@ bool Application::pumpRawCaptureReplay(std::string& error)
     if (rawCaptureReplay_.eventIndex >= eventCount) {
         rawCaptureReplay_.playing = false;
         rawCaptureReplay_.phase = OfflineReplayPhase::Draining;
-        return drainRawCaptureReplay(error) || changed;
+        const auto drained = drainRawCaptureReplay(error);
+        // 历史重建与回放推进共用主循环，来源代次在 pumpHistoryRebuild 内校验。
+        // 历史重建只由 pumpOnce 推进一次，避免一轮重复消耗字节预算。
+        return drained || changed;
     }
+    // pumpOnce 统一推进历史任务。
     return changed;
 }
 
@@ -512,6 +573,13 @@ bool Application::drainRawCaptureReplay(std::string& error)
     flushOfflineScriptOutputs();
     flushPendingTransferFrameRows(transferFrameRowsPerPump());
     const auto snapshot = offlineScriptWorker_ ? offlineScriptWorker_->snapshot() : scripting::ScriptRuntimeSnapshot{};
+    if (protocolSwitchReplay_ && !snapshot.lastError.empty()) {
+        error = snapshot.lastError;
+        rawCaptureReplay_.error = error;
+        rawCaptureReplay_.phase = OfflineReplayPhase::Failed;
+        rawCaptureReplay_.playing = false;
+        return false;
+    }
     if (rawCaptureReplay_.processing != OfflineReplayProcessing::BrowseRaw &&
         (!offlineScriptWorker_ || !offlineScriptWorker_->idle() || snapshot.pendingWorkerRxBytes > 0U ||
          snapshot.inputQueueSize > 0U || snapshot.outputQueueSize > 0U || snapshot.pendingPlotAppends > 0U ||
@@ -545,7 +613,38 @@ bool Application::replayRawCaptureEventAt(const std::size_t eventIndex, std::str
         return true;
     }
 
-    const auto& event = rawCaptureReplay_.capture.events[eventIndex];
+    auto& event = rawCaptureReplay_.capture.events[eventIndex];
+    const auto buffer = offlineScriptWorker_ ? offlineScriptWorker_->snapshot().streamBuffer : std::nullopt;
+    if (rawCaptureReplay_.processing != OfflineReplayProcessing::BrowseRaw &&
+        event.type == plot::RawCaptureEventType::RxBytes && event.sequence == 0 &&
+        buffer && event.bytes.size() > buffer->capacity) {
+        // legacy 无 callback 边界；保持单事件位置，只在前一切片及输出已消费后推进。
+        flushOfflineScriptOutputs();
+        if (!offlineScriptWorker_->inputIdle()) return true;
+        auto& offset = rawCaptureReplay_.legacyByteOffset;
+        if (!rawCaptureReplay_.legacyEventStarted) {
+            rawCaptureReplay_.legacyEventStarted = true;
+            event.displayPosition = ++transferPosition_;
+            rawCaptureReplay_.context.timestampMs = event.timestampMs == 0
+                ? rawCaptureReplay_.context.timestampMs : event.timestampMs;
+            appendTransferRow({.timestampMs = rawCaptureReplay_.context.timestampMs, .direction = "RX",
+                .endpoint = event.endpoint.empty() ? rawCaptureReplay_.context.endpoint : event.endpoint,
+                .bytes = event.bytes, .displayPosition = event.displayPosition});
+        }
+        if (offset < event.bytes.size()) {
+            const auto end = (std::min)(event.bytes.size(), offset + resolveRawCaptureReplayChunkBytes(buffer));
+            const transport::TransportBytesEvent slice{rawCaptureReplay_.context,
+                std::vector<std::uint8_t>(event.bytes.begin() + static_cast<std::ptrdiff_t>(offset),
+                                         event.bytes.begin() + static_cast<std::ptrdiff_t>(end))};
+            offset += offlineScriptWorker_->tryPostTransportBytes(slice, slice.bytes.size(), false);
+            return true;
+        }
+        offset = 0;
+        rawCaptureReplay_.legacyEventStarted = false;
+        rawCaptureReplay_.eventIndex = eventIndex + 1;
+        return true;
+    }
+    event.displayPosition = ++transferPosition_;
     rawCaptureReplay_.context.timestampMs =
         event.timestampMs == 0 ? rawCaptureReplay_.context.timestampMs : event.timestampMs;
     suppressRawCaptureProfileEvents_ = true;
@@ -568,7 +667,10 @@ bool Application::replayRawCaptureEvent(const plot::RawCaptureEvent& event,
 {
     if (event.type == plot::RawCaptureEventType::TxBytes) {
         appendTransferRow({.timestampMs = event.timestampMs, .direction = "TX",
-            .endpoint = event.endpoint, .bytes = event.bytes, .message = event.writeStatus});
+            .endpoint = event.endpoint.empty() ? replayContext.endpoint : event.endpoint,
+            .bytes = event.bytes, .message = event.writeStatus,
+            .messageIsWriteStatus = event.type == plot::RawCaptureEventType::TxBytes,
+            .displayPosition = event.displayPosition});
         return true;
     }
     if (event.type == plot::RawCaptureEventType::ProfileSet ||
@@ -582,6 +684,10 @@ bool Application::replayRawCaptureEvent(const plot::RawCaptureEvent& event,
                               : event.profile.channelMap,
         };
         std::string frameError;
+        if (protocolSwitchReplay_ && !transferFrameParser_) {
+            error = "新协议不兼容原始 profile 事件：未声明 stream schema";
+            return false;
+        }
         if (!applyTransferFrameRuntimeProfileEvent(profile, frameError)) {
             error = frameError;
             return false;
@@ -606,43 +712,21 @@ bool Application::replayRawCaptureEvent(const plot::RawCaptureEvent& event,
         return true;
     }
     if (!event.bytes.empty()) {
-        dockStore_.appendReceiveRow(dock::ReceiveRow{
+        appendTransferRow(dock::ReceiveRow{
             .timestampMs = replayContext.timestampMs,
             .direction = "RX",
-            .endpoint = replayContext.endpoint,
+            .endpoint = event.endpoint.empty() ? replayContext.endpoint : event.endpoint,
             .bytes = event.bytes,
             .message = {},
-        });
-        appendTransferFrameRows(dock::ReceiveRow{
-            .timestampMs = replayContext.timestampMs,
-            .direction = "RX",
-            .endpoint = replayContext.endpoint,
-            .bytes = event.bytes,
-            .message = {},
+            .displayPosition = event.displayPosition,
         });
         if (rawCaptureReplay_.processing != OfflineReplayProcessing::BrowseRaw) {
             if (!offlineScriptWorker_) {
                 error = "离线脚本 worker 不可用";
                 return false;
             }
-            const auto streamBuffer = offlineScriptWorker_->snapshot().streamBuffer;
-            if (event.sequence == 0U && streamBuffer.has_value() && event.bytes.size() > streamBuffer->capacity) {
-                // legacy payload 没有现代事件边界，按 parser 容量分段，避免 drop_oldest 覆盖整块数据。
-                const auto chunkBytes = resolveRawCaptureReplayChunkBytes(streamBuffer);
-                for (std::size_t offset = 0; offset < event.bytes.size(); offset += chunkBytes) {
-                    const auto end = (std::min)(event.bytes.size(), offset + chunkBytes);
-                    offlineScriptWorker_->postTransportBytes(
-                        transport::TransportBytesEvent{replayContext,
-                            std::vector<std::uint8_t>(event.bytes.begin() + static_cast<std::ptrdiff_t>(offset),
-                                                      event.bytes.begin() + static_cast<std::ptrdiff_t>(end))},
-                        false);
-                    offlineScriptWorker_->waitIdle();
-                    flushOfflineScriptOutputsUnbounded();
-                }
-            } else {
-                // 现代事件边界保持为一个 worker command；禁止按 UI 字节预算拆成多个 callback。
-                offlineScriptWorker_->postTransportBytes(transport::TransportBytesEvent{replayContext, event.bytes}, false);
-            }
+            // legacy 大事件由时间轴的持久 offset 推进；现代事件保持一个 command/callback。
+            offlineScriptWorker_->postTransportBytes(transport::TransportBytesEvent{replayContext, event.bytes}, false);
         }
     }
     return true;
@@ -793,7 +877,11 @@ void Application::finishRawCaptureImportReplay()
     wave.buffer.setHistoryTrimSuspended(false);
     wave.buffer.preserveHistoryLimitAtLeast(importedHistoryLimit);
     syncDockState();
-    wave.statusMessage = "原始波形已导入";
+    wave.statusMessage = protocolSwitchReplay_ ? "协议切换重算完成，波形及协议帧已更新" : "原始波形已导入";
+    if (protocolSwitchReplay_) {
+        importedWaveIncomplete_ = rawCaptureReplay_.capture.incomplete;
+        protocolSwitchReplay_ = false;
+    }
     loggingFacade_.info("raw_capture",
                         "raw import finished kind=raw_import endpoint=" + dockStore_.luaState().protocolDir);
 }
@@ -801,6 +889,7 @@ void Application::finishRawCaptureImportReplay()
 
 void Application::cancelRawCaptureImportReplay()
 {
+    clearTransferHistoryStatus("回放来源取消或替换");
     ++rawCaptureReplay_.generation;
     rawCaptureReplay_.profileFence = {};
     suppressRawCaptureProfileEvents_ = false;
@@ -815,8 +904,10 @@ void Application::cancelRawCaptureImportReplay()
 
 bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error)
 {
+    if (!validateRawCaptureImport(capture, error)) return false;
     if (capture.waveform) {
         if (!importWaveCsvData(*capture.waveform, error)) return false;
+        applyImportedFrequency(capture);
         return (capture.events.empty() && capture.payload.empty()) || importRawRecords(capture, error);
     }
     if (!loadRawCaptureReplayTimeline(capture,
@@ -841,7 +932,8 @@ bool Application::loadRawCaptureReplayTimeline(const plot::RawCaptureFileData& c
                                                const OfflineReplayProcessing processing,
                                                const OfflineReplayPacing pacing,
                                                std::string& error,
-                                               const session::SessionPackageData* package)
+                                               const session::SessionPackageData* package,
+                                               const bool initializeImportedFrequency)
 {
     if (!validateRawCaptureImport(capture, error)) return false;
     if (capture.events.empty() && capture.payload.empty()) {
@@ -849,10 +941,14 @@ bool Application::loadRawCaptureReplayTimeline(const plot::RawCaptureFileData& c
         return false;
     }
 
+    // capture 可能就是现有 timeline 的成员：必须先复制，再清理/重置旧状态。
+    auto replayCapture = capture;
+    const bool replaceWaveLabels = !capture.waveform.has_value();
     const auto nextGeneration = rawCaptureReplay_.generation + 1U;
     cleanupOfflineReplayResources();
     cancelRawCaptureImportReplay();
-    auto replayCapture = capture;
+    protocolSwitchReplay_ = false;
+    importedRawAssociated_ = true;
     if (replayCapture.events.empty() && !replayCapture.payload.empty()) {
         for (std::size_t offset = 0; offset < replayCapture.payload.size(); offset += kRawCaptureReplayLargeChunkBytes) {
             const auto end = (std::min)(replayCapture.payload.size(), offset + kRawCaptureReplayLargeChunkBytes);
@@ -872,7 +968,7 @@ bool Application::loadRawCaptureReplayTimeline(const plot::RawCaptureFileData& c
     rawCaptureReplay_.generation = nextGeneration;
     rawCaptureReplay_.loaded = true;
     rawCaptureReplay_.capture = std::move(replayCapture);
-    rawCaptureReplay_.replaceWaveLabels = !capture.waveform.has_value();
+    rawCaptureReplay_.replaceWaveLabels = replaceWaveLabels;
     rawCaptureReplay_.context = makeRawCaptureReplayContext(rawCaptureReplay_.capture);
     rawCaptureReplay_.speed = 1.0;
     rawCaptureReplay_.pacing = pacing;
@@ -882,6 +978,8 @@ bool Application::loadRawCaptureReplayTimeline(const plot::RawCaptureFileData& c
         rawCaptureReplay_.error = error;
         return false;
     }
+    // 仅新文件提交初始化 Fs；同来源协议重算及后续 prepare/seek/play 保留用户设置。
+    if (initializeImportedFrequency) applyImportedFrequency(rawCaptureReplay_.capture);
     if (processing == OfflineReplayProcessing::BrowseRaw) {
         prepareRawCaptureBrowse(rawCaptureReplay_.capture);
         rawCaptureReplay_.phase = OfflineReplayPhase::Paused;
@@ -961,6 +1059,8 @@ bool Application::seekRawCaptureReplay(const std::size_t eventIndex, std::string
 
     auto next = rawCaptureReplay_;
     next.eventIndex = 0;
+    next.legacyByteOffset = 0;
+    next.legacyEventStarted = false;
     next.targetEventIndex = (std::min)(eventIndex, next.capture.events.size());
     next.resumeAfterSeek = rawCaptureReplay_.playing;
     next.pacingAfterSeek = rawCaptureReplay_.pacing;
@@ -972,6 +1072,11 @@ bool Application::seekRawCaptureReplay(const std::size_t eventIndex, std::string
     next.generation = rawCaptureReplay_.generation + 1U;
     next.preparation = {};
     next.profileFence = {};
+    // seek 使历史切换任务/旧确认失效，不能把过期结果提交到新来源；同时清过期逐帧结果并回原始视图。
+    clearTransferHistoryStatus("回放定位");
+    dockStore_.clearTransferFrameRows();
+    pendingTransferFrameRows_.clear();
+    dockStore_.receiveState().displayMode = dock::TransferLogDisplayMode::RawChunks;
     if (next.processing == OfflineReplayProcessing::PackageProtocol) {
         next.protocolDirectory.clear();
         next.temporaryProtocolDir.clear();

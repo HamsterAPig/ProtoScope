@@ -427,11 +427,9 @@ namespace {
 
     bool readWaveCsvFrequency(const ParsedCsv& parsed, WaveCsvData& data, std::string& error)
     {
-        const auto frequencyText = metadataValue(parsed.metadata, "sample_frequency_hz");
-        if (frequencyText.empty()) {
-            return true;
-        }
-        if (!parseDouble(frequencyText, data.sampleFrequencyHz)) {
+        const auto frequency = parsed.metadata.find("sample_frequency_hz");
+        if (frequency == parsed.metadata.end()) return true;
+        if (!parseDouble(frequency->second, data.sampleFrequencyHz) || data.sampleFrequencyHz < 0.0) {
             error = "波形 CSV sample_frequency_hz 格式错误";
             return false;
         }
@@ -578,8 +576,8 @@ namespace {
                 return false;
             }
         }
-        if (const auto frequency = metadataValue(parsed.metadata, "sample_frequency_hz"); !frequency.empty()) {
-            if (!parseDouble(frequency, capture.sampleFrequencyHz)) {
+        if (const auto frequency = parsed.metadata.find("sample_frequency_hz"); frequency != parsed.metadata.end()) {
+            if (!parseDouble(frequency->second, capture.sampleFrequencyHz) || capture.sampleFrequencyHz < 0.0) {
                 error = "原始事件 CSV sample_frequency_hz 格式错误";
                 return false;
             }

@@ -27,6 +27,7 @@ namespace {
 
     constexpr std::size_t kTransportEventsPerPump = 256;
     constexpr auto kTransportEventBudget = std::chrono::milliseconds(4);
+    constexpr std::size_t kTransportBytesPerPump = 64U * 1024U;
     constexpr std::uint64_t kCommPressureDebugLogIntervalMs = 2000;
 
     double elapsedMilliseconds(std::chrono::steady_clock::time_point start, std::chrono::steady_clock::time_point end)
@@ -371,6 +372,7 @@ void Application::openTransport()
         replayReceiveHistory_ = false;
         dockStore_.waveState().rawCapture = {};
         retainedRawBytes_ = 0;
+        clearTransferHistoryStatus("重新连接实时来源");
         pendingTransferFrameRows_.clear();
         resetTransferFrameParser();
     }
@@ -480,13 +482,44 @@ bool Application::sendManualPayload(const std::string& payload, bool hexMode)
     return true;
 }
 
+void Application::rememberTransferProfile(const plot::RawCaptureEvent& event)
+{
+    if (event.type != plot::RawCaptureEventType::ProfileSet && event.type != plot::RawCaptureEventType::ProfileClear) return;
+    auto profiles = transferProfiles_ ? *transferProfiles_ : std::vector<plot::RawCaptureEvent>{};
+    if (event.type == plot::RawCaptureEventType::ProfileClear && event.profile.frameName.empty()) profiles.clear();
+    else {
+        std::erase_if(profiles, [&](const auto& old) { return old.profile.frameName == event.profile.frameName; });
+        if (event.type == plot::RawCaptureEventType::ProfileSet) profiles.push_back(event);
+    }
+    transferProfiles_ = std::make_shared<const std::vector<plot::RawCaptureEvent>>(std::move(profiles));
+}
+
+void Application::appendHistoryReceiveRow(dock::ReceiveRow row)
+{
+    if (!row.displayPosition) row.displayPosition = ++transferPosition_;
+    transferPosition_ = (std::max)(transferPosition_, row.displayPosition);
+    row.historyProfiles = transferProfiles_;
+    dockStore_.appendReceiveRow(std::move(row));
+}
+
 void Application::appendTransferRow(dock::ReceiveRow row)
 {
-    // 离线重放始终同步生成独立逐帧缓存；视图按钮只选择 rows/frameRows，不能触发 Lua 或重建语义。
+    if (!row.displayPosition) row.displayPosition = ++transferPosition_;
+    transferPosition_ = (std::max)(transferPosition_, row.displayPosition);
+    // 追赶只保存位置与大小；字节仍由面板持有，裁剪时取消，不延长旧字节寿命。
+    const bool queued = historyRebuild_ && queueHistoryFollowing({
+        .type = row.direction == "TX" ? plot::RawCaptureEventType::TxBytes : plot::RawCaptureEventType::RxBytes,
+        .direction = row.direction, .timestampMs = row.timestampMs, .endpoint = row.endpoint,
+        .position = row.displayPosition, .byteSize = row.bytes.size(),
+        .rowIndex = dockStore_.receiveState().rows.size(),
+        .rowFrontPosition = dockStore_.receiveState().rows.empty() ? row.displayPosition :
+                            dockStore_.receiveState().rows.front().displayPosition});
+    // 原展示 parser 保留取消/裁剪时的新数据结果；任务存在时提交被阻止，完成只使用追赶结果替换。
+    static_cast<void>(queued);
     if (replayReceiveHistory_ || dockStore_.receiveState().displayMode == dock::TransferLogDisplayMode::ParsedFrames) {
         appendTransferFrameRows(row);
     }
-    dockStore_.appendReceiveRow(std::move(row));
+    appendHistoryReceiveRow(std::move(row));
 }
 
 std::optional<Application::TransferFrameParserState> Application::makeTransferFrameParserState() const
@@ -518,6 +551,7 @@ void Application::resetTransferFrameParser()
 
 void Application::resetTransferFrameDisplayState()
 {
+    clearTransferHistoryStatus("展示状态重置");
     dockStore_.clearTransferFrameRows();
     pendingTransferFrameRows_.clear();
     resetTransferFrameParser();
@@ -540,7 +574,8 @@ void Application::appendTransferFrameRows(const dock::ReceiveRow& sourceRow)
     if (sourceRow.bytes.empty() || (sourceRow.direction != "RX" && sourceRow.direction != "TX")) {
         return;
     }
-    if (!transferFrameParser_.has_value()) {
+    if (!transferFrameParser_.has_value() &&
+        (!rawCaptureReplay_.loaded || rawCaptureReplay_.processing == OfflineReplayProcessing::BrowseRaw)) {
         resetTransferFrameParser();
     }
     if (!transferFrameParser_.has_value()) {
@@ -578,19 +613,508 @@ void Application::appendTransferFrameRows(const dock::ReceiveRow& sourceRow)
 
 void Application::rebuildTransferFrameRows()
 {
-    const auto rows = dockStore_.receiveState().rows;
-    resetTransferFrameDisplayState();
-    for (const auto& row : rows) {
-        appendTransferFrameRows(row);
+    // 协议重载也只安排任务，不复制或同步解析整份历史；来源 schema 不能沿用旧 parser。
+    invalidateHistorySwitchWork("重新生成逐帧历史");
+    if (rawCaptureReplay_.loaded && rawCaptureReplay_.processing != OfflineReplayProcessing::BrowseRaw) {
+        transferFrameParser_ = offlineScriptWorker_ ? makeTransferFrameParserState(offlineScriptWorker_->snapshot())
+                                                   : std::nullopt;
+    } else {
+        resetTransferFrameParser();
     }
-    flushPendingTransferFrameRows(std::numeric_limits<std::size_t>::max());
+    const auto scope = runtimeConfig_.gui.historyScope;
+    const auto upperBound = scope == config::TransferLogHistoryScope::RetainedRows
+        ? dockStore_.receiveState().rows.size()
+        : (rawCaptureReplay_.loaded ? rawCaptureReplay_.eventIndex : dockStore_.waveState().rawCapture.events.size());
+    beginHistoryRebuild(scope, historySwitchGeneration(), upperBound);
+}
+
+void Application::clearTransferLogHistory()
+{
+    // 清空使历史切换任务/旧确认失效，过期结果不得提交到新来源。
+    clearTransferHistoryStatus("清空");
+    dockStore_.clearReceiveRows();
+    dockStore_.clearTransferFrameRows();
+    pendingTransferFrameRows_.clear();
+    // 清空展示不切换当前协议来源，也不丢运行时 profile；仅丢残留半帧。
+    if (transferFrameParser_) {
+        transferFrameParser_->rx.reset(); transferFrameParser_->tx.reset();
+    }
 }
 
 void Application::activateParsedTransferLogView()
 {
-    // 视图切换不调用 Lua；兼容开关仅用独立 UI parser 重建 rows -> frameRows。
-    if (!runtimeConfig_.gui.replayRawHistoryOnSchemaSwitch || replayReceiveHistory_) return;
-    rebuildTransferFrameRows();
+    // 兼容旧调用方先修改 displayMode 的方式，但所有切换均走同一个三态入口。
+    dockStore_.receiveState().displayMode = dock::TransferLogDisplayMode::RawChunks;
+    requestParsedHistorySwitch();
+}
+
+// 历史切换的来源键：有 loaded timeline 用回放代次，否则用导入重建代次；两者皆无（实时）用稳定 live 代次。
+// live 代次由 invalidateHistorySwitchWork 在所有显式失效入口递增，
+// 实时事件不递增，避免重建期间任一实时事件使任务被误失效。
+std::uint64_t Application::historySwitchGeneration() const
+{
+    if (rawCaptureReplay_.loaded) return rawCaptureReplay_.generation;
+    if (importedRebuildGeneration_.has_value()) return *importedRebuildGeneration_;
+    return liveGeneration_;
+}
+
+std::optional<Application::TransferHistoryStatus> Application::transferHistoryStatus() const
+{
+    auto status = transferHistoryStatus_;
+    if (!status) return status;
+    if (status->sourceGeneration != historySwitchGeneration() || status->loadedTimeline != rawCaptureReplay_.loaded)
+        return std::nullopt;
+    if (status->running()) status->elapsedSeconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - status->startedAt).count();
+    if (historyRebuild_) {
+        const auto& task = *historyRebuild_;
+        status->historyDone = task.eventCursor;
+        status->currentBytesDone = task.byteOffset;
+        status->followingPending = task.following.size();
+        status->followingBytesPending = task.followingBytes -
+            (task.eventCursor >= task.sourceCount ? task.byteOffset : 0);
+    }
+    return status;
+}
+
+void Application::dismissTransferHistoryStatus()
+{
+    if (transferHistoryStatus_ && !transferHistoryStatus_->running()) transferHistoryStatus_.reset();
+}
+
+void Application::clearTransferHistoryStatus(const std::string_view reason)
+{
+    invalidateHistorySwitchWork(reason);
+    transferHistoryStatus_.reset();
+}
+
+void Application::settleTransferHistoryRows(const std::size_t count, const bool discarded)
+{
+    if (!transferHistoryStatus_ || transferHistoryStatus_->phase != TransferHistoryPhase::Display) return;
+    auto& status = *transferHistoryStatus_;
+    // 交接时本次结果占队首前缀；后来的实时行只追加队尾，不延长本次结算。
+    const auto amount = (std::min)(count, status.displayPending);
+    status.displayPending -= amount;
+    if (discarded) status.discardedRows += amount;
+    else status.displaySubmitted += amount;
+    if (status.displayPending == 0) {
+        status.phase = TransferHistoryPhase::Completed;
+        status.elapsedSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - status.startedAt).count();
+        status.reason = status.discardedRows ? "本次结果已结算；部分展示行受保留上限或队列裁剪限制" :
+            (status.validFrames == 0 ? "转换完成，没有匹配协议的有效帧" : "本次结果已更新到逐帧列表");
+    }
+}
+
+void Application::invalidateHistorySwitchWork(const std::string_view reason, const TransferHistoryPhase phase)
+{
+    if (transferHistoryStatus_ && transferHistoryStatus_->running()) {
+        if (auto snapshot = transferHistoryStatus()) transferHistoryStatus_ = std::move(snapshot);
+        transferHistoryStatus_->phase = phase;
+        transferHistoryStatus_->reason = reason;
+    }
+    if (historyRebuild_.has_value() || historySwitchConfirmationOpen_) {
+        loggingFacade_.info("transfer", std::string("历史切换失效: ") + std::string(reason));
+    }
+    ++liveGeneration_;
+    if (transferHistoryStatus_ && !rawCaptureReplay_.loaded && !importedRebuildGeneration_)
+        transferHistoryStatus_->sourceGeneration = liveGeneration_;
+    historyRebuild_.reset();
+    historySwitchConfirmationOpen_ = false;
+}
+
+bool Application::historySourceAvailable() const
+{
+    if (runtimeConfig_.gui.historyScope == config::TransferLogHistoryScope::RetainedRows)
+        return !dockStore_.receiveState().rows.empty();
+    const auto& capture = rawCaptureReplay_.loaded ? rawCaptureReplay_.capture : dockStore_.waveState().rawCapture;
+    return rawCaptureReplay_.loaded ? rawCaptureReplay_.eventIndex != 0 :
+        (!capture.events.empty() || !capture.payload.empty());
+}
+
+bool Application::queueHistoryFollowing(HistoryRebuildSourceEvent event)
+{
+    if (!historyRebuild_) return false;
+    auto& task = *historyRebuild_;
+    const auto limit = runtimeConfig_.gui.rawCapture.liveLimitBytes;
+    if (event.byteSize > limit || task.followingBytes > limit - event.byteSize ||
+        task.following.size() >= runtimeConfig_.gui.logHistory.transferRawLimit) {
+        invalidateHistorySwitchWork("历史重建追赶队列达到保留预算");
+        dockStore_.waveState().statusMessage = "历史重建已取消：新增数据达到保留预算，继续显示新数据";
+        return false;
+    }
+    task.followingBytes += event.byteSize;
+    task.following.push_back(std::move(event));
+    return true;
+}
+
+bool Application::beginHistoryRebuild(const config::TransferLogHistoryScope scope,
+                                      const std::uint64_t generation,
+                                      const std::size_t upperBound)
+{
+    // 只冻结位置与上界；字节由来源拥有，每轮读取一个有界切片，不同步复制历史。
+    historyRebuild_.reset();
+    transferHistoryStatus_.reset();
+    const auto& capture = rawCaptureReplay_.loaded ? rawCaptureReplay_.capture : dockStore_.waveState().rawCapture;
+    std::optional<TransferFrameParserState> parser;
+    if (transferFrameParser_) {
+        parser = TransferFrameParserState{
+            .rx = scripting::FrameStreamParser(transferFrameParser_->rx.bufferDefinition(), transferFrameParser_->rx.frameDefinitions()),
+            .tx = scripting::FrameStreamParser(transferFrameParser_->tx.bufferDefinition(), transferFrameParser_->tx.frameDefinitions())};
+    } else if (!rawCaptureReplay_.loaded || rawCaptureReplay_.processing == OfflineReplayProcessing::BrowseRaw)
+        parser = makeTransferFrameParserState();
+    // 缺 schema 不创建空任务，尤其不能在后续 pump 中清掉仍可查看的旧帧。
+    if (!parser) {
+        transferHistoryStatus_ = TransferHistoryStatus{.taskId = ++transferHistoryTaskId_,
+            .sourceGeneration = generation, .scope = scope, .phase = TransferHistoryPhase::Failed,
+            .startedAt = std::chrono::steady_clock::now(), .reason = "当前来源没有可用 stream schema",
+            .previousResults = !dockStore_.receiveState().frameRows.empty(), .loadedTimeline = rawCaptureReplay_.loaded};
+        return false;
+    }
+    if (parser) {
+        parser->rx.reset(); parser->tx.reset();
+        parser->rx.clearRuntimeProfiles(); parser->tx.clearRuntimeProfiles();
+    }
+    HistoryRebuildTask task;
+    task.hasLoadedTimeline = rawCaptureReplay_.loaded;
+    task.generation = generation;
+    task.upperBound = upperBound;
+    task.sourceCount = rawCaptureReplay_.loaded ? rawCaptureReplay_.eventIndex : capture.events.size();
+    if (scope == config::TransferLogHistoryScope::RetainedCapture)
+        task.sourceCount = (std::min)(task.sourceCount, upperBound);
+    task.rowsOnly = scope == config::TransferLogHistoryScope::RetainedRows;
+    task.legacyPayload = capture.events.empty() && !capture.payload.empty();
+    task.firstPosition = capture.events.empty() ? 0 : capture.events.front().displayPosition;
+    task.parser = std::move(parser);
+    task.boundaryProfiles = transferProfiles_;
+    if (task.rowsOnly) {
+        const auto& rows = dockStore_.receiveState().rows;
+        task.sourceCount = (std::min)(upperBound, rows.size());
+        if (task.sourceCount) {
+            task.rowBegin = rows.front().displayPosition;
+            task.rowEnd = rows[task.sourceCount - 1].displayPosition;
+        }
+        task.legacyPayload = false;
+    }
+    if (task.legacyPayload) task.sourceCount = 1;
+    // 旧 pending 不加入重建结果；保留至提交或取消，完成时统一替换，避免两次追加。
+    transferHistoryStatus_ = TransferHistoryStatus{.taskId = ++transferHistoryTaskId_,
+        .sourceGeneration = generation, .scope = scope, .startedAt = std::chrono::steady_clock::now(),
+        .historyTotal = task.sourceCount, .previousResults = !dockStore_.receiveState().frameRows.empty(), .loadedTimeline = rawCaptureReplay_.loaded};
+    historyRebuild_ = std::move(task);
+    return true;
+}
+
+bool Application::pumpHistoryRebuild()
+{
+    if (!historyRebuild_) return false;
+    auto& task = *historyRebuild_;
+    const auto& capture = task.hasLoadedTimeline ? rawCaptureReplay_.capture : dockStore_.waveState().rawCapture;
+    if (task.generation != historySwitchGeneration()) {
+        clearTransferHistoryStatus("来源已替换");
+        dockStore_.waveState().statusMessage = "历史重建已取消：来源已替换";
+        return true;
+    }
+    if (
+        (task.rowsOnly && task.sourceCount && (dockStore_.receiveState().rows.size() < task.sourceCount ||
+          dockStore_.receiveState().rows.front().displayPosition != task.rowBegin)) ||
+        (!task.rowsOnly && !task.legacyPayload && task.sourceCount && (capture.events.empty() ||
+          capture.events.front().displayPosition != task.firstPosition || capture.events.size() < task.sourceCount))) {
+        invalidateHistorySwitchWork("来源被替换或裁剪");
+        dockStore_.waveState().statusMessage = "历史重建已取消：来源已裁剪或替换";
+        return true;
+    }
+    if (!task.parser) {
+        // 防御失效任务：保留完整缓存和 pending，不以不可解析冒充成功的空结果。
+        invalidateHistorySwitchWork("当前来源没有可用 stream schema", TransferHistoryPhase::Failed);
+        dockStore_.waveState().statusMessage = "历史重建已取消：当前来源没有可用 stream schema";
+        return true;
+    }
+    const auto started = std::chrono::steady_clock::now();
+    std::size_t events = 0, bytes = 0;
+    const auto keepRow = [&](dock::ReceiveRow row) {
+        const auto limit = runtimeConfig_.gui.logHistory.transferFrameLimit;
+        if (!limit) {
+            if (transferHistoryStatus_) ++transferHistoryStatus_->discardedRows;
+            return;
+        }
+        task.rebuilt.push_back(std::move(row));
+        while (task.rebuilt.size() > limit) {
+            task.rebuilt.pop_front();
+            if (transferHistoryStatus_) ++transferHistoryStatus_->discardedRows;
+        }
+    };
+    while (events < kTransportEventsPerPump && bytes < kTransportBytesPerPump &&
+           std::chrono::steady_clock::now() - started < kTransportEventBudget) {
+        const bool historical = task.eventCursor < task.sourceCount;
+        if (transferHistoryStatus_) {
+            transferHistoryStatus_->phase = historical ? TransferHistoryPhase::History : TransferHistoryPhase::Following;
+            transferHistoryStatus_->currentBytesTotal = 0;
+        }
+        // 面板最后一行之后仍可能接纳 profile 控制事件；在追赶前恢复冻结上界的 profile，保留尾半帧。
+        if (!historical && task.rowsOnly) {
+            if (!task.boundaryProfilesStarted) {
+                task.parser->rx.clearRuntimeProfiles(); task.parser->tx.clearRuntimeProfiles();
+                task.boundaryProfilesStarted = true;
+            }
+            if (task.boundaryProfiles && task.boundaryProfileCursor < task.boundaryProfiles->size()) {
+                const auto& profile = (*task.boundaryProfiles)[task.boundaryProfileCursor++].profile;
+                std::string error;
+                for (auto* parser : {&task.parser->rx, &task.parser->tx}) {
+                    if (!parser->setRuntimeProfile(profile.frameName,
+                        scripting::StreamRuntimeProfile{.length = profile.length, .channelMap = profile.channelMap}, error)) {
+                        invalidateHistorySwitchWork("上界 profile 无效：" + error, TransferHistoryPhase::Failed);
+                        dockStore_.waveState().statusMessage = "历史重建失败：" + error;
+                        return true;
+                    }
+                }
+                ++events; continue;
+            }
+        }
+        if (!historical && task.following.empty()) break;
+        const std::vector<std::uint8_t>* input = nullptr;
+        std::string direction, endpoint;
+        std::uint64_t timestamp = 0;
+        plot::RawCaptureEventType type = plot::RawCaptureEventType::RxBytes;
+        const plot::RawCaptureProfileEventData* profile = nullptr;
+        bool selected = true;
+        if (historical && task.rowsOnly) {
+            const auto& rows = dockStore_.receiveState().rows;
+            if (!task.currentRow) {
+                const auto found = rows.begin() + static_cast<std::ptrdiff_t>(task.eventCursor);
+                task.currentRow = dock::ReceiveRow{.timestampMs = found->timestampMs, .direction = found->direction,
+                    .endpoint = found->endpoint, .displayPosition = found->displayPosition,
+                    .historyProfiles = found->historyProfiles}; // 只保留元数据，不复制字节。
+                task.rowProfileCursor = 0;
+                task.parser->rx.clearRuntimeProfiles(); task.parser->tx.clearRuntimeProfiles();
+            }
+            const auto& row = *task.currentRow;
+            if (row.historyProfiles && task.rowProfileCursor < row.historyProfiles->size()) {
+                const auto& event = (*row.historyProfiles)[task.rowProfileCursor++];
+                std::string error;
+                for (auto* parser : {&task.parser->rx, &task.parser->tx}) {
+                    if (!parser->setRuntimeProfile(event.profile.frameName,
+                        scripting::StreamRuntimeProfile{.length = event.profile.length, .channelMap = event.profile.channelMap}, error)) {
+                        invalidateHistorySwitchWork("面板 profile 基线无效：" + error, TransferHistoryPhase::Failed);
+                        dockStore_.waveState().statusMessage = "历史重建失败：" + error;
+                        return true;
+                    }
+                }
+                ++events; continue;
+            }
+            const auto retained = rows.begin() + static_cast<std::ptrdiff_t>(task.eventCursor);
+            if (retained->displayPosition != row.displayPosition) {
+                invalidateHistorySwitchWork("面板来源被裁剪");
+                dockStore_.waveState().statusMessage = "历史重建已取消：面板来源被裁剪";
+                return true;
+            }
+            input = &retained->bytes; direction = row.direction; endpoint = row.endpoint; timestamp = row.timestampMs;
+            type = direction == "TX" ? plot::RawCaptureEventType::TxBytes : plot::RawCaptureEventType::RxBytes;
+            selected = direction == "RX" || direction == "TX";
+        } else if (historical && task.legacyPayload) {
+            input = &capture.payload; direction = "RX"; endpoint = capture.source; timestamp = capture.capturedAtMs;
+            selected = !task.rowsOnly || task.rowEnd != 0;
+        } else if (historical) {
+            const auto& event = capture.events[task.eventCursor];
+            input = &event.bytes; type = event.type; profile = &event.profile;
+            direction = type == plot::RawCaptureEventType::TxBytes ? "TX" : "RX";
+            endpoint = event.endpoint.empty() ? capture.source : event.endpoint;
+            timestamp = event.timestampMs;
+            selected = !task.rowsOnly || (task.rowBegin && event.displayPosition >= task.rowBegin &&
+                                          event.displayPosition <= task.rowEnd);
+            // 控制事件从起点扫描：只折叠 profile，不引入范围外字节。
+        } else {
+            const auto& event = task.following.front();
+            type = event.type; profile = &event.profile;
+            direction = event.direction; endpoint = event.endpoint; timestamp = event.timestampMs;
+            if (type == plot::RawCaptureEventType::RxBytes || type == plot::RawCaptureEventType::TxBytes) {
+                const auto& rows = dockStore_.receiveState().rows;
+                if (rows.empty() || rows.front().displayPosition != event.rowFrontPosition ||
+                    event.rowIndex >= rows.size() || rows[event.rowIndex].displayPosition != event.position ||
+                    rows[event.rowIndex].bytes.size() != event.byteSize) {
+                    invalidateHistorySwitchWork("追赶来源已裁剪");
+                    dockStore_.waveState().statusMessage = "历史重建已取消：新增来源已裁剪，继续显示新数据";
+                    return true;
+                }
+                input = &rows[event.rowIndex].bytes;
+            }
+        }
+        if (type == plot::RawCaptureEventType::ProfileSet || type == plot::RawCaptureEventType::ProfileClear) {
+            std::string error;
+            bool ok = true;
+            for (auto* parser : {&task.parser->rx, &task.parser->tx}) {
+                if (type == plot::RawCaptureEventType::ProfileSet)
+                    ok = parser->setRuntimeProfile(profile->frameName,
+                        scripting::StreamRuntimeProfile{.length = profile->length, .channelMap = profile->channelMap}, error) && ok;
+                else if (profile->frameName.empty()) parser->clearRuntimeProfiles();
+                else ok = parser->clearRuntimeProfile(std::optional<std::string>{profile->frameName}, error) && ok;
+            }
+            if (!ok) {
+                invalidateHistorySwitchWork("历史 profile 无效：" + error, TransferHistoryPhase::Failed);
+                dockStore_.waveState().statusMessage = "历史重建失败：" + error;
+                return true;
+            }
+        } else if (selected && (type == plot::RawCaptureEventType::RxBytes || type == plot::RawCaptureEventType::TxBytes)) {
+            auto& parser = direction == "TX" ? task.parser->tx : task.parser->rx;
+            // 小于 parser 容量的切片也避免单大事件覆盖环形缓冲；总量严格不超过 64KiB。
+            const auto amount = (std::min)({input->size() - task.byteOffset, kTransportBytesPerPump - bytes,
+                (std::max)(std::size_t{1}, parser.bufferDefinition().capacity / 2)});
+            std::vector<std::uint8_t> slice(input->begin() + static_cast<std::ptrdiff_t>(task.byteOffset),
+                input->begin() + static_cast<std::ptrdiff_t>(task.byteOffset + amount));
+            const auto batch = parser.pushBytes(slice);
+            dock::ReceiveRow row{.timestampMs = timestamp, .direction = direction, .endpoint = endpoint};
+            if (transferHistoryStatus_) {
+                transferHistoryStatus_->currentBytesTotal = input->size();
+                transferHistoryStatus_->validFrames += batch.frames.size();
+                if (!historical) transferHistoryStatus_->followingBytesDone += amount;
+            }
+            for (const auto& frame : batch.frames) keepRow(makeTransferFrameRow(row, frame));
+            if (batch.frames.empty() && (!batch.errors.empty() || (direction == "TX" && batch.bufferSize == 0))) {
+                if (transferHistoryStatus_) ++transferHistoryStatus_->fallbackRows;
+                row.bytes = std::move(slice); keepRow(std::move(row));
+            }
+            task.byteOffset += amount; bytes += amount;
+            if (task.byteOffset < input->size()) { ++events; continue; }
+        }
+        task.byteOffset = 0; ++events;
+        if (transferHistoryStatus_) transferHistoryStatus_->currentBytesTotal = 0;
+        if (historical) {
+            if (task.currentRow) {
+                task.currentRow.reset();
+            }
+            ++task.eventCursor;
+        }
+        else {
+            if (transferHistoryStatus_) ++transferHistoryStatus_->followingDone;
+            task.followingBytes -= task.following.front().byteSize;
+            task.following.pop_front();
+        }
+    }
+    if (transferHistoryStatus_ && task.eventCursor >= task.sourceCount) {
+        transferHistoryStatus_->phase = TransferHistoryPhase::Following;
+        if (task.byteOffset == 0) transferHistoryStatus_->currentBytesTotal = 0;
+    }
+    if (task.eventCursor < task.sourceCount || !task.following.empty() ||
+        (task.rowsOnly && (!task.boundaryProfilesStarted ||
+         (task.boundaryProfiles && task.boundaryProfileCursor < task.boundaryProfiles->size())))) return true;
+    // 交接同一个 UI parser 的尾缓冲/profile；历史后的新字节已按接纳顺序追赶，不能重解析。
+    transferFrameParser_ = std::move(task.parser);
+    if (transferHistoryStatus_) {
+        auto& status = *transferHistoryStatus_;
+        status.historyDone = task.eventCursor;
+        status.currentBytesTotal = status.currentBytesDone = 0;
+        status.followingPending = status.followingBytesPending = 0;
+        status.phase = TransferHistoryPhase::Display;
+        status.displayTotal = status.displayPending = task.rebuilt.size();
+        status.previousResults = false;
+    }
+    dockStore_.clearTransferFrameRows();
+    pendingTransferFrameRows_.clear();
+    pendingTransferFrameRows_ = std::move(task.rebuilt);
+    historyRebuild_.reset();
+    trimPendingTransferFrameRowsToLimit();
+    flushPendingTransferFrameRows(transferFrameRowsPerPump());
+    settleTransferHistoryRows(0, false);
+    return true;
+}
+std::string Application::parsedTransferUnavailableReason() const
+{
+    // 显式解析时间轴只认其独立 worker；实时和 BrowseRaw 使用当前有效 Runtime。
+    const bool offline = rawCaptureReplay_.loaded &&
+        rawCaptureReplay_.processing != OfflineReplayProcessing::BrowseRaw;
+    const auto snapshot = offline
+        ? (offlineScriptWorker_ ? offlineScriptWorker_->snapshot() : scripting::ScriptRuntimeSnapshot{})
+        : scriptWorker_.snapshot();
+    // 最近一次加载失败不会抹掉旧有效 Runtime，不能只用 lastError 判断能力。
+    if (snapshot.streamBuffer && !snapshot.streamFrames.empty()) return {};
+    if (!snapshot.scriptPath.empty()) return "当前协议没有 stream schema，无法生成逐帧记录";
+    if (!snapshot.lastError.empty() || (offline && !rawCaptureReplay_.error.empty()))
+        return "协议加载失败，当前没有可用协议，无法生成逐帧记录";
+    return "尚未加载协议，无法生成逐帧记录";
+}
+
+void Application::requestParsedHistorySwitch()
+{
+    auto& receive = dockStore_.receiveState();
+    if (receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames) {
+        // 已在逐帧视图：切回原始。切回原始使任务/旧确认失效。
+        receive.displayMode = dock::TransferLogDisplayMode::RawChunks;
+        invalidateHistorySwitchWork("切回原始");
+        return;
+    }
+    const bool hasHistory = historySourceAvailable();
+    if (!parsedTransferUnavailableReason().empty() || !hasHistory) {
+        receive.displayMode = dock::TransferLogDisplayMode::ParsedFrames;
+        return;
+    }
+    switch (runtimeConfig_.gui.historyOnParsedSwitch) {
+        case config::TransferLogHistoryOnParsedSwitch::Ask:
+            if (!hasHistory) {
+                receive.displayMode = dock::TransferLogDisplayMode::ParsedFrames;
+                return;
+            }
+            // 确认前保持原始模式，采集不停止；上界在 resolveHistorySwitch 生效时固定。
+            if (!historySwitchConfirmationOpen_) ++historySwitchConfirmationId_;
+            historySwitchConfirmationOpen_ = true;
+            return;
+        case config::TransferLogHistoryOnParsedSwitch::UseHistory: {
+            // 自动策略：请求处理时固定上界。
+            const auto upperBound =
+                runtimeConfig_.gui.historyScope == config::TransferLogHistoryScope::RetainedRows
+                    ? dockStore_.receiveState().rows.size()
+                    : (rawCaptureReplay_.loaded ? rawCaptureReplay_.eventIndex
+                                                : dockStore_.waveState().rawCapture.events.size());
+            receive.displayMode = dock::TransferLogDisplayMode::ParsedFrames;
+            beginHistoryRebuild(runtimeConfig_.gui.historyScope, historySwitchGeneration(), upperBound);
+            return;
+        }
+        case config::TransferLogHistoryOnParsedSwitch::SkipHistory:
+            // 不使用历史：不重放旧字节，保留已有完整帧，只清残留半帧。
+            receive.displayMode = dock::TransferLogDisplayMode::ParsedFrames;
+            clearTransferHistoryStatus("不使用历史");
+            // 只清半帧；保留已有完整帧、待提交帧以及当前来源的 schema/runtime profiles。
+            if (transferFrameParser_) {
+                transferFrameParser_->rx.reset();
+                transferFrameParser_->tx.reset();
+            }
+            return;
+    }
+}
+
+void Application::resolveHistorySwitch(const config::TransferLogHistoryOnParsedSwitch decision)
+{
+    if (!historySwitchConfirmationOpen_) return;
+    historySwitchConfirmationOpen_ = false;
+    auto& receive = dockStore_.receiveState();
+    // 弹窗期间协议/历史可能变化，选择生效时再次检查，不创建无效重建任务。
+    if (!parsedTransferUnavailableReason().empty() || !historySourceAvailable()) {
+        receive.displayMode = dock::TransferLogDisplayMode::ParsedFrames;
+        return;
+    }
+    if (decision == config::TransferLogHistoryOnParsedSwitch::UseHistory) {
+        // 询问上界在用户选择生效时固定。
+        const auto upperBound =
+            runtimeConfig_.gui.historyScope == config::TransferLogHistoryScope::RetainedRows
+                ? dockStore_.receiveState().rows.size()
+                : (rawCaptureReplay_.loaded ? rawCaptureReplay_.eventIndex
+                                            : dockStore_.waveState().rawCapture.events.size());
+        receive.displayMode = dock::TransferLogDisplayMode::ParsedFrames;
+        beginHistoryRebuild(runtimeConfig_.gui.historyScope, historySwitchGeneration(), upperBound);
+        return;
+    }
+    // 拒绝历史：切到逐帧且只清半帧；取消另走 cancelHistorySwitch，保持原始模式和缓存。
+    receive.displayMode = dock::TransferLogDisplayMode::ParsedFrames;
+    clearTransferHistoryStatus("不使用历史");
+    // 拒绝历史不丢完整帧，也不得用实时 schema 替换显式离线 parser。
+    if (transferFrameParser_) {
+        transferFrameParser_->rx.reset();
+        transferFrameParser_->tx.reset();
+    }
+}
+
+void Application::cancelHistorySwitch()
+{
+    // Escape 等同取消：关闭 modal，保持原始模式，采集不停止。
+    historySwitchConfirmationOpen_ = false;
 }
 
 void Application::applyHistoryLimits(const config::GuiLogHistoryConfig& config)
@@ -648,7 +1172,15 @@ bool Application::setSendHexMode(bool enabled)
 bool Application::applyTransferFrameRuntimeProfileEvent(const scripting::StreamRuntimeProfileEvent& event,
                                                         std::string& error)
 {
-    if (!transferFrameParser_.has_value()) {
+    rememberTransferProfile({.type = event.cleared ? plot::RawCaptureEventType::ProfileClear : plot::RawCaptureEventType::ProfileSet,
+        .profile = {.frameName = event.frameName, .length = event.length, .channelMap = event.channelMap}});
+    if (historyRebuild_ && queueHistoryFollowing({
+        .type = event.cleared ? plot::RawCaptureEventType::ProfileClear : plot::RawCaptureEventType::ProfileSet,
+        .profile = {.frameName = event.frameName, .length = event.length, .channelMap = event.channelMap}})) {
+        // 同步维持旧展示 parser，任务取消时仍能继续；重建结果只使用独立 parser。
+    }
+    if (!transferFrameParser_.has_value() &&
+        (!rawCaptureReplay_.loaded || rawCaptureReplay_.processing == OfflineReplayProcessing::BrowseRaw)) {
         resetTransferFrameParser();
     }
     if (!transferFrameParser_.has_value()) {
@@ -980,6 +1512,7 @@ void Application::detachPendingRealtimeBacklogFromConnection()
 
 Application::RealtimeBacklogDiscardCounts Application::clearPendingRealtimeBacklog()
 {
+    invalidateHistorySwitchWork("待提交展示队列已按现有策略清除");
     RealtimeBacklogDiscardCounts counts{
         .transportEvents = pendingTransportEvents_.size(),
         .rxBytes = pendingRxByteCount(),
@@ -1074,7 +1607,7 @@ bool Application::processTransportEvent(const transport::TransportEvent& event)
                 appendRawCaptureEvent(raw);
                 if (evt.status != "sent") {
                     appendTransferRow({.timestampMs = evt.context.timestampMs, .direction = "TX",
-                        .endpoint = evt.context.endpoint, .bytes = evt.bytes, .message = evt.status});
+                        .endpoint = evt.context.endpoint, .bytes = evt.bytes, .message = evt.status, .messageIsWriteStatus = true});
                 }
                 return true;
             }
@@ -1734,14 +2267,16 @@ void Application::trimPendingTransferFrameRowsToLimit()
 {
     const auto limit = runtimeConfig_.gui.logHistory.transferFrameLimit;
     if (limit == 0U) {
+        settleTransferHistoryRows(pendingTransferFrameRows_.size(), true);
         pendingTransferFrameRows_.clear();
         return;
     }
-    const auto displayed = dockStore_.receiveState().frameRows.size();
-    if (displayed + pendingTransferFrameRows_.size() <= limit) {
+    // 待提交队列独立有界；提交时 DockStore 裁掉旧展示帧，不能因展示已满而丢掉所有新帧。
+    if (pendingTransferFrameRows_.size() <= limit) {
         return;
     }
-    auto excess = displayed + pendingTransferFrameRows_.size() - limit;
+    auto excess = pendingTransferFrameRows_.size() - limit;
+    settleTransferHistoryRows(excess, true);
     while (excess > 0 && !pendingTransferFrameRows_.empty()) {
         pendingTransferFrameRows_.pop_front();
         --excess;
@@ -1750,7 +2285,7 @@ void Application::trimPendingTransferFrameRowsToLimit()
 
 bool Application::flushPendingTransferFrameRows(std::size_t maxRows)
 {
-    if (pendingTransferFrameRows_.empty() || maxRows == 0) {
+    if (historyRebuild_ || pendingTransferFrameRows_.empty() || maxRows == 0) {
         return false;
     }
     std::vector<dock::ReceiveRow> rows;
@@ -1759,7 +2294,9 @@ bool Application::flushPendingTransferFrameRows(std::size_t maxRows)
         rows.push_back(std::move(pendingTransferFrameRows_.front()));
         pendingTransferFrameRows_.pop_front();
     }
+    const auto submitted = rows.size();
     dockStore_.appendTransferFrameRows(std::move(rows));
+    settleTransferHistoryRows(submitted, false);
     trimPendingTransferFrameRowsToLimit();
     return true;
 }

@@ -3,6 +3,7 @@
 #include "protoscope/app/adaptive_performance.hpp"
 #include "protoscope/app/data_transfer_task.hpp"
 #include "protoscope/config/config.hpp"
+#include "protoscope/config/settings.hpp"
 #include "protoscope/dock/docks.hpp"
 #include "protoscope/logging/logging.hpp"
 #include "protoscope/plot/csv_data_file.hpp"
@@ -25,17 +26,48 @@
 
 namespace protoscope::app {
 
+enum class SettingsApplyStatus { Applied, Pending, Failed, ConfirmationRequired };
+struct SettingsApplyOptions {
+    bool confirmHistoryTrim{false};
+    bool overwriteConflicts{false};
+    std::uint64_t confirmationId{0};
+    // 宿主必须通过 ThemeManager 验证并提交主题；核心不直接渲染。
+    std::function<bool(std::string_view, std::string&)> applyTheme;
+    // 可失败的资源校验/准备应在 worker 执行前完成；不得预览主题。
+    std::function<bool(std::string_view, std::string&)> prepareTheme;
+};
+struct SettingsApplyResult {
+    SettingsApplyStatus status{SettingsApplyStatus::Failed};
+    std::string error;
+    std::vector<std::string> conflicts;
+    std::uint64_t confirmationId{0};
+    bool restartRequired{false};
+    bool nextConnectionRequired{false};
+    bool partiallyApplied{false};
+};
+
 class Application {
 public:
     Application();
 
     bool initialize();
-    bool applyConfig(const config::AppConfig& config);
+    bool applyConfig(const config::AppConfig& config, bool reloadProtocol = true);
     config::AppConfig captureConfig() const;
+    SettingsApplyResult applySettingsChanges(const config::AppConfig& baseline, const config::AppConfig& draft,
+                                             SettingsApplyOptions options = {});
+    SettingsApplyResult pollSettingsApply();
+    [[nodiscard]] bool settingsSaveBlocked() const { return pendingSettingsConfig_.has_value() || settingsPartialSaveBlocked_; }
+    bool preparePartialWorkerRecovery(config::SettingsDraft& draft) const;
+    bool acceptPartialSettings(std::string& error);
+    // 只保存最新运行态；导入导出或应用 Pending 时禁止落盘。
+    bool saveSettings(config::SettingsPersistence& persistence, std::string& error);
+    [[nodiscard]] AdaptivePerformanceBudget effectiveSettingsPerformance() const;
     [[nodiscard]] const config::AppConfig& runtimeConfig() const;
     [[nodiscard]] std::uint32_t effectiveFpsLimit() const;
     [[nodiscard]] bool loadedConfigFromDisk() const;
-    bool reloadProtocolDirectory(const std::string& protocolDir, bool forceReload = false);
+    // 配置/启动调用必须显式关闭手动导入重算；无变化的非强制 reload 本身不会重算。
+    bool reloadProtocolDirectory(const std::string& protocolDir, bool forceReload = false,
+                                 bool manualSwitch = true);
     bool pumpOnce();
     void shutdown();
 
@@ -143,7 +175,8 @@ public:
                                       OfflineReplayProcessing processing,
                                       OfflineReplayPacing pacing,
                                       std::string& error,
-                                      const session::SessionPackageData* package = nullptr);
+                                      const session::SessionPackageData* package = nullptr,
+                                      bool initializeImportedFrequency = true);
     void unloadRawCaptureReplayTimeline();
     bool playRawCaptureReplay(std::string& error);
     void pauseRawCaptureReplay();
@@ -166,6 +199,42 @@ public:
     void refreshSelectedElfSymbolControls();
     void rebuildTransferFrameRows();
     void activateParsedTransferLogView();
+    // 清空收发记录与已解析帧缓存；同时使历史切换任务/旧确认失效。
+    void clearTransferLogHistory();
+    // 原始->逐帧切换的三态历史策略入口：宿主确认 modal 通过 resolveHistorySwitch/cancelHistorySwitch 回写结果。
+    [[nodiscard]] std::string parsedTransferUnavailableReason() const;
+    void requestParsedHistorySwitch();
+    void resolveHistorySwitch(config::TransferLogHistoryOnParsedSwitch decision);
+    void cancelHistorySwitch();
+    enum class TransferHistoryPhase { History, Following, Display, Completed, Cancelled, Failed };
+    struct TransferHistoryStatus {
+        std::uint64_t taskId{0};
+        std::uint64_t sourceGeneration{0};
+        config::TransferLogHistoryScope scope{};
+        TransferHistoryPhase phase{TransferHistoryPhase::History};
+        std::chrono::steady_clock::time_point startedAt{};
+        double elapsedSeconds{0};
+        std::string reason;
+        std::size_t historyTotal{0}, historyDone{0};
+        std::size_t currentBytesTotal{0}, currentBytesDone{0};
+        std::size_t followingDone{0}, followingBytesDone{0}, followingPending{0}, followingBytesPending{0};
+        std::size_t validFrames{0}, fallbackRows{0};
+        std::size_t displayTotal{0}, displayPending{0}, displaySubmitted{0}, discardedRows{0};
+        bool previousResults{false};
+        bool loadedTimeline{false};
+        [[nodiscard]] bool running() const {
+            return phase == TransferHistoryPhase::History || phase == TransferHistoryPhase::Following ||
+                phase == TransferHistoryPhase::Display;
+        }
+    };
+    [[nodiscard]] std::optional<TransferHistoryStatus> transferHistoryStatus() const;
+    void dismissTransferHistoryStatus();
+    [[nodiscard]] bool historySwitchConfirmationPending() const { return historySwitchConfirmationOpen_; }
+    [[nodiscard]] std::uint64_t historySwitchConfirmationId() const { return historySwitchConfirmationId_; }
+    [[nodiscard]] config::TransferLogHistoryOnParsedSwitch historySwitchStrategy() const {
+        return runtimeConfig_.gui.historyOnParsedSwitch;
+    }
+    [[nodiscard]] config::TransferLogHistoryScope historySwitchScope() const { return runtimeConfig_.gui.historyScope; }
     logging::LoggingFacade& logger();
     const logging::LoggingFacade& logger() const;
     std::vector<scripting::DialogRequest> drainDialogRequests();
@@ -180,12 +249,16 @@ public:
 private:
     // 仅测试协调背压观察/取消，不暴露业务侧 worker 访问入口。
     friend struct ApplicationBackpressureTestAccess;
+    friend struct ApplicationSettingsTestAccess;
 
     // 跨职责实现共用的辅助函数，不增加对象状态或公开接口。
     static std::uint64_t nowMs();
     static std::uint64_t nowUs();
     static std::string csvEscape(std::string_view text);
     static std::string formatFrequencyInput(double valueHz);
+    static bool validateImportedFrequency(const plot::RawCaptureFileData& capture, std::string& error);
+    void applyImportedFrequency(double valueHz);
+    void applyImportedFrequency(const plot::RawCaptureFileData& capture);
     static bool sameAppliedPlotSetup(const plot::WaveDockState& wave, const plot::RawCapturePlotSetupEventData& setup);
     static std::string payloadPreviewSuffix(const config::AppLoggingConfig& logging,
                                            const std::vector<std::uint8_t>& payload);
@@ -212,6 +285,43 @@ private:
         transport::ConnectionContext context{};
         std::vector<std::uint8_t> bytes{};
         std::size_t offset{0};
+    };
+
+    // 历史重建范围输入：记录顺序的 RX/TX 字节 + profile 事件；不引入范围外字节。
+    struct HistoryRebuildSourceEvent {
+        plot::RawCaptureEventType type{plot::RawCaptureEventType::RxBytes};
+        std::string direction;
+        std::uint64_t timestampMs{0};
+        std::string endpoint;
+        plot::RawCaptureProfileEventData profile;
+        std::uint64_t position{0};
+        std::size_t byteSize{0};
+        std::size_t rowIndex{0};
+        std::uint64_t rowFrontPosition{0};
+    };
+
+    // 历史重建任务的唯一状态载体；来源键 = rawCaptureReplay_.generation + 导入代次标记。
+    struct HistoryRebuildTask {
+        bool hasLoadedTimeline{false};
+        std::uint64_t generation{0};
+        std::size_t upperBound{0};
+        std::size_t eventCursor{0};
+        std::size_t byteOffset{0};
+        std::size_t sourceCount{0};
+        std::uint64_t firstPosition{0};
+        std::uint64_t rowBegin{0};
+        std::uint64_t rowEnd{0};
+        std::size_t rowProfileCursor{0};
+        std::optional<dock::ReceiveRow> currentRow;
+        std::shared_ptr<const std::vector<plot::RawCaptureEvent>> boundaryProfiles;
+        std::size_t boundaryProfileCursor{0};
+        bool boundaryProfilesStarted{false};
+        bool rowsOnly{false};
+        bool legacyPayload{false};
+        std::deque<HistoryRebuildSourceEvent> following;
+        std::size_t followingBytes{0};
+        std::optional<TransferFrameParserState> parser;
+        std::deque<dock::ReceiveRow> rebuilt;
     };
 
     struct StreamBufferAlertState {
@@ -264,6 +374,8 @@ private:
         plot::RawCaptureFileData capture{};
         transport::ConnectionContext context{};
         std::size_t eventIndex{0};
+        std::size_t legacyByteOffset{0};
+        bool legacyEventStarted{false};
         std::size_t targetEventIndex{0};
         std::size_t completedLuaInputs{0};
         bool resumeAfterSeek{false};
@@ -302,7 +414,8 @@ private:
     bool applyProtocolLoadResult(const std::string& resolvedDirText,
                                  const std::string& protocolName,
                                  const std::string& scriptPath,
-                                 const scripting::ScriptRuntimeLoadResult& loadResult);
+                                 const scripting::ScriptRuntimeLoadResult& loadResult,
+                                 bool preserveImportedWave = false);
     void refreshTransferFrameDisplayAfterProtocolReload();
     bool handleTransportEvents();
     void resetTransportPumpMetrics();
@@ -361,7 +474,11 @@ private:
                          std::uint64_t finishedAtMs);
     void cancelPendingTxRequests(const std::string& reason, std::uint64_t finishedAtMs);
     void cancelAllTxRequests(const std::string& reason);
+    void configureScriptWorker(const config::AppConfig& config);
+    bool prepareSessionScriptConfig(const session::SessionPackageData& package, std::string& error);
     void resetDataImportGenerationState(bool cleanupReplayResources);
+    bool selectSessionImportProtocol(const session::SessionPackageData& package, std::string& directory,
+                                     std::filesystem::path& extractedDirectory, std::string& error);
     bool restoreSessionPackageContext(const session::SessionPackageData& package,
                                       bool allowMissingProtocol,
                                       std::vector<plot::WaveAnalysisMarker>& markers,
@@ -416,6 +533,18 @@ private:
     void appendTransferFrameRows(const dock::ReceiveRow& sourceRow);
     void enqueueTransferFrameRows(std::vector<dock::ReceiveRow> rows);
     void trimPendingTransferFrameRowsToLimit();
+    // 三态历史切换与分批重建实现。
+    std::uint64_t historySwitchGeneration() const;
+    void invalidateHistorySwitchWork(std::string_view reason,
+        TransferHistoryPhase phase = TransferHistoryPhase::Cancelled);
+    void clearTransferHistoryStatus(std::string_view reason);
+    void settleTransferHistoryRows(std::size_t count, bool discarded);
+    bool beginHistoryRebuild(config::TransferLogHistoryScope scope, std::uint64_t generation, std::size_t upperBound);
+    bool pumpHistoryRebuild();
+    bool historySourceAvailable() const;
+    void rememberTransferProfile(const plot::RawCaptureEvent& event);
+    void appendHistoryReceiveRow(dock::ReceiveRow row);
+    bool queueHistoryFollowing(HistoryRebuildSourceEvent event);
     void applyHistoryLimits(const config::GuiLogHistoryConfig& config);
     [[nodiscard]] dock::ReceiveRow makeTransferFrameRow(const dock::ReceiveRow& sourceRow,
                                                         const scripting::StreamParsedFrame& frame) const;
@@ -432,7 +561,20 @@ private:
     std::optional<config::ProtocolConfig> captureProtocolConfigOverride_;
     logging::LoggingFacade loggingFacade_{};
     scripting::ScriptRuntimeWorker scriptWorker_;
+    std::future<bool> settingsBudgetFence_;
+    std::optional<config::AppConfig> pendingSettingsConfig_;
+    std::optional<config::AppConfig> pendingSettingsBaseline_;
+    SettingsApplyOptions pendingSettingsOptions_;
+    SettingsApplyResult settingsApplyResult_;
+    bool settingsPartialSaveBlocked_{false};
+    std::optional<config::PerformanceExplicitOverrides> settingsWorkerOriginalFlags_;
+    std::uint64_t settingsConfirmationId_{0};
+    std::optional<config::AppConfig> settingsConfirmationRuntime_;
+    std::optional<config::AppConfig> settingsConfirmationDraft_;
+    void commitSettingsChanges(const config::AppConfig& value);
     std::unique_ptr<scripting::ScriptRuntimeWorker> offlineScriptWorker_;
+    // future 持有后台退场任务，未完成时不能销毁（std::async 的析构会等待）。
+    std::vector<std::future<std::string>> retiringOfflineWorkers_;
     plugin::ElfStaticViewBridge elfStaticView_;
     std::uint64_t elfStaticAddressRevision_{0};
     std::unique_ptr<transport::ITransport> transport_;
@@ -455,12 +597,24 @@ private:
     // 按位置冻结两组名称，短前缀重建不丢失尚未出现的位置。
     std::vector<std::string> importedActualLabels_;
     std::vector<std::string> importedDefaultLabels_;
+    // 历史切换来源键：导入用单调计数器；live 用稳定计数器，仅在导入/seek/协议变更时递增，
+    // 避免实时事件使进行中的历史重建被误失效。
     std::optional<std::uint64_t> importedRebuildGeneration_;
+    std::uint64_t importCounter_{0};
+    std::uint64_t liveGeneration_{0}; // 所有显式失效入口递增；字节接纳不改变代次。
+    std::uint64_t transferPosition_{0};
+    std::shared_ptr<const std::vector<plot::RawCaptureEvent>> transferProfiles_;
     std::size_t rawCaptureReplayChunkBytes_{1024U};
     std::size_t rawCaptureReplayPendingBytes_{0U};
     std::vector<std::uint8_t> rawCaptureReplayBatchBytes_;
     transport::ConnectionContext rawCaptureReplayBatchContext_{};
     bool replayReceiveHistory_{false};
+    // 原始->逐帧切换的三态状态机：确认 modal 打开标记 + 历史重建任务（唯一所有者）。
+    bool historySwitchConfirmationOpen_{false};
+    std::uint64_t historySwitchConfirmationId_{0};
+    std::optional<HistoryRebuildTask> historyRebuild_;
+    std::optional<TransferHistoryStatus> transferHistoryStatus_;
+    std::uint64_t transferHistoryTaskId_{0};
     std::deque<transport::TransportEvent> pendingTransportEvents_;
     std::deque<PendingRxBytes> pendingRxByteChunks_;
     std::deque<dock::ReceiveRow> pendingTransferFrameRows_;
@@ -474,8 +628,23 @@ private:
     bool dataImportActive_{false};
     OfflineReplayProcessing dataImportProcessing_{OfflineReplayProcessing::BrowseRaw};
     OfflineReplayPacing dataImportPacing_{OfflineReplayPacing::FastBatchParse};
+    // 已载入包协议独立于离线 timeline；卸载原始浏览不能使协议面板的目录失效。
+    std::vector<std::filesystem::path> importedProtocolDirectories_;
+    std::filesystem::path pendingImportProtocolDirectory_;
+    std::string pendingImportProtocol_;
+    std::optional<DataImportBatch> pendingImportMetadata_;
+    bool importProtocolPrepared_{false};
+    std::optional<config::AppConfig> pendingImportPreviousConfig_;
+    std::shared_future<scripting::ScriptRuntimeLoadResult> importProtocolLoad_;
+    std::shared_future<scripting::ScriptRuntimeLoadResult> retiringImportProtocolLoad_;
     std::shared_ptr<session::SessionPackageData> pendingImportSession_;
     std::vector<plot::WaveAnalysisMarker> pendingImportMarkers_;
+    // 明确关联身份，波形单独导入后不得借用先前采集的 raw。
+    bool importedRawAssociated_{false};
+    bool protocolSwitchReplay_{false};
+    bool discardProtocolInitializationOutputs_{false};
+    // 初始化输出排空前暂存用户控件操作，避免与初始化一起被丢弃。
+    std::vector<std::function<void()>> deferredProtocolControls_;
     bool importedWaveIncomplete_{false};
     std::string importedWaveRange_{"full"};
     bool importReplacedWave_{false};

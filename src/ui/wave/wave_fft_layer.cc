@@ -1146,12 +1146,30 @@ namespace {
         wave.fftDisplayError.clear();
         wave.view.cursorFftPhaseVisible = includePhase;
         const auto* fftFrame = frame.fftFrame;
-        if (fftFrame == nullptr || !fftFrame->enabled) {
+        // 当前设置优先于异步帧：首次计算没有帧，失效旧帧也不能掩盖缺采样率错误。
+        const auto drawHint = [](const std::string& message) {
+            const auto position = ImGui::GetCursorScreenPos();
+            const auto available = ImGui::GetContentRegionAvail();
+            const auto textSize = ImGui::CalcTextSize(message.c_str());
+            ImGui::GetWindowDrawList()->AddText(
+                ImVec2(position.x + (std::max)(0.0F, (available.x - textSize.x) * 0.5F),
+                       position.y + (std::max)(0.0F, (available.y - textSize.y) * 0.5F)),
+                ImGui::GetColorU32(ImGuiCol_Text), message.c_str());
+            ImGui::Dummy(available);
+        };
+        if (!wave.view.fft.enabled) {
             ImGui::Dummy(ImGui::GetContentRegionAvail());
             return result;
         }
-        if (!fftFrame->valid) {
-            ImGui::Dummy(ImGui::GetContentRegionAvail());
+        if (!std::isfinite(wave.view.sampleFrequencyHz) || wave.view.sampleFrequencyHz <= 0.0) {
+            wave.fftDisplayError = "需要先设置有效采样频率";
+            drawHint(wave.fftDisplayError);
+            return result;
+        }
+        if (fftFrame == nullptr || !fftFrame->enabled || !fftFrame->valid) {
+            if (fftFrame && fftFrame->enabled && !wave.view.fftUpdatePending && !fftFrame->message.empty())
+                wave.fftDisplayError = fftFrame->message;
+            drawHint(wave.fftDisplayError.empty() ? "FFT 正在计算，请稍候" : wave.fftDisplayError);
             return result;
         }
 

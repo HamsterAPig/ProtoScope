@@ -52,6 +52,25 @@ void run(plot::WaveFftDisplayMode mode)
     append(2048, 32);
     settle(wave);
     require(std::abs(peak() - 32) < 1, "initial peak wrong");
+    // 同一批样本改变现有采样率，频谱必须按新 Hz 换算，旧在途结果不能复活。
+    const auto samplingGeneration = wave.fftRequestGeneration;
+    view.sampleFrequencyHz = 2048;
+    ui::prepareWaveFrame(wave, 900);
+    require(wave.fftRequestGeneration > samplingGeneration && !wave.cachedFftKeyValid,
+            "采样率变化未失效旧频谱");
+    settle(wave);
+    require(std::abs(peak() - 64) < 2 && wave.cachedFftFrame.frequencyResolutionHz == 2 &&
+            wave.cachedFftFrame.maxFrequencyHz == 1024, "新采样率的峰值、分辨率或 Nyquist 不正确");
+    wave.fftRefreshRequested = true;
+    ui::prepareWaveFrame(wave, 900);
+    view.sampleFrequencyHz = 0;
+    settle(wave);
+    require(!wave.cachedFftFrame.valid && wave.cachedFftFrame.message == "需要先设置有效采样频率",
+            "无采样率仍接受旧在途频谱");
+    view.sampleFrequencyHz = 1024;
+    settle(wave);
+    require(std::abs(peak() - 32) < 1 && wave.cachedFftFrame.frequencyResolutionHz == 1 &&
+            wave.cachedFftFrame.maxFrequencyHz == 512, "恢复采样率后频谱换算不正确");
     const auto beforeAuxiliary = wave.cachedFftKey;
     const auto beforeAuxiliarySubmissions = wave.fftSubmittedCount;
     view.auxiliaryCursors.add(0, 1);

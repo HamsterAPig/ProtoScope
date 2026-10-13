@@ -12,6 +12,15 @@ target_link_libraries(protoscope_script_safety_tests PRIVATE protoscope_scriptin
 add_test(NAME protoscope_script_safety_tests COMMAND protoscope_script_safety_tests)
 set_tests_properties(protoscope_script_safety_tests PROPERTIES TIMEOUT 60)
 
+add_executable(protoscope_application_settings_tests test_application_settings.cc)
+target_link_libraries(protoscope_application_settings_tests PRIVATE protoscope_app)
+target_compile_features(protoscope_application_settings_tests PRIVATE cxx_std_20)
+add_test(NAME protoscope_application_settings_tests COMMAND protoscope_application_settings_tests)
+set_tests_properties(protoscope_application_settings_tests PROPERTIES
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    TIMEOUT 60
+)
+
 add_executable(protoscope_data_transfer_tests test_data_transfer.cc)
 add_executable(protoscope_data_transfer_application_tests test_data_transfer_application.cc)
 target_link_libraries(protoscope_data_transfer_application_tests PRIVATE protoscope_app)

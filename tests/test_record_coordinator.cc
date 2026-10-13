@@ -67,6 +67,28 @@ void pendingRecovery()
         require(queries.query({},{}).rowIds==std::vector<std::uint64_t>{1,2},"recovery neither duplicates nor loses source rows");
     }
 }
+void sealedOwnerDiagnostic()
+{
+    tests::ScopedTempPath directory(tests::makeUniqueTempDir("protoscope-sealed-owner-diagnostic"));
+    storage::VolumeCatalog catalog(directory.path(),"protocol");
+    auto volume=storage::RecordVolume::create(directory.path(),"protocol",{{1,schema}},1,1);
+    volume->seal(2);
+    const auto unknown=volume->info().path.parent_path()/"unexpected.bin";
+    const std::string secret="diagnostic-must-not-read-this-content";
+    {std::ofstream file(unknown);file<<secret;require(bool(file),"diagnostic fixture write failed");}
+    bool rejected=false;
+    try {catalog.adoptRecording(volume->info(),2);}
+    catch (const std::runtime_error& error) {
+        const std::string message=error.what();
+        rejected=message.starts_with("unrecognized or linked file in sealed volume") &&
+            message.find("entry=unexpected.bin")!=std::string::npos &&
+            message.find("type=")!=std::string::npos && message.find("linked=false")!=std::string::npos &&
+            message.find("regular=true")!=std::string::npos && message.find(secret)==std::string::npos;
+    }
+    require(rejected,"sealed owner diagnostic keeps rejection prefix and includes only entry status");
+    require(catalog.pinAll()->volumes().empty(),"unknown file must prevent adoption");
+    require(std::filesystem::is_regular_file(unknown),"diagnosis must not delete unknown file");
+}
 void restartRecording()
 {
     tests::ScopedTempPath directory(tests::makeUniqueTempDir("protoscope-coordinator-restart"));
@@ -177,6 +199,7 @@ int main()
     int failed=0;
     for (const auto& [name,run]:std::initializer_list<std::pair<const char*,void(*)()>>{
         {"rotation_snapshots",rotationAndSnapshots},{"pending_recovery",pendingRecovery},
+        {"sealed_owner_diagnostic",sealedOwnerDiagnostic},
         {"restart_recording",restartRecording},{"store_rotation_handoff",storeRotationAndHandoff},
         {"schema_change_partial_switch",schemaChangeAndFailedSwitch},{"cleanup_headroom",cleanupHeadroom}}) {
         try {run();std::cout<<"[PASS] "<<name<<'\n';}

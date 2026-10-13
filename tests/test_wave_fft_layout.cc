@@ -71,6 +71,32 @@ int main()
                 }
             }
         }
+        // 两种展示共用主图入口；不依赖旧 worker 帧的 enabled 字段判断当前状态。
+        for (const auto mode : {plot::WaveFftDisplayMode::FullSpectrum, plot::WaveFftDisplayMode::CursorSplit}) {
+            wave.view.fft.displayMode = mode;
+            for (int state = 0; state < 3; ++state) {
+                wave.view.fft.enabled = state != 0;
+                wave.view.sampleFrequencyHz = state == 1 ? 0 : 1024;
+                frame.fftFrame = nullptr;
+                for (int n = 0; n < 3; ++n) {
+                    ImGui::NewFrame();
+                    ImGui::SetNextWindowPos(ImVec2(0, 0));
+                    ImGui::SetNextWindowSize(ImVec2(640, 420));
+                    ImGui::Begin("FFT 状态回归");
+                    const auto before = ImGui::GetWindowDrawList()->VtxBuffer.Size;
+                    ui::drawWaveFftPlot(wave, frame, true, false);
+                    const auto after = ImGui::GetWindowDrawList()->VtxBuffer.Size;
+                    if (n == 2 && state == 1 && (wave.fftDisplayError != "需要先设置有效采样频率" || after <= before))
+                        throw std::runtime_error("无采样率必须在主图立即绘制明确错误");
+                    if (state != 1 && !wave.fftDisplayError.empty())
+                        throw std::runtime_error("禁用或有效采样率等待不应误报缺采样率");
+                    if (n == 2 && state == 2 && after <= before)
+                        throw std::runtime_error("首次等待必须在主图绘制计算状态");
+                    ImGui::End();
+                    ImGui::Render();
+                }
+            }
+        }
         std::cout << "FFT pending/ready geometry stable across sizes and layouts\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

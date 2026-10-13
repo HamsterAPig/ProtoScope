@@ -103,9 +103,16 @@ void checkOwner(const std::filesystem::path& directory,const std::string& identi
         throw std::runtime_error("volume directory resolves outside its indexed path");
     for (const auto& entry:std::filesystem::directory_iterator(directory)) {
         const auto name=entry.path().filename().string();
-        if (std::filesystem::is_symlink(entry.symlink_status()) || !entry.is_regular_file() ||
-            (name!="owner" && name!="records.sqlite" && name!="records.sqlite-wal" && name!="records.sqlite-shm"))
-            throw std::runtime_error("unrecognized or linked file in sealed volume");
+        const auto status=entry.symlink_status();
+        const bool linked=std::filesystem::is_symlink(status);
+        const bool regular=entry.is_regular_file();
+        if (linked || !regular ||
+            (name!="owner" && name!="records.sqlite" && name!="records.sqlite-wal" && name!="records.sqlite-shm")) {
+            // 只追加条目相对名与类型，保留拒绝条件；不读取可疑文件内容。
+            throw std::runtime_error("unrecognized or linked file in sealed volume: entry="+name+
+                ", type="+std::to_string(static_cast<int>(status.type()))+
+                ", linked="+(linked ? "true":"false")+", regular="+(regular ? "true":"false"));
+        }
     }
     std::ifstream owner(directory/"owner",std::ios::binary);
     std::string marker(128,'\0');

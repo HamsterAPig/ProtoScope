@@ -22,6 +22,11 @@ struct ReceiveRow {
     std::string endpoint{};
     std::vector<std::uint8_t> bytes{};
     std::string message{};
+    // 原始 TX 写入状态需与字节共显；系统消息和解析帧消息仍沿用原有格式。
+    bool messageIsWriteStatus{false};
+    std::uint64_t displayPosition{0};
+    // 接纳时共享不可变 profile 基线；字节由本行持有，历史任务跨轮只保存位置。
+    std::shared_ptr<const std::vector<plot::RawCaptureEvent>> historyProfiles;
 };
 
 struct DockHistoryLimits {
