@@ -172,6 +172,8 @@ config::AppConfig Application::captureConfig() const
     captured.gui.sendHistoryLimit = runtimeConfig_.gui.sendHistoryLimit;
     captured.gui.luaDockLayoutDebug = runtimeConfig_.gui.luaDockLayoutDebug;
     captured.gui.replayRawHistoryOnSchemaSwitch = runtimeConfig_.gui.replayRawHistoryOnSchemaSwitch;
+    captured.gui.historyOnParsedSwitch = runtimeConfig_.gui.historyOnParsedSwitch;
+    captured.gui.historyScope = runtimeConfig_.gui.historyScope;
     captured.protocol.tx = runtimeConfig_.protocol.tx;
     captured.app.language = runtimeConfig_.app.language;
     captured.receive = runtimeConfig_.receive;
@@ -317,6 +319,8 @@ bool Application::applyProtocolLoadResult(const std::string& resolvedDirText,
 
 void Application::refreshTransferFrameDisplayAfterProtocolReload()
 {
+    // 协议变更使历史切换任务/旧确认失效，不能把过期结果提交到新 schema。
+    invalidateHistorySwitchWork("协议变更");
     if (dockStore_.receiveState().displayMode == dock::TransferLogDisplayMode::ParsedFrames) {
         rebuildTransferFrameRows();
     } else {
@@ -350,6 +354,10 @@ bool Application::pumpOnce()
         changed = applyScriptOutputBatch(scripting::ScriptRuntimeOutputBatch{}) || changed;
     }
     changed = flushPendingTransferFrameRows(transferFrameRowsPerPump()) || changed;
+    if (historyRebuild_.has_value()) {
+        // 历史重建任务与实时数据共用主循环：新事件/字节先经 appendTransferRow 入 pending，再与重建结果整体替换。
+        pumpHistoryRebuild();
+    }
     syncDockState();
     updateAdaptivePerformance();
     return changed;

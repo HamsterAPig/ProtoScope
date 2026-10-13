@@ -196,6 +196,18 @@ public:
     void refreshSelectedElfSymbolControls();
     void rebuildTransferFrameRows();
     void activateParsedTransferLogView();
+    // 清空收发记录与已解析帧缓存；同时使历史切换任务/旧确认失效。
+    void clearTransferLogHistory();
+    // 原始->逐帧切换的三态历史策略入口：宿主确认 modal 通过 resolveHistorySwitch/cancelHistorySwitch 回写结果。
+    void requestParsedHistorySwitch();
+    void resolveHistorySwitch(config::TransferLogHistoryOnParsedSwitch decision);
+    void cancelHistorySwitch();
+    [[nodiscard]] bool historySwitchConfirmationPending() const { return historySwitchConfirmationOpen_; }
+    [[nodiscard]] std::uint64_t historySwitchConfirmationId() const { return historySwitchConfirmationId_; }
+    [[nodiscard]] config::TransferLogHistoryOnParsedSwitch historySwitchStrategy() const {
+        return runtimeConfig_.gui.historyOnParsedSwitch;
+    }
+    [[nodiscard]] config::TransferLogHistoryScope historySwitchScope() const { return runtimeConfig_.gui.historyScope; }
     logging::LoggingFacade& logger();
     const logging::LoggingFacade& logger() const;
     std::vector<scripting::DialogRequest> drainDialogRequests();
@@ -243,6 +255,43 @@ private:
         transport::ConnectionContext context{};
         std::vector<std::uint8_t> bytes{};
         std::size_t offset{0};
+    };
+
+    // 历史重建范围输入：记录顺序的 RX/TX 字节 + profile 事件；不引入范围外字节。
+    struct HistoryRebuildSourceEvent {
+        plot::RawCaptureEventType type{plot::RawCaptureEventType::RxBytes};
+        std::string direction;
+        std::uint64_t timestampMs{0};
+        std::string endpoint;
+        plot::RawCaptureProfileEventData profile;
+        std::uint64_t position{0};
+        std::size_t byteSize{0};
+        std::size_t rowIndex{0};
+        std::uint64_t rowFrontPosition{0};
+    };
+
+    // 历史重建任务的唯一状态载体；来源键 = rawCaptureReplay_.generation + 导入代次标记。
+    struct HistoryRebuildTask {
+        bool hasLoadedTimeline{false};
+        std::uint64_t generation{0};
+        std::size_t upperBound{0};
+        std::size_t eventCursor{0};
+        std::size_t byteOffset{0};
+        std::size_t sourceCount{0};
+        std::uint64_t firstPosition{0};
+        std::uint64_t rowBegin{0};
+        std::uint64_t rowEnd{0};
+        std::size_t rowProfileCursor{0};
+        std::optional<dock::ReceiveRow> currentRow;
+        std::shared_ptr<const std::vector<plot::RawCaptureEvent>> boundaryProfiles;
+        std::size_t boundaryProfileCursor{0};
+        bool boundaryProfilesStarted{false};
+        bool rowsOnly{false};
+        bool legacyPayload{false};
+        std::deque<HistoryRebuildSourceEvent> following;
+        std::size_t followingBytes{0};
+        std::optional<TransferFrameParserState> parser;
+        std::deque<dock::ReceiveRow> rebuilt;
     };
 
     struct StreamBufferAlertState {
@@ -447,6 +496,15 @@ private:
     void appendTransferFrameRows(const dock::ReceiveRow& sourceRow);
     void enqueueTransferFrameRows(std::vector<dock::ReceiveRow> rows);
     void trimPendingTransferFrameRowsToLimit();
+    // 三态历史切换与分批重建实现。
+    std::uint64_t historySwitchGeneration() const;
+    void invalidateHistorySwitchWork(std::string_view reason);
+    bool beginHistoryRebuild(config::TransferLogHistoryScope scope, std::uint64_t generation, std::size_t upperBound);
+    bool pumpHistoryRebuild();
+    bool historySourceAvailable() const;
+    void rememberTransferProfile(const plot::RawCaptureEvent& event);
+    void appendHistoryReceiveRow(dock::ReceiveRow row);
+    bool queueHistoryFollowing(HistoryRebuildSourceEvent event);
     void applyHistoryLimits(const config::GuiLogHistoryConfig& config);
     [[nodiscard]] dock::ReceiveRow makeTransferFrameRow(const dock::ReceiveRow& sourceRow,
                                                         const scripting::StreamParsedFrame& frame) const;
@@ -497,12 +555,22 @@ private:
     // 按位置冻结两组名称，短前缀重建不丢失尚未出现的位置。
     std::vector<std::string> importedActualLabels_;
     std::vector<std::string> importedDefaultLabels_;
+    // 历史切换来源键：导入用单调计数器；live 用稳定计数器，仅在导入/seek/协议变更时递增，
+    // 避免实时事件使进行中的历史重建被误失效。
     std::optional<std::uint64_t> importedRebuildGeneration_;
+    std::uint64_t importCounter_{0};
+    std::uint64_t liveGeneration_{0}; // 所有显式失效入口递增；字节接纳不改变代次。
+    std::uint64_t transferPosition_{0};
+    std::shared_ptr<const std::vector<plot::RawCaptureEvent>> transferProfiles_;
     std::size_t rawCaptureReplayChunkBytes_{1024U};
     std::size_t rawCaptureReplayPendingBytes_{0U};
     std::vector<std::uint8_t> rawCaptureReplayBatchBytes_;
     transport::ConnectionContext rawCaptureReplayBatchContext_{};
     bool replayReceiveHistory_{false};
+    // 原始->逐帧切换的三态状态机：确认 modal 打开标记 + 历史重建任务（唯一所有者）。
+    bool historySwitchConfirmationOpen_{false};
+    std::uint64_t historySwitchConfirmationId_{0};
+    std::optional<HistoryRebuildTask> historyRebuild_;
     std::deque<transport::TransportEvent> pendingTransportEvents_;
     std::deque<PendingRxBytes> pendingRxByteChunks_;
     std::deque<dock::ReceiveRow> pendingTransferFrameRows_;

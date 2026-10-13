@@ -586,6 +586,7 @@ void Application::appendRawCaptureEvent(const plot::RawCaptureEvent& event)
     if (rawCapture.events.empty()) retainedRawBytes_ = 0;
     rawCapture.events.push_back(event);
     rawCapture.events.back().sequence = ++rawEventSequence_;
+    rawCapture.events.back().displayPosition = ++transferPosition_;
     rawCapture.source = "live";
     if (event.type == plot::RawCaptureEventType::TxBytes) rawCapture.rxOnly = false;
     if (rawCapture.capturedAtMs == 0) rawCapture.capturedAtMs = event.timestampMs;
@@ -604,6 +605,10 @@ void Application::appendRawCaptureEvent(const plot::RawCaptureEvent& event)
     const auto limit = runtimeConfig_.gui.rawCapture.liveLimitBytes;
     // RX/TX 共用保留预算，配置事件仍保留；文件导入不经过此实时裁剪入口。
     if (retainedRawBytes_ > limit) {
+        if (historyRebuild_ && !historyRebuild_->rowsOnly) {
+            invalidateHistorySwitchWork("底层历史达到裁剪预算");
+            dockStore_.waveState().statusMessage = "历史重建已取消：底层历史达到裁剪预算";
+        }
         rawCapture.events = trimRawCaptureEventsToPayloadWindow(rawCapture.events, retainedRawBytes_ - limit, true);
         retainedRawBytes_ = limit;
         rawCapture.truncated = true;
@@ -836,6 +841,8 @@ bool Application::pumpDataImport()
                 }
             } else for (auto& event : batch->events) {
                 auto& capture = wave.rawCapture;
+                event.displayPosition = ++transferPosition_;
+                rememberTransferProfile(event);
                 const bool bytesEvent = event.type == plot::RawCaptureEventType::RxBytes ||
                                         event.type == plot::RawCaptureEventType::TxBytes;
                 if (event.type == plot::RawCaptureEventType::TxBytes) capture.rxOnly = false;
@@ -853,7 +860,9 @@ bool Application::pumpDataImport()
                     // 大事件必须先完整组装，再同时提交 Lua 与原始记录，保持一个现代事件一个 callback。
                     receive.rows.push_back({.timestampMs = event.timestampMs,
                         .direction = event.type == plot::RawCaptureEventType::TxBytes ? "TX" : "RX",
-                        .endpoint = event.endpoint, .bytes = event.bytes, .message = event.writeStatus});
+                        .endpoint = event.endpoint, .bytes = event.bytes, .message = event.writeStatus,
+                        .messageIsWriteStatus = event.type == plot::RawCaptureEventType::TxBytes,
+                        .displayPosition = event.displayPosition, .historyProfiles = transferProfiles_});
                 }
                 dataTransfer_.submitted(1);
                 ++receive.rowsVersion;
@@ -962,7 +971,8 @@ bool Application::startDataExport(const std::filesystem::path& path, int content
                                     event.type == plot::RawCaptureEventType::TxBytes;
             dock::ReceiveRow row{.timestampMs = event.timestampMs,
                 .direction = event.type == plot::RawCaptureEventType::TxBytes ? "TX" : "RX",
-                .endpoint = event.endpoint, .bytes = event.bytes, .message = event.writeStatus};
+                .endpoint = event.endpoint, .bytes = event.bytes, .message = event.writeStatus,
+                        .messageIsWriteStatus = event.type == plot::RawCaptureEventType::TxBytes};
             if (bytesEvent && recordRange == 1 &&
                 !dock::matchesLogFilter(row, dockStore_.receiveState().filter, true)) continue;
             if (recordRange == 2 && ((bytesEvent && event.timestampMs < recordBeginMs) ||
@@ -1159,6 +1169,9 @@ bool Application::restoreSessionPackageContext(const session::SessionPackageData
     loaded.config.configPath = runtimeConfig_.configPath;
     loaded.config.gui.theme = previousConfig.gui.theme;
     loaded.config.gui.fileDialogs = previousConfig.gui.fileDialogs;
+    // 历史切换策略/范围是本机展示偏好，现场包恢复不得覆盖。
+    loaded.config.gui.historyOnParsedSwitch = previousConfig.gui.historyOnParsedSwitch;
+    loaded.config.gui.historyScope = previousConfig.gui.historyScope;
     // BrowseRaw/CurrentProtocol 不允许包内配置替换当前协议；只恢复其余现场配置。
     const auto persistentProtocolConfig = loaded.config.protocol;
     loaded.config.protocol = previousConfig.protocol;

@@ -3271,6 +3271,7 @@ void test_application_raw_capture_replay_populates_parsed_receive_rows()
 
     application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
     application.activateParsedTransferLogView();
+    application.pumpOnce(); // 历史重建按主循环预算提交，不同步无界 flush。
     require(receive.frameRows.size() == 1U, "切换逐帧视图不应清空预生成的回放帧");
 
     require(application.seekRawCaptureReplay(1, error), "逐帧回放应可向后定位到半帧位置");
@@ -3344,6 +3345,7 @@ end
     const auto beforeViewSwitch = countScriptEvents(application.docks().scriptState(), "offline_boundary");
     application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
     application.activateParsedTransferLogView();
+    application.pumpOnce(); // 历史重建按主循环预算提交，不同步无界 flush。
     require(countScriptEvents(application.docks().scriptState(), "offline_boundary") == beforeViewSwitch,
             "原始/逐帧视图切换不得增加 callback");
     require(transportState->sentBytes.empty(), "BrowseRaw 中 TX 和脚本发送都不得触达物理 transport");
@@ -4610,6 +4612,7 @@ void test_application_raw_capture_import_updates_last_pump_diagnostics()
     require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可加载");
     application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
     application.activateParsedTransferLogView();
+    application.pumpOnce(); // 历史重建按主循环预算提交，不同步无界 flush。
 
     application.openTransport();
     application.pumpOnce();
@@ -4680,6 +4683,7 @@ void test_application_reload_rebuilds_frame_rows_with_count_expression()
     require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "count 表达式协议应可加载");
     application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
     application.activateParsedTransferLogView();
+    application.pumpOnce(); // 历史重建按主循环预算提交，不同步无界 flush。
     application.openTransport();
     require(waitUntil([&application] {
                 application.pumpOnce();
@@ -4717,7 +4721,7 @@ void test_application_transfer_log_frame_view_waits_for_rx_full_frame()
     require(application.initialize(), "应用初始化失败");
     require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可加载");
     auto config = application.captureConfig();
-    config.gui.replayRawHistoryOnSchemaSwitch = true;
+    config.gui.historyOnParsedSwitch = protoscope::config::TransferLogHistoryOnParsedSwitch::UseHistory;
     require(application.applyConfig(config), "旧 raw 历史回放配置应可应用");
 
     application.openTransport();
@@ -4746,6 +4750,7 @@ void test_application_transfer_log_frame_view_waits_for_rx_full_frame()
     require(receive.frameRows.empty(), "RawChunks 模式不应实时生成逐帧行");
     application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
     application.activateParsedTransferLogView();
+    application.pumpOnce(); // 历史重建按主循环预算提交，不同步无界 flush。
     require(receive.frameRows.size() == 1, "切换 ParsedFrames 后应按 raw 历史回放出一行");
     require(receive.frameRows.front().bytes == frame, "逐帧行应保存完整原始帧字节");
     require(receive.frameRows.front().message.find("stream_sample") != std::string::npos, "逐帧行应包含帧名");
@@ -4765,7 +4770,7 @@ void test_application_transfer_log_frame_view_keeps_unmatched_tx_raw()
     require(application.initialize(), "应用初始化失败");
     require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可加载");
     auto config = application.captureConfig();
-    config.gui.replayRawHistoryOnSchemaSwitch = true;
+    config.gui.historyOnParsedSwitch = protoscope::config::TransferLogHistoryOnParsedSwitch::UseHistory;
     require(application.applyConfig(config), "旧 raw 历史回放配置应可应用");
     application.openTransport();
     application.pumpOnce();
@@ -4777,6 +4782,7 @@ void test_application_transfer_log_frame_view_keeps_unmatched_tx_raw()
     require(receive.frameRows.empty(), "RawChunks 模式不应实时生成 TX 逐帧行");
     application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
     application.activateParsedTransferLogView();
+    application.pumpOnce(); // 历史重建按主循环预算提交，不同步无界 flush。
     require(receive.frameRows.size() == 1, "切换 ParsedFrames 后应保留无法匹配 schema 的 TX 原始行");
     require(receive.frameRows.front().direction == "TX", "TX fallback 行方向应保持 TX");
     require(receive.frameRows.front().bytes == std::vector<std::uint8_t>({0x01, 0x02, 0x03}),
@@ -4795,6 +4801,9 @@ void test_application_switching_to_parsed_view_defaults_to_new_stream_only()
     });
     require(application.initialize(), "应用初始化失败");
     require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "临时 stream 协议应可加载");
+    auto switchConfig = application.captureConfig();
+    switchConfig.gui.historyOnParsedSwitch = protoscope::config::TransferLogHistoryOnParsedSwitch::SkipHistory;
+    require(application.applyConfig(switchConfig), "新数据独立解析场景明确使用不使用历史策略");
 
     application.openTransport();
     application.pumpOnce();
@@ -4812,6 +4821,7 @@ void test_application_switching_to_parsed_view_defaults_to_new_stream_only()
 
     application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
     application.activateParsedTransferLogView();
+    application.pumpOnce(); // 历史重建按主循环预算提交，不同步无界 flush。
     require(application.docks().receiveState().frameRows.empty(), "旧 raw 历史只有半帧时不应凭空生成逐帧行");
 
     const auto frame = makeRawImportStreamFrame(0x34);
@@ -4838,9 +4848,12 @@ void test_application_switching_to_parsed_view_can_replay_old_raw_history()
     require(application.initialize(), "应用初始化失败");
 
     auto config = application.captureConfig();
-    config.gui.replayRawHistoryOnSchemaSwitch = true;
+    config.gui.historyOnParsedSwitch = protoscope::config::TransferLogHistoryOnParsedSwitch::UseHistory;
     config.protocol.selectedDir = protocolDir.path().generic_string();
     require(application.applyConfig(config), "schema 切换回放配置应可应用");
+    // applyConfig 更新的路径不等于 worker 已加载的协议；明确加载本测试声明的 schema。
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "临时 stream 协议应可加载");
+    require(application.rawCaptureReplayStatus().hasStreamSchema, "接纳字节前必须建立预期 stream schema 的 UI parser");
 
     application.openTransport();
     application.pumpOnce();
@@ -4856,14 +4869,41 @@ void test_application_switching_to_parsed_view_can_replay_old_raw_history()
 
     application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
     application.activateParsedTransferLogView();
+    application.pumpOnce(); // 历史重建按主循环预算提交，不同步无界 flush。
     require(application.docks().receiveState().frameRows.empty(), "旧 raw 历史只有半帧时不应凭空生成逐帧行");
 
     transportState->pendingEvents.push_back(
         protoscope::transport::TransportBytesEvent{ctx, makeRawImportStreamFrame(0x56)});
     application.pumpOnce();
 
-    require(application.docks().receiveState().frameRows.empty(),
-            "开启旧历史回放后，旧半帧应继续占住 parser，复现 raw->schema 切换卡住场景");
+    require(application.docks().receiveState().frameRows.size() == 1 &&
+                application.docks().receiveState().frameRows.front().bytes == makeRawImportStreamFrame(0x56),
+            "历史候选补入新字节后 CRC 失败，必须重新同步并恰好生成随后完整新帧");
+
+    // 合法尾半帧必须连续交接，而非为了重新同步用例丢弃所有历史尾缓冲。
+    application.requestParsedHistorySwitch(); // 切回原始并使上一轮历史任务失效。
+    application.clearTransferLogHistory();
+    const auto continuedFrame = makeRawImportStreamFrame(0x67);
+    const std::vector<std::uint8_t> prefix(continuedFrame.begin(), continuedFrame.begin() + 4);
+    transportState->pendingEvents.push_back(protoscope::transport::TransportBytesEvent{ctx, prefix});
+    application.pumpOnce();
+    require(hasReceiveBytes(application.docks().receiveState(), prefix), "原始视图必须接纳合法历史帧前缀");
+    application.requestParsedHistorySwitch();
+    application.pumpOnce();
+    require(application.docks().receiveState().frameRows.empty(), "合法历史尾半帧未补齐前不得生成帧");
+
+    const auto followingFrame = makeRawImportStreamFrame(0x78);
+    std::vector<std::uint8_t> continuation(continuedFrame.begin() + 4, continuedFrame.end());
+    continuation.insert(continuation.end(), followingFrame.begin(), followingFrame.end());
+    transportState->pendingEvents.push_back(protoscope::transport::TransportBytesEvent{ctx, continuation});
+    application.pumpOnce();
+    const auto& continuedRows = application.docks().receiveState().frameRows;
+    require(continuedRows.size() == 2 && continuedRows[0].bytes == continuedFrame &&
+                continuedRows[1].bytes == followingFrame,
+            "合法历史前缀加剩余字节必须先补成一帧，随后完整新帧按序生成且不丢不重");
+    require(continuedRows[0].message.find("value=103") != std::string::npos &&
+                continuedRows[1].message.find("value=120") != std::string::npos,
+            "连续历史帧及随后新完整帧必须由预期 schema 解析字段");
 }
 
 void test_lua_contract_backpressure_stale_connection_rx_is_discarded_without_side_effects()
@@ -5500,6 +5540,7 @@ void test_application_rx_events_are_processed_with_budget()
     require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可加载");
     application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
     application.activateParsedTransferLogView();
+    application.pumpOnce(); // 历史重建按主循环预算提交，不同步无界 flush。
 
     application.openTransport();
     const protoscope::transport::ConnectionContext ctx{
@@ -5544,6 +5585,7 @@ void test_application_large_rx_event_drains_by_byte_budget()
     require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可重新加载");
     application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
     application.activateParsedTransferLogView();
+    application.pumpOnce(); // 历史重建按主循环预算提交，不同步无界 flush。
 
     application.openTransport();
     application.pumpOnce();
@@ -5597,6 +5639,7 @@ void test_application_comm_pressure_debug_log_respects_log_level()
         require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可重新加载");
         application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
         application.activateParsedTransferLogView();
+    application.pumpOnce(); // 历史重建按主循环预算提交，不同步无界 flush。
 
         application.openTransport();
         application.pumpOnce();
@@ -5657,6 +5700,7 @@ void test_application_responsive_disconnect_discards_realtime_backlog()
     require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可重新加载");
     application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
     application.activateParsedTransferLogView();
+    application.pumpOnce(); // 历史重建按主循环预算提交，不同步无界 flush。
 
     application.openTransport();
     application.pumpOnce();
@@ -5702,6 +5746,7 @@ void test_application_complete_disconnect_keeps_realtime_backlog()
     require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可重新加载");
     application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
     application.activateParsedTransferLogView();
+    application.pumpOnce(); // 历史重建按主循环预算提交，不同步无界 flush。
 
     application.openTransport();
     application.pumpOnce();
@@ -5757,6 +5802,7 @@ void test_application_transfer_frame_rows_drain_after_input_stops()
     require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可加载");
     application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
     application.activateParsedTransferLogView();
+    application.pumpOnce(); // 历史重建按主循环预算提交，不同步无界 flush。
 
     application.openTransport();
     application.pumpOnce();

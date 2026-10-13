@@ -845,8 +845,8 @@ void GuiRuntime::drawTransferLogSection(float logHeight)
                                           parsedFrames ? "当前按 Lua stream() schema 逐帧显示；点击切回运输层原始分块。"
                                                        : "当前按运输层原始分块显示；点击解析为 Lua stream() 帧列表。",
                                           parsedFrames)) {
-                receive.displayMode =
-                    parsedFrames ? dock::TransferLogDisplayMode::RawChunks : dock::TransferLogDisplayMode::ParsedFrames;
+                // 三态历史策略入口：ask 弹宿主确认，use_history 自动重建，skip_history 只清半帧；确认前保持原始模式。
+                application_.requestParsedHistorySwitch();
             }
 
             ImGui::TableSetColumnIndex(7);
@@ -875,8 +875,8 @@ void GuiRuntime::drawTransferLogSection(float logHeight)
             ImGui::TableSetColumnIndex(11);
             if (drawTransferToolbarDangerButton(PROTOSCOPE_ICON_TRASH " 清空",
                                                 "清空收发记录和已解析帧缓存；不会断开连接。")) {
-                application_.docks().clearReceiveRows();
-                application_.rebuildTransferFrameRows();
+                // 统一走 Application 清空入口：使历史切换任务/旧确认失效，并清原始行与逐帧展示。
+                application_.clearTransferLogHistory();
             }
 
             ImGui::EndTable();
@@ -891,9 +891,12 @@ void GuiRuntime::drawTransferLogSection(float logHeight)
             filteredLogRowsCached(transferLogRowsCache_, visibleRows, visibleRowsVersion, receive.filter, true);
 
         const bool hasStreamSchema = application_.rawCaptureReplayStatus().hasStreamSchema;
-        const char* emptyMessage = receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames
-                                       ? (hasStreamSchema ? "暂无已解析帧" : "当前协议没有 stream schema，无法生成逐帧记录")
-                                       : "暂无 TX/RX 原始数据";
+        // 原始数据/帧仍存在时，空结果来自筛选，不能误提示暂无数据或修改用户筛选偏好。
+        const char* emptyMessage = !visibleRows.empty() && filteredRows.rows.empty()
+                                       ? "没有匹配当前筛选条件的记录"
+                                       : (receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames
+                                              ? (hasStreamSchema ? "暂无已解析帧" : "当前协议没有 stream schema，无法生成逐帧记录")
+                                              : "暂无 TX/RX 原始数据");
         drawTransferLogRows("transfer_rows",
                             filteredRows.rows,
                             receive.showTimestamps,
@@ -903,6 +906,44 @@ void GuiRuntime::drawTransferLogSection(float logHeight)
                             filteredRows.endpointWidth);
     }
     ImGui::EndChild();
+
+    // 宿主确认 modal：原始->逐帧切换询问（使用历史/不使用历史/取消）。确认前保持原始模式，采集不停止。
+    const bool confirmationPending = application_.historySwitchConfirmationPending();
+    const auto confirmationId = application_.historySwitchConfirmationId();
+    if (confirmationPending && !ImGui::IsPopupOpen("##transfer_history_switch")) {
+        transferHistoryModalId_ = confirmationId;
+        ImGui::OpenPopup("##transfer_history_switch");
+    }
+    if (ImGui::BeginPopupModal("##transfer_history_switch", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+        // Application 失效不等于 ImGui 弹窗关闭；旧窗口不得操作后来同帧产生的新请求。
+        if (!confirmationPending || transferHistoryModalId_ != confirmationId) {
+            ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+            return;
+        }
+        const bool scopeFull = application_.historySwitchScope() == config::TransferLogHistoryScope::RetainedCapture;
+        ImGui::TextUnformatted("切换为逐帧视图");
+        ImGui::TextWrapped("是否使用已有原始历史重建逐帧记录？范围：%s。",
+                           scopeFull ? "底层完整采集/导入历史（不保证找回已裁剪字节、不自动重读文件）"
+                                     : "收发面板当前保留的原始 RX/TX 行");
+        ImGui::TextWrapped("清空面板不删除底层仍保留的采集记录；选择底层范围并同意后可恢复其逐帧展示。已裁剪的字节无法恢复。");
+        if (ImGui::Button("使用历史")) {
+            application_.resolveHistorySwitch(config::TransferLogHistoryOnParsedSwitch::UseHistory);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("不使用历史")) {
+            application_.resolveHistorySwitch(config::TransferLogHistoryOnParsedSwitch::SkipHistory);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("取消") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            // Escape 等同取消：保持原始模式。
+            application_.cancelHistorySwitch();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 }
 
 void GuiRuntime::drawTransferSendSection(float minPayloadHeight, const ImGuiStyle& style)

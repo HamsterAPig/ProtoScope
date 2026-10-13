@@ -71,8 +71,7 @@ struct GuiRuntimeTestAccess {
         auto frame = [&] {
             runtime.processSettingsActions();
             beginFrame(); runtime.drawApplicationSettings(); endFrame();
-        };
-        frame(); frame();
+        };        frame(); frame();
         auto* settings = ImGui::FindWindowByName("应用设置");
         require(settings && settings->Active && settings->DockId == 0, "settings floating single instance");
         require((settings->Flags & ImGuiWindowFlags_NoSavedSettings) != 0, "settings excluded from saved layouts");
@@ -185,6 +184,294 @@ struct GuiRuntimeTestAccess {
             endFrame();
         }
         application.applyConfig(original);
+    }
+    // Logging 设置页必须提供逐帧历史策略与范围枚举控件：白名单/校验/恢复默认已就位，仅 UI 入口缺失会阻断用户配置。
+    static void verifyLoggingHistorySwitchSettings(app::Application& application, GuiRuntime& runtime)
+    {
+        const auto original = application.captureConfig();
+        runtime.openApplicationSettings();
+        runtime.settingsPage_ = config::SettingsPage::Logging;
+        auto frame = [&] {
+            runtime.processSettingsActions();
+            beginFrame(); runtime.drawApplicationSettings(); endFrame();
+        };
+        frame(); frame();
+        require(runtime.settingsDraft_.has_value(), "logging settings draft must exist");
+        auto& draft = runtime.settingsDraft_->value;
+        // 直接改草稿枚举，再应用；断言应用路径与白名单生效。
+        draft.gui.historyOnParsedSwitch = config::TransferLogHistoryOnParsedSwitch::UseHistory;
+        draft.gui.historyScope = config::TransferLogHistoryScope::RetainedCapture;
+        runtime.applySettingsDraft(false, false);
+        frame();
+        require(application.captureConfig().gui.historyOnParsedSwitch ==
+                    config::TransferLogHistoryOnParsedSwitch::UseHistory &&
+                application.captureConfig().gui.historyScope == config::TransferLogHistoryScope::RetainedCapture,
+            "logging page history switch enums must apply to runtime config");
+        // 恢复默认：枚举回到 ask / retained_rows。
+        runtime.settingsDraft_->value.gui.historyOnParsedSwitch =
+            config::TransferLogHistoryOnParsedSwitch::Ask;
+        runtime.settingsDraft_->value.gui.historyScope = config::TransferLogHistoryScope::RetainedRows;
+        runtime.applySettingsDraft(false, false);
+        frame();
+        require(application.captureConfig().gui.historyOnParsedSwitch ==
+                    config::TransferLogHistoryOnParsedSwitch::Ask &&
+                application.captureConfig().gui.historyScope == config::TransferLogHistoryScope::RetainedRows,
+            "logging page history switch enums must restore to defaults");
+        runtime.settingsOpen_ = false;
+        application.applyConfig(original);
+    }
+    // 真实鼠标路径验证三态历史切换：原始->逐帧按钮打开宿主确认 modal，
+    // 使用历史/不使用历史/取消（Escape）分别走通 Application 状态机与分批重建。
+    static void verifyTransferHistorySwitchModal(app::Application& application, GuiRuntime& runtime)
+    {
+        using protoscope::config::TransferLogHistoryOnParsedSwitch;
+        require(application.initialize(), "transfer history UI test init failed");
+        const auto protocol = std::filesystem::absolute(std::filesystem::path(__FILE__)).parent_path() /
+            "fixtures/protocols/stream_frame_only";
+        require(application.reloadProtocolDirectory(protocol.generic_string(), true), "stream fixture load failed");
+        // 载入含 RX 原始字节的 timeline，让“有历史可重建”路径可点。
+        plot::RawCaptureFileData capture;
+        capture.source = "probe";
+        capture.events = {
+            {.type = plot::RawCaptureEventType::RxBytes, .timestampMs = 10, .bytes = {0xAA, 0x55, 0x00, 0x07, 0x00, 0x00}, .endpoint = "probe"},
+            {.type = plot::RawCaptureEventType::RxBytes, .timestampMs = 20, .bytes = {0xAA, 0x55, 0x00, 0x08, 0x00, 0x00}, .endpoint = "probe"},
+        };
+        std::string error;
+        require(application.loadRawCaptureReplayTimeline(capture, error), error.c_str());
+        require(application.seekRawCaptureReplay(2, error), error.c_str());
+        for (int i = 0; i < 200 && application.rawCaptureReplayStatus().eventIndex < 2; ++i) application.pumpOnce();
+        require(application.rawCaptureReplayStatus().eventIndex == 2, "timeline prefix did not reach eventIndex=2");
+        require(application.docks().receiveState().displayMode == dock::TransferLogDisplayMode::RawChunks,
+                "timeline browse starts in raw mode");
+
+        auto& io = ImGui::GetIO();
+        io.DisplaySize = ImVec2(1280, 700);
+        auto frame = [&](std::string* renderedText = nullptr) {
+            application.pumpOnce();
+            beginFrame();
+            ImGui::SetNextWindowPos(ImVec2(0, 0));
+            ImGui::SetNextWindowSize(io.DisplaySize);
+            ImGui::Begin("TransferTest", nullptr, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoResize);
+            if (renderedText) ImGui::LogToBuffer();
+            runtime.drawTransferLogSection(400.0F);
+            if (renderedText) {
+                *renderedText = GImGui->LogBuffer.c_str();
+                ImGui::LogFinish();
+            }
+            ImGui::End();
+            endFrame();
+        };
+        // 通过鼠标坐标点击指定矩形中心：位置与按下同一帧输入，释放再一帧。
+        auto clickRect = [&frame](const ImRect& rect) {
+            const auto center = rect.GetCenter();
+            ImGui::GetIO().AddMousePosEvent(center.x, center.y);
+            frame(); // 先让 HoveredWindow 更新；移动与按下不能依赖上一帧的命中窗口。
+            ImGui::GetIO().AddMouseButtonEvent(0, true);
+            frame();
+            ImGui::GetIO().AddMouseButtonEvent(0, false);
+            frame();
+        };
+        // 通过现有 ImGui 导航矩形观察实际绘制项，不猜测表格列宽或固定像素。
+        // 仅定位焦点，激活仍只由真实鼠标按下/释放完成。
+        auto itemRect = [&](ImGuiWindow* window, ImGuiID id) {
+            GImGui->NavWindow = window;
+            ImGui::SetNavID(id, ImGuiNavLayer_Main, window->NavRootFocusScopeId, ImRect());
+            frame();
+            require(GImGui->NavIdIsAlive, "target button must be submitted in rendered frame");
+            return ImGui::WindowRectRelToAbs(window, window->NavRectRel[ImGuiNavLayer_Main]);
+        };
+        auto historyPopupOpen = [] {
+            for (const auto& popup : GImGui->OpenPopupStack) {
+                if (popup.Window && std::strcmp(popup.Window->Name, "##transfer_history_switch") == 0)
+                    return true;
+            }
+            return false;
+        };
+        auto clickItem = [&](const char* label) {
+            frame();
+            auto* modal = ImGui::FindWindowByName("##transfer_history_switch");
+            const bool toolbar = std::strcmp(label, "原始") == 0 || std::strcmp(label, "逐帧") == 0;
+            // release 帧关闭 popup 后 WasActive 仍可能为真；实际弹窗栈才表示当前阻挡状态。
+            const bool popupOpen = historyPopupOpen();
+            const bool confirmationPending = application.historySwitchConfirmationPending();
+            if (toolbar && (popupOpen || confirmationPending)) return false;
+            if (!toolbar) {
+                if (!modal || !modal->Active || !popupOpen || !confirmationPending) return false;
+                clickRect(itemRect(modal, modal->GetID(label)));
+                return true;
+            }
+            // 工具栏按钮 ID 包含 BeginTable 的作用域。
+
+            ImGuiWindow* section = nullptr;
+            for (int n = 0; n < GImGui->Windows.Size; ++n) {
+                ImGuiWindow* window = GImGui->Windows[n];
+                if (window->WasActive && std::strstr(window->Name, "##transfer_log_section") != nullptr) {
+                    section = window;
+                    break;
+                }
+            }
+            if (section == nullptr) return false;
+            const auto tableId = section->GetID("##transfer_log_toolbar");
+            const auto buttonId = ImGui::GetIDWithSeed(label, nullptr, tableId);
+            clickRect(itemRect(section, buttonId));
+            return true;
+        };
+
+        // 用真实绘制文字区分筛选无结果与空数据，不通过清空偏好让数据重新出现。
+        auto& receive = application.docks().receiveState();
+        const auto originalFilter = receive.filter;
+        std::string renderedText;
+        const auto requireNoMatches = [&] {
+            frame(&renderedText);
+            require(runtime.transferLogRowsCache_.rows.empty(), "filter must have no visible matches");
+            require(renderedText.find("没有匹配当前筛选条件的记录") != std::string::npos,
+                    "filtered nonempty history must render the no-matches message");
+            require(renderedText.find("暂无 TX/RX 原始数据") == std::string::npos &&
+                        renderedText.find("暂无已解析帧") == std::string::npos,
+                    "filtered history must not render a no-data message");
+        };
+        receive.filter = {.keyword = "missing-history-keyword", .status = dock::LogStatusFilter::All};
+        requireNoMatches();
+        require(receive.filter.keyword == "missing-history-keyword", "rendering must preserve keyword filter");
+        receive.filter = {.keyword = "", .status = dock::LogStatusFilter::Tx};
+        requireNoMatches();
+        require(receive.filter.status == dock::LogStatusFilter::Tx, "rendering must preserve direction filter");
+        receive.filter = originalFilter;
+
+        // 第一次点击“原始”工具栏按钮：ask 策略打开宿主确认 modal，确认前保持原始模式。
+        for (int i = 0; i < 3; ++i) frame();
+        require(clickItem("原始"), "raw/parsed toolbar button must be clickable");
+        require(application.historySwitchConfirmationPending(), "toolbar click must open history switch confirmation");
+        require(application.docks().receiveState().displayMode == dock::TransferLogDisplayMode::RawChunks,
+                "confirmation must keep raw mode before resolve");
+        require(ImGui::FindWindowByName("##transfer_history_switch") != nullptr,
+                "history switch modal must be visible");
+        // 打开状态下直接点“原始”不得重复入队或关闭 modal。
+        require(!clickItem("原始"), "background toolbar click must not reach while modal is open");
+        require(application.historySwitchConfirmationPending(), "modal must stay open after background click");
+
+        // Escape 等同取消：保持原始模式。
+        io.AddKeyEvent(ImGuiKey_Escape, true);
+        frame();
+        io.AddKeyEvent(ImGuiKey_Escape, false);
+        frame();
+        require(!application.historySwitchConfirmationPending() &&
+                    application.docks().receiveState().displayMode == dock::TransferLogDisplayMode::RawChunks,
+                "Escape must cancel and keep raw mode");
+
+        // 再次点击按钮并选择“不使用历史”：切到逐帧但不重建。
+        require(clickItem("原始"), "second toolbar click must reopen confirmation");
+        require(application.historySwitchConfirmationPending(), "confirmation must reopen");
+        const auto framesBeforeReject = application.docks().receiveState().frameRows.size();
+        require(clickItem("不使用历史"), "skip-history button must be clickable");
+        require(!application.historySwitchConfirmationPending(), "skip-history must close modal");
+        require(!historyPopupOpen(), "skip-history release frame must close the real popup stack");
+        require(application.docks().receiveState().displayMode == dock::TransferLogDisplayMode::ParsedFrames,
+                "skip-history must switch to parsed view");
+        require(application.docks().receiveState().frameRows.size() == framesBeforeReject,
+                "skip-history must preserve existing frames without rebuilding");
+
+        // 切回原始后再点击按钮并选择“使用历史”：按 timeline 前缀分批重建并替换逐帧结果。
+        require(clickItem("逐帧"), "parsed->raw switch must go through directly");
+        require(application.docks().receiveState().displayMode == dock::TransferLogDisplayMode::RawChunks,
+                "switch back to raw must be direct");
+        require(!application.historySwitchConfirmationPending() && !historyPopupOpen(),
+                "parsed->raw mouse click must not open a confirmation");
+        require(clickItem("原始"), "third toolbar click must reopen confirmation");
+        require(application.historySwitchConfirmationPending(), "confirmation must reopen for accept path");
+        require(clickItem("使用历史"), "use-history button must be clickable");
+        require(!application.historySwitchConfirmationPending(), "use-history must close modal");
+        for (int i = 0; i < 50 && application.docks().receiveState().frameRows.empty(); ++i) application.pumpOnce();
+        require(!application.docks().receiveState().frameRows.empty(), "use-history must rebuild frames");
+        for (const auto& row : application.docks().receiveState().frameRows) {
+            require(row.timestampMs == 10 || row.timestampMs == 20, "future events must not enter history frames");
+        }
+
+        receive.filter = {.keyword = "missing-history-keyword", .status = dock::LogStatusFilter::All};
+        requireNoMatches();
+        receive.filter = originalFilter;
+
+        // seek 必须使旧确认失效并回原始视图；有历史时再次请求逐帧仍需询问。
+        require(application.seekRawCaptureReplay(1, error), error.c_str());
+        require(!application.historySwitchConfirmationPending(), "seek must invalidate pending confirmation");
+        require(application.docks().receiveState().displayMode == dock::TransferLogDisplayMode::RawChunks,
+                "seek must return to raw mode");
+        for (int i = 0; i < 200 && application.rawCaptureReplayStatus().eventIndex < 1; ++i) application.pumpOnce();
+        require(!application.docks().receiveState().rows.empty(), "seek prefix must retain raw history");
+        require(clickItem("原始"), "post-seek toolbar click must reopen confirmation");
+        require(application.historySwitchConfirmationPending() &&
+                    application.docks().receiveState().displayMode == dock::TransferLogDisplayMode::RawChunks,
+                "有历史时每次切换都必须询问，seek 不能绕过询问");
+        require(clickItem("取消"), "cancel button must be clickable");
+        require(!application.historySwitchConfirmationPending(), "cancel button must close confirmation");
+
+        // modal 已显示时来源失效，不能只检查 Application 标记：必须关闭 ImGui 自身弹窗栈。
+        require(clickItem("原始") && historyPopupOpen(), "invalidation test must open the real modal");
+        require(application.seekRawCaptureReplay(1, error), error.c_str());
+        frame();
+        require(!historyPopupOpen(), "seek must close the displayed ImGui history popup");
+        frame();
+        auto* invalidatedModal = ImGui::FindWindowByName("##transfer_history_switch");
+        require(invalidatedModal && !invalidatedModal->Active && !historyPopupOpen(),
+                "invalidated history modal must stop submitting immediately after popup closure");
+        // 失效帧已 Begin 后才 CloseCurrentPopup；下一帧 WasActive 仍记录该提交帧。
+        // 再推进一帧核验上一帧也未提交窗口，保留原非活跃断言而非放宽它。
+        frame();
+        require(invalidatedModal && !invalidatedModal->WasActive,
+                "invalidated history modal must no longer be active");
+        require(!clickItem("使用历史"), "invalidated modal must not submit an old action");
+        require(application.docks().receiveState().displayMode == dock::TransferLogDisplayMode::RawChunks,
+                "old modal action must not change the new source mode");
+        for (int i = 0; i < 200 && application.rawCaptureReplayStatus().eventIndex < 1; ++i) application.pumpOnce();
+        require(clickItem("原始") && historyPopupOpen(), "new source must reopen a fresh real confirmation");
+        // 两次 GUI 帧之间重新导入并产生新请求：旧窗口先关闭，不消费新请求，再下一帧打开。
+        const auto oldConfirmation = application.historySwitchConfirmationId();
+        plot::RawCaptureFileData replacement;
+        replacement.events = {{.type = plot::RawCaptureEventType::RxBytes,
+            .bytes = {0xAA, 0x55, 0x00, 0x07, 0x00, 0x00}}};
+        application.unloadRawCaptureReplayTimeline();
+        require(application.importRawRecords(replacement, error), error.c_str());
+        application.requestParsedHistorySwitch();
+        require(application.historySwitchConfirmationId() != oldConfirmation,
+                "new confirmation must have a distinct identity");
+        frame();
+        require(!historyPopupOpen() && application.historySwitchConfirmationPending(),
+                "stale popup must close without consuming the replacement request");
+        frame();
+        require(historyPopupOpen(), "replacement request must open its own confirmation");
+        require(clickItem("取消"), "fresh replacement modal must remain clickable");
+        require(!application.historySwitchConfirmationPending(), "fresh cancel must resolve only the fresh request");
+
+        // 全量导入替换在同一 deque、同一行数下仍须重新筛选，不能保留旧行指针的匹配结果。
+        receive.filter = {.keyword = "replacement-match", .status = dock::LogStatusFilter::Rx};
+        replacement.events.front().endpoint = "replacement-match";
+        require(application.importRawRecords(replacement, error), error.c_str());
+        frame(&renderedText);
+        require(runtime.transferLogRowsCache_.rows.size() == 1 &&
+                    runtime.transferLogRowsCache_.rows.front() == &receive.rows.front() &&
+                    runtime.transferLogRowsCache_.rows.front()->endpoint == "replacement-match",
+                "matching replacement import must refresh the filtered row");
+        replacement.events.front().endpoint = "replacement-unmatched";
+        require(application.importRawRecords(replacement, error), error.c_str());
+        requireNoMatches();
+        require(receive.filter.keyword == "replacement-match" && receive.filter.status == dock::LogStatusFilter::Rx,
+                "replacement import must preserve keyword and direction preferences");
+        replacement.events.front().endpoint = "replacement-match";
+        require(application.importRawRecords(replacement, error), error.c_str());
+        frame(&renderedText);
+        require(runtime.transferLogRowsCache_.rows.size() == 1 &&
+                    runtime.transferLogRowsCache_.rows.front()->endpoint == "replacement-match",
+                "matching data after no matches must reappear without changing filters");
+
+        replacement.events.clear();
+        require(application.importRawRecords(replacement, error), error.c_str());
+        frame(&renderedText);
+        require(receive.rows.empty() && runtime.transferLogRowsCache_.rows.empty(), "empty import must clear visible data");
+        require(renderedText.find("暂无 TX/RX 原始数据") != std::string::npos &&
+                    renderedText.find("没有匹配当前筛选条件的记录") == std::string::npos,
+                "truly empty raw history must render the no-data message");
+        receive.filter = originalFilter;
+        application.shutdown();
     }
     static void verify(app::Application& application, GuiRuntime& runtime)
     {
@@ -433,11 +720,13 @@ int main(int argc, char** argv)
         protoscope::app::Application app;
         protoscope::config::ConfigStore store;
         protoscope::ui::GuiRuntime runtime(app, store);
-        protoscope::ui::GuiRuntimeTestAccess::verifySettings(app, runtime);
-        protoscope::ui::GuiRuntimeTestAccess::verify(app, runtime);
-        protoscope::ui::GuiRuntimeTestAccess::verifyRememberedPaths(app, runtime, store);
-        protoscope::ui::GuiRuntimeTestAccess::verifyStatus(app, runtime);
-        protoscope::ui::GuiRuntimeTestAccess::verifyFullscreenFft(app, runtime);
+          protoscope::ui::GuiRuntimeTestAccess::verifySettings(app, runtime);
+          protoscope::ui::GuiRuntimeTestAccess::verify(app, runtime);
+          protoscope::ui::GuiRuntimeTestAccess::verifyRememberedPaths(app, runtime, store);
+          protoscope::ui::GuiRuntimeTestAccess::verifyStatus(app, runtime);
+          protoscope::ui::GuiRuntimeTestAccess::verifyFullscreenFft(app, runtime);
+          protoscope::ui::GuiRuntimeTestAccess::verifyTransferHistorySwitchModal(app, runtime);
+          protoscope::ui::GuiRuntimeTestAccess::verifyLoggingHistorySwitchSettings(app, runtime);
         std::cout << "file operation frame boundary and focus passed\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

@@ -409,6 +409,7 @@ private:
     std::vector<IMenuContributor*> menuContributors_;
     std::vector<IDialogComponent*> dialogComponents_;
     std::vector<IDockComponent*> dockComponents_;
+    std::uint64_t transferHistoryModalId_{0};
     std::uint64_t lastRenderAtMs_{0};
     std::uint64_t lastPumpMs_{0};
     std::uint64_t lastAutoSaveAtMs_{0};

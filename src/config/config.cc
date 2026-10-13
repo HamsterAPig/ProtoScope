@@ -9,6 +9,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <limits>
 #include <iterator>
@@ -79,7 +80,7 @@ namespace {
         return node && node[key];
     }
 
-    YAML::Node childNode(const YAML::Node& node, const char* key)
+    const YAML::Node childNode(const YAML::Node& node, const char* key)
     {
         if (!node) {
             return {};
@@ -200,6 +201,18 @@ namespace {
         {LogLevel::Error, "error"},
     }};
 
+    // 收发历史切换策略/范围的 YAML 文本映射；非法值由 lookupEnum 回退到默认。
+    constexpr std::array<EnumNamePair<TransferLogHistoryOnParsedSwitch>, 3> kTransferHistoryOnParsedSwitchNames{{
+        {TransferLogHistoryOnParsedSwitch::Ask, "ask"},
+        {TransferLogHistoryOnParsedSwitch::UseHistory, "use_history"},
+        {TransferLogHistoryOnParsedSwitch::SkipHistory, "skip_history"},
+    }};
+
+    constexpr std::array<EnumNamePair<TransferLogHistoryScope>, 2> kTransferHistoryScopeNames{{
+        {TransferLogHistoryScope::RetainedRows, "retained_rows"},
+        {TransferLogHistoryScope::RetainedCapture, "retained_capture"},
+    }};
+
     constexpr std::array<EnumNamePair<plot::WaveControlMode>, 2> kWaveControlModeNames{{
         {plot::WaveControlMode::LegacyGlobal, "legacy_global"},
         {plot::WaveControlMode::Oscilloscope, "oscilloscope"},
@@ -316,6 +329,27 @@ namespace {
     std::string toLogLevelText(const LogLevel level)
     {
         return enumToText(level, kLogLevelNames, "info");
+    }
+
+    TransferLogHistoryOnParsedSwitch parseTransferHistoryOnParsedSwitch(const std::string& value,
+                                                                        TransferLogHistoryOnParsedSwitch fallback)
+    {
+        return lookupEnum(std::string_view{value}, kTransferHistoryOnParsedSwitchNames, fallback);
+    }
+
+    const char* toTransferHistoryOnParsedSwitchText(const TransferLogHistoryOnParsedSwitch value)
+    {
+        return enumToText(value, kTransferHistoryOnParsedSwitchNames, "ask");
+    }
+
+    TransferLogHistoryScope parseTransferHistoryScope(const std::string& value, TransferLogHistoryScope fallback)
+    {
+        return lookupEnum(std::string_view{value}, kTransferHistoryScopeNames, fallback);
+    }
+
+    const char* toTransferHistoryScopeText(const TransferLogHistoryScope value)
+    {
+        return enumToText(value, kTransferHistoryScopeNames, "retained_rows");
     }
 
     plot::WaveControlMode parseWaveControlMode(const std::string& value, plot::WaveControlMode fallback)
@@ -787,10 +821,6 @@ namespace {
             config.gui.rawCapture.recordingQueueLimitBytes = readScalar<std::size_t>(
                 rawCapture, "recording_queue_limit_bytes", config.gui.rawCapture.recordingQueueLimitBytes);
         }
-        if (const auto transferLog = childNode(gui, "transfer_log")) {
-            config.gui.replayRawHistoryOnSchemaSwitch = readScalar<bool>(
-                transferLog, "replay_raw_history_on_schema_switch", config.gui.replayRawHistoryOnSchemaSwitch);
-        }
         if (const auto realtimeBacklog = childNode(gui, "realtime_backlog")) {
             config.gui.realtimeBacklog.mode =
                 readScalar<std::string>(realtimeBacklog, "mode", config.gui.realtimeBacklog.mode);
@@ -882,6 +912,41 @@ namespace {
             loadGuiWaveScopedRuntimeConfig(gui, config);
         }
         loadGuiElfSymbolComboConfig(gui, config);
+        // transfer_log 独立于 wave 节点：无论 gui.wave 是否存在都要读取三态历史切换配置。
+        if (const auto transferLog = childNode(gui, "transfer_log")) {
+            const bool hasNewKey = transferLog["history_on_parsed_switch"].IsDefined();
+            const bool hasLegacyKey = transferLog["replay_raw_history_on_schema_switch"].IsDefined();
+            // 旧字段仅保留兼容读写，不再作为运行时切换策略；新键存在时绝不覆盖枚举。
+            config.gui.replayRawHistoryOnSchemaSwitch = readScalar<bool>(
+                transferLog, "replay_raw_history_on_schema_switch", config.gui.replayRawHistoryOnSchemaSwitch);
+            // 新键优先：旧 bool 只在新键缺失时做兼容映射。
+            if (hasNewKey) {
+                const auto text = readScalar<std::string>(transferLog, "history_on_parsed_switch",
+                                                          toTransferHistoryOnParsedSwitchText(config.gui.historyOnParsedSwitch));
+                const auto parsed = parseTransferHistoryOnParsedSwitch(text, config.gui.historyOnParsedSwitch);
+                if (std::none_of(kTransferHistoryOnParsedSwitchNames.begin(), kTransferHistoryOnParsedSwitchNames.end(),
+                                 [&](const auto& entry) { return entry.name == text; })) {
+                    // 非法值回退默认：记录警告到 stderr，避免静默吞掉用户配置错误。
+                    std::fprintf(stderr, "[config] 非法 history_on_parsed_switch 值 '%s'，已回退默认 ask\n", text.c_str());
+                }
+                config.gui.historyOnParsedSwitch = parsed;
+            } else {
+                if (hasLegacyKey) {
+                    // 兼容旧键：true=按范围重建历史，false=不使用历史。
+                    config.gui.historyOnParsedSwitch = config.gui.replayRawHistoryOnSchemaSwitch
+                                                             ? TransferLogHistoryOnParsedSwitch::UseHistory
+                                                             : TransferLogHistoryOnParsedSwitch::SkipHistory;
+                }
+            }
+            const auto scopeText = readScalar<std::string>(transferLog, "history_scope",
+                                                           toTransferHistoryScopeText(config.gui.historyScope));
+            const auto parsedScope = parseTransferHistoryScope(scopeText, config.gui.historyScope);
+            if (std::none_of(kTransferHistoryScopeNames.begin(), kTransferHistoryScopeNames.end(),
+                             [&](const auto& entry) { return entry.name == scopeText; })) {
+                std::fprintf(stderr, "[config] 非法 history_scope 值 '%s'，已回退默认 retained_rows\n", scopeText.c_str());
+            }
+            config.gui.historyScope = parsedScope;
+        }
     }
 
     void loadProtocolConfig(const YAML::Node& root, AppConfig& config)
@@ -1220,6 +1285,8 @@ namespace {
         gui["raw_capture"]["live_limit_bytes"] = config.gui.rawCapture.liveLimitBytes;
         gui["raw_capture"]["recording_queue_limit_bytes"] = config.gui.rawCapture.recordingQueueLimitBytes;
         gui["transfer_log"]["replay_raw_history_on_schema_switch"] = config.gui.replayRawHistoryOnSchemaSwitch;
+        gui["transfer_log"]["history_on_parsed_switch"] = toTransferHistoryOnParsedSwitchText(config.gui.historyOnParsedSwitch);
+        gui["transfer_log"]["history_scope"] = toTransferHistoryScopeText(config.gui.historyScope);
         gui["realtime_backlog"]["mode"] = config.gui.realtimeBacklog.mode;
         writePerformanceScalar(gui["realtime_backlog"],
                                "rx_chunk_bytes_per_pump",

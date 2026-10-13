@@ -202,7 +202,12 @@ gui:
     # 实时原始缓存上限，单位字节，默认 67108864（64 MiB）；RX/TX 共用该预算，超出后只保留最近一段并标记截断，0 表示不保留。
     live_limit_bytes: 67108864
   transfer_log:
-    # 布尔，默认 false；保留读写兼容的旧键，当前不影响界面行为：切换原始/逐帧视图只改 displayMode，不再用独立 UI parser 从原始历史重建逐帧行（重建入口已无生产调用点）。
+    # 原始->逐帧切换的历史策略字符串，默认 ask；可选 ask（有历史时每次询问）/ use_history（按所选范围重建替换）/ skip_history（只清半帧，不重放旧字节）。
+    # 非法值回退 ask。旧键 replay_raw_history_on_schema_switch 仅在 history_on_parsed_switch 缺失时兼容映射（true=use_history, false=skip_history）。
+    history_on_parsed_switch: ask
+    # 历史范围字符串，默认 retained_rows（只用收发面板保留的原始 RX/TX 行）；可选 retained_capture（底层仍保留的完整采集/导入历史，不保证找回已裁剪字节、不自动重读文件）。
+    history_scope: retained_rows
+    # 布尔，默认 false；保留读写兼容的旧键，当前不影响界面行为：切换原始/逐帧视图只改 displayMode，不再用独立 UI parser 从原始历史重建逐帧行（重建入口已改为历史切换流程与批量重建预算）。
     replay_raw_history_on_schema_switch: false
   realtime_backlog:
     # 追赶模式字符串，默认 responsive；complete 仅在断开连接时与响应式模式不同——不丢弃待追赶 backlog，每轮 pump 的追赶预算与清债行为不变；其它取值一律按响应式处理。

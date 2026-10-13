@@ -1,5 +1,7 @@
 #include "protoscope/app/application.hpp"
 #include "protoscope/config/settings.hpp"
+#include "protoscope/session/session_package.hpp"
+#include "test_helpers.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -477,14 +479,101 @@ void testApplication(const std::filesystem::path& root)
     require(application.docks().configState().dirty, "失败意外清 dirty");
     application.shutdown();
 }
+
+// 收发历史切换策略/范围回归：新枚举键读写、缺省、非法回退、旧 bool 兼容映射、新键优先。
+static void testTransferHistorySwitchConfig()
+{
+    using namespace protoscope;
+    using namespace protoscope::config;
+    using protoscope::config::TransferLogHistoryOnParsedSwitch;
+    using protoscope::config::TransferLogHistoryScope;
+    config::ConfigStore store;
+    std::string error;
+
+    // 内建缺省：ask / retained_rows。
+    const config::AppConfig defaults;
+    require(defaults.gui.historyOnParsedSwitch == TransferLogHistoryOnParsedSwitch::Ask &&
+                defaults.gui.historyScope == TransferLogHistoryScope::RetainedRows,
+            "内建缺省必须是 ask / retained_rows");
+
+    // 新键读写：use_history / retained_capture 往返一致。
+    config::AppConfig config;
+    config.gui.historyOnParsedSwitch = TransferLogHistoryOnParsedSwitch::UseHistory;
+    config.gui.historyScope = TransferLogHistoryScope::RetainedCapture;
+    std::string yamlText;
+    require(store.saveText(config, yamlText, error), error.c_str());
+    const auto roundTrip = store.loadText(yamlText);
+    require(roundTrip.error.empty(), roundTrip.error.c_str());
+    require(roundTrip.config.gui.historyOnParsedSwitch == TransferLogHistoryOnParsedSwitch::UseHistory &&
+                roundTrip.config.gui.historyScope == TransferLogHistoryScope::RetainedCapture,
+            "新键 use_history/retained_capture 读写往返失败");
+
+    // 非法值回退到默认（ask/retained_rows），不得抛异常。
+    const auto invalid = store.loadText("gui:\n  transfer_log:\n    history_on_parsed_switch: bogus\n    history_scope: nonsense\n");
+    require(invalid.error.empty() && invalid.config.gui.historyOnParsedSwitch == TransferLogHistoryOnParsedSwitch::Ask &&
+                invalid.config.gui.historyScope == TransferLogHistoryScope::RetainedRows,
+            "非法枚举值必须回退默认");
+
+    // 旧 bool 兼容：仅旧键存在时映射（true=UseHistory / false=SkipHistory）。
+    const auto legacyTrue = store.loadText("gui:\n  transfer_log:\n    replay_raw_history_on_schema_switch: true\n");
+    require(legacyTrue.config.gui.historyOnParsedSwitch == TransferLogHistoryOnParsedSwitch::UseHistory,
+            "旧键 true 必须映射 use_history");
+    const auto legacyFalse = store.loadText("gui:\n  transfer_log:\n    replay_raw_history_on_schema_switch: false\n");
+    require(legacyFalse.config.gui.historyOnParsedSwitch == TransferLogHistoryOnParsedSwitch::SkipHistory,
+            "旧键 false 必须映射 skip_history");
+
+    // 新键优先：新旧键同时存在时以新键为准（旧键不再覆盖）。
+    const auto newerWins = store.loadText(
+        "gui:\n  transfer_log:\n    history_on_parsed_switch: skip_history\n    replay_raw_history_on_schema_switch: true\n");
+    require(newerWins.config.gui.historyOnParsedSwitch == TransferLogHistoryOnParsedSwitch::SkipHistory,
+            "新键存在时旧 bool 不得覆盖");
+    require(newerWins.config.gui.replayRawHistoryOnSchemaSwitch, "旧字段须作为兼容存档保留，而非运行时策略");
+    require(store.saveText(newerWins.config, yamlText, error), error.c_str());
+    const auto compatibilityRoundTrip = store.loadText(yamlText);
+    require(compatibilityRoundTrip.config.gui.replayRawHistoryOnSchemaSwitch &&
+                compatibilityRoundTrip.config.gui.historyOnParsedSwitch == TransferLogHistoryOnParsedSwitch::SkipHistory,
+            "新旧键共存 roundtrip 必须保留旧字段且继续以新枚举为唯一策略");
+
+    // 现场包恢复保护：applySessionPackage 不得覆盖本机两枚举偏好。
+    protoscope::app::Application application;
+    require(application.initialize(), "现场包恢复保护初始化失败");
+    // 通过设置入口把本机偏好改为 use_history/retained_capture 并生效。
+    const auto liveBefore = application.captureConfig();
+    config::SettingsDraft state(liveBefore);
+    state.value.gui.historyOnParsedSwitch = TransferLogHistoryOnParsedSwitch::UseHistory;
+    state.value.gui.historyScope = TransferLogHistoryScope::RetainedCapture;
+    const auto applyResult = application.applySettingsChanges(state.baseline, state.value);
+    require(applyResult.status == protoscope::app::SettingsApplyStatus::Applied ||
+                applyResult.status == protoscope::app::SettingsApplyStatus::Pending,
+            "本机偏好设置应用失败");
+    // 仅改本机展示偏好，不应触发需要 pump 的 worker 预算异步路径；若进入 Pending 由后续统一验证轮处理。
+    require(application.captureConfig().gui.historyOnParsedSwitch == TransferLogHistoryOnParsedSwitch::UseHistory &&
+                application.captureConfig().gui.historyScope == TransferLogHistoryScope::RetainedCapture,
+            "本机偏好未生效");
+
+    // 构造最小现场包：config.yaml 使用默认配置 + 空 capture 事件。
+    plot::RawCaptureFileData packageCapture;
+    packageCapture.source = "fixture";
+    protoscope::session::SessionPackageData package;
+    require(store.saveText(config::AppConfig{}, yamlText, error), error.c_str());
+    package.entries.push_back({"config.yaml", std::vector<std::uint8_t>(yamlText.begin(), yamlText.end())});
+    const tests::ScopedTempPath packagePath(tests::makeUniqueTempFile("protoscope-session-history-pref", ".psess"));
+    require(protoscope::session::writeSessionPackage(packagePath.path(), package, error), error.c_str());
+    require(application.importSessionPackage(packagePath.path(), error), error.c_str());
+    require(application.captureConfig().gui.historyOnParsedSwitch == TransferLogHistoryOnParsedSwitch::UseHistory &&
+                application.captureConfig().gui.historyScope == TransferLogHistoryScope::RetainedCapture,
+            "现场包恢复不得覆盖本机历史切换偏好");
+    application.shutdown();
 }
+} // namespace
+
 int main()
 {
     try {
         const auto root = std::filesystem::temp_directory_path() /
             ("protoscope-settings-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         std::filesystem::create_directories(root);
-        testCaptureAndAtomicLoad(); testSafeSave(root); testLoggerCandidate(root); testDraftAndMerge(); testScale(); testAsyncFailures(root); testApplication(root);
+        testCaptureAndAtomicLoad(); testSafeSave(root); testLoggerCandidate(root); testDraftAndMerge(); testScale(); testAsyncFailures(root); testApplication(root); testTransferHistorySwitchConfig();
         std::cout << "[PASS] 应用设置核心回归\n";
         return 0;
     } catch (const std::exception& ex) {

@@ -216,6 +216,19 @@ struct GuiFileDialogConfig {
     std::string lastExportDirectory;
 };
 
+// 收发面板原始->逐帧切换的历史策略：ask 每次询问，use_history 按范围重建，skip_history 只清半帧。
+enum class TransferLogHistoryOnParsedSwitch {
+    Ask,
+    UseHistory,
+    SkipHistory,
+};
+
+// 历史范围：retained_rows 只用收发面板保留行，retained_capture 用底层保留的完整采集/导入历史。
+enum class TransferLogHistoryScope {
+    RetainedRows,
+    RetainedCapture,
+};
+
 struct GuiConfig {
     GuiFileDialogConfig fileDialogs{};
     DataExportConfig lastDataExport{};
@@ -233,7 +246,10 @@ struct GuiConfig {
     bool luaDockLayoutDebug{false};
     bool luaDockRenderCopyMode{true};
     std::size_t sendHistoryLimit{20};
+    // 旧 YAML 字段兼容存档（保留 roundtrip）；运行时唯一策略是 historyOnParsedSwitch。
     bool replayRawHistoryOnSchemaSwitch{false};
+    TransferLogHistoryOnParsedSwitch historyOnParsedSwitch{TransferLogHistoryOnParsedSwitch::Ask};
+    TransferLogHistoryScope historyScope{TransferLogHistoryScope::RetainedRows};
 };
 
 struct ProtocolTxConfig {

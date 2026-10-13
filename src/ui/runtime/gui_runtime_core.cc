@@ -672,8 +672,11 @@ const GuiRuntime::FilteredLogRowsCache& GuiRuntime::filteredLogRowsCached(Filter
     const bool sameSourceAndFilter = cache.source == &rows && cache.filter.keyword == filter.keyword &&
                                      cache.filter.status == filter.status &&
                                      cache.includeBytePreview == includeBytePreview;
-    const bool appendOnly = sameSourceAndFilter && cache.version != version && cache.rowCount <= rows.size() &&
-                            (cache.rowCount == 0U || (!rows.empty() && cache.firstRow == &rows.front()));
+    // clear 后 deque 可能复用首行地址；仅地址/行数相同不能证明旧行仍存在。
+    // 原始行逐条 append 增长一次版本；清空、替换或裁剪产生额外版本时全量重筛。
+    const bool appendOnly = sameSourceAndFilter && version > cache.version && cache.rowCount < rows.size() &&
+                            version - cache.version == rows.size() - cache.rowCount &&
+                            (cache.rowCount == 0U || cache.firstRow == &rows.front());
 
     if (appendOnly) {
         // 核心流程：高速收包时日志只追加未裁剪，过滤缓存增量处理新行，避免每帧全量扫描历史。

@@ -340,6 +340,17 @@ void test_dock_receive_row_single_line_message_and_timestamp()
         false,
         false);
     require(headerOnly == "WARN", "空内容行不应追加多余分隔符");
+    const protoscope::dock::ReceiveRow frame{
+        .direction = "TX", .bytes = {0x41}, .message = "frame value=65"};
+    require(protoscope::dock::formatReceiveRowContent(frame, true) == "frame value=65",
+            "帧解析 message 不得当作原始 TX 写入状态附加字节");
+    auto writeStatus = frame;
+    writeStatus.message = "partial";
+    writeStatus.messageIsWriteStatus = true;
+    require(protoscope::dock::formatReceiveRowContent(writeStatus, true) == "partial | 41",
+            "原始 TX 写入状态必须保留字节");
+    require(protoscope::dock::formatReceiveRowContent(writeStatus, false) == "partial | A",
+            "原始 TX ASCII 显示必须保留状态与字节");
 }
 
 void test_dock_receive_rows_text_export_format()

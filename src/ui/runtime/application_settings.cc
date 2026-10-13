@@ -219,7 +219,10 @@ void GuiRuntime::drawApplicationSettings() {
             VALUE(gui.logHistory.scriptLimit,"脚本日志历史","非负行数；0不保留；缩减会裁剪。");
             VALUE(gui.logHistory.requestTraceLimit,"请求追踪历史","非负行数；0不保留，不是请求队列预算。");
             VALUE(gui.sendHistoryLimit,"发送历史","非负条数；有效min(配置,200)，0清空。");
-            ImGui::Text("发送有效容量：%llu",static_cast<unsigned long long>((std::min)(v.gui.sendHistoryLimit,std::size_t{200}))); break; }
+            ImGui::Text("发送有效容量：%llu",static_cast<unsigned long long>((std::min)(v.gui.sendHistoryLimit,std::size_t{200})));
+            ENUM(gui.historyOnParsedSwitch,"逐帧历史策略","每次询问\0使用历史\0不使用历史\0","原始转逐帧时如何处理已有原始历史：ask 弹宿主确认；use_history 按范围重建替换；skip_history 只清残留半帧，不重放旧字节。");
+            ENUM(gui.historyScope,"逐帧历史范围","面板保留行\0底层保留采集\0","use_history 重建来源范围：retained_rows 只用收发面板保留的 RX/TX 行；retained_capture 用底层仍保留的完整采集/导入历史。清空面板不删除底层数据，可经同意恢复；不保证找回已裁剪字节，不自动重读文件。");
+            break; }
         case config::SettingsPage::Performance: {
             const auto effective=application_.effectiveSettingsPerformance(); const auto& comm=application_.docks().commState();
             ImGui::TextWrapped("运行自适应：%s；压力 %s；有效倍率 %.3f / 追赶 %.3f；%s",comm.adaptivePerformanceEnabled?"开启":"关闭",comm.adaptivePerformanceLevel.c_str(),comm.adaptivePerformanceEffectiveMultiplier,comm.adaptivePerformanceCatchUpMultiplier,comm.adaptivePerformanceReason.c_str());
