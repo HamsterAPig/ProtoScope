@@ -918,7 +918,16 @@ void GuiRuntime::drawTransferLogSection(float logHeight)
         transferHistoryModalId_ = confirmationId;
         ImGui::OpenPopup("##transfer_history_switch");
     }
-    if (ImGui::BeginPopupModal("##transfer_history_switch", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+    const auto* viewport = ImGui::GetMainViewport();
+    const float scale = ImGui::GetFontSize() / 18.0F;
+    const ImVec2 modalMax((std::min)(560.0F * scale, viewport->WorkSize.x * 0.90F),
+                         (std::min)(320.0F * scale, viewport->WorkSize.y * 0.80F));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(modalMax.x, 0.0F), modalMax);
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5F,
+                                 viewport->WorkPos.y + viewport->WorkSize.y * 0.5F),
+                            ImGuiCond_Appearing, ImVec2(0.5F, 0.5F));
+    if (ImGui::BeginPopupModal("##transfer_history_switch", nullptr,
+                              ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize)) {
         // Application 失效不等于 ImGui 弹窗关闭；旧窗口不得操作后来同帧产生的新请求。
         if (!confirmationPending || transferHistoryModalId_ != confirmationId) {
             ImGui::CloseCurrentPopup();
@@ -926,21 +935,33 @@ void GuiRuntime::drawTransferLogSection(float logHeight)
             return;
         }
         const bool scopeFull = application_.historySwitchScope() == config::TransferLogHistoryScope::RetainedCapture;
+        // 文本独立滚动，按钮留在固定页脚；窄窗口允许按钮换行，避免被裁到屏幕外。
+        const float footerHeight = 3.0F * (ImGui::GetFrameHeightWithSpacing()) +
+            2.0F * ImGui::GetStyle().WindowPadding.y + ImGui::GetFrameHeight();
+        ImGui::BeginChild("##history_switch_text", ImVec2(0.0F, (std::max)(1.0F,
+            (std::min)(150.0F * scale, modalMax.y - footerHeight))));
         ImGui::TextUnformatted("切换为逐帧视图");
         ImGui::TextWrapped("是否使用已有原始历史重建逐帧记录？范围：%s。",
                            scopeFull ? "底层完整采集/导入历史（不保证找回已裁剪字节、不自动重读文件）"
                                      : "收发面板当前保留的原始 RX/TX 行");
         ImGui::TextWrapped("清空面板不删除底层仍保留的采集记录；选择底层范围并同意后可恢复其逐帧展示。已裁剪的字节无法恢复。");
+        ImGui::EndChild();
+        const auto nextButton = [](const char* label) {
+            const float width = ImGui::CalcTextSize(label).x + 2.0F * ImGui::GetStyle().FramePadding.x;
+            if (ImGui::GetItemRectMax().x + width + ImGui::GetStyle().ItemSpacing.x <
+                ImGui::GetWindowPos().x + ImGui::GetWindowSize().x - ImGui::GetStyle().WindowPadding.x)
+                ImGui::SameLine();
+        };
         if (ImGui::Button("使用历史")) {
             application_.resolveHistorySwitch(config::TransferLogHistoryOnParsedSwitch::UseHistory);
             ImGui::CloseCurrentPopup();
         }
-        ImGui::SameLine();
+        nextButton("不使用历史");
         if (ImGui::Button("不使用历史")) {
             application_.resolveHistorySwitch(config::TransferLogHistoryOnParsedSwitch::SkipHistory);
             ImGui::CloseCurrentPopup();
         }
-        ImGui::SameLine();
+        nextButton("取消");
         if (ImGui::Button("取消") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
             // Escape 等同取消：保持原始模式。
             application_.cancelHistorySwitch();

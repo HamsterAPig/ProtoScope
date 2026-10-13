@@ -405,6 +405,33 @@ struct GuiRuntimeTestAccess {
         require(clickItem("取消"), "cancel button must be clickable");
         require(!application.historySwitchConfirmationPending(), "cancel button must close confirmation");
 
+        // 小视口仍通过真实鼠标打开/关闭 modal，尺寸基于实际工作区而非固定像素。
+        for (const auto size : {ImVec2(1280, 700), ImVec2(480, 360), ImVec2(320, 240)}) {
+            io.DisplaySize = size;
+            frame(); frame();
+            require(clickItem("原始"), "small viewport toolbar must open modal by mouse");
+            frame(); frame();
+            auto* modal = ImGui::FindWindowByName("##transfer_history_switch");
+            require(modal && modal->Active && historyPopupOpen(), "small viewport modal must be visible");
+            const auto* viewport = ImGui::GetMainViewport();
+            require(modal->Size.x <= viewport->WorkSize.x * 0.90F + 1.0F &&
+                    modal->Size.y <= viewport->WorkSize.y * 0.80F + 1.0F,
+                    "history modal must fit viewport work-area constraints");
+            require((modal->Flags & ImGuiWindowFlags_AlwaysAutoResize) != 0,
+                    "history modal must use local auto resize");
+            for (const auto* label : {"使用历史", "不使用历史", "取消"}) {
+                const auto rect = itemRect(modal, modal->GetID(label));
+                require(rect.Min.x >= viewport->WorkPos.x && rect.Min.y >= viewport->WorkPos.y &&
+                        rect.Max.x <= viewport->WorkPos.x + viewport->WorkSize.x &&
+                        rect.Max.y <= viewport->WorkPos.y + viewport->WorkSize.y,
+                        "history modal buttons must remain inside viewport");
+            }
+            require(clickItem("取消"), "small viewport cancel button must accept a real mouse click");
+            require(!application.historySwitchConfirmationPending(), "small viewport click must resolve cancellation");
+        }
+        io.DisplaySize = ImVec2(1280, 700);
+        frame(); frame();
+
         // modal 已显示时来源失效，不能只检查 Application 标记：必须关闭 ImGui 自身弹窗栈。
         require(clickItem("原始") && historyPopupOpen(), "invalidation test must open the real modal");
         require(application.seekRawCaptureReplay(1, error), error.c_str());
