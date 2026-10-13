@@ -201,6 +201,7 @@ public:
     // 清空收发记录与已解析帧缓存；同时使历史切换任务/旧确认失效。
     void clearTransferLogHistory();
     // 原始->逐帧切换的三态历史策略入口：宿主确认 modal 通过 resolveHistorySwitch/cancelHistorySwitch 回写结果。
+    [[nodiscard]] std::string parsedTransferUnavailableReason() const;
     void requestParsedHistorySwitch();
     void resolveHistorySwitch(config::TransferLogHistoryOnParsedSwitch decision);
     void cancelHistorySwitch();

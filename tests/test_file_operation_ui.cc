@@ -471,6 +471,19 @@ struct GuiRuntimeTestAccess {
                     renderedText.find("没有匹配当前筛选条件的记录") == std::string::npos,
                 "truly empty raw history must render the no-data message");
         receive.filter = originalFilter;
+        const auto noStream = std::filesystem::absolute(std::filesystem::path(__FILE__)).parent_path() /
+            "fixtures/protocols/import_source_label";
+        require(application.reloadProtocolDirectory(noStream.generic_string(), true, false), "no-stream UI fixture failed");
+        receive.frameRows.push_back({.message = "cached-frame-without-schema"});
+        receive.displayMode = dock::TransferLogDisplayMode::ParsedFrames;
+        frame(&renderedText);
+        require(renderedText.find("当前协议没有 stream schema") != std::string::npos &&
+                !receive.frameRows.empty(), "cached frames must not hide unavailable schema reason");
+        receive.filter = {.keyword = "missing-history-keyword", .status = dock::LogStatusFilter::All};
+        requireNoMatches();
+        require(renderedText.find("当前协议没有 stream schema") != std::string::npos,
+                "schema reason and filter no-matches message must coexist");
+        receive.filter = originalFilter;
         application.shutdown();
     }
     static void verify(app::Application& application, GuiRuntime& runtime)

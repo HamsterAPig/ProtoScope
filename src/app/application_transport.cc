@@ -704,6 +704,8 @@ bool Application::beginHistoryRebuild(const config::TransferLogHistoryScope scop
             .tx = scripting::FrameStreamParser(transferFrameParser_->tx.bufferDefinition(), transferFrameParser_->tx.frameDefinitions())};
     } else if (!rawCaptureReplay_.loaded || rawCaptureReplay_.processing == OfflineReplayProcessing::BrowseRaw)
         parser = makeTransferFrameParserState();
+    // 缺 schema 不创建空任务，尤其不能在后续 pump 中清掉仍可查看的旧帧。
+    if (!parser) return false;
     if (parser) {
         parser->rx.reset(); parser->tx.reset();
         parser->rx.clearRuntimeProfiles(); parser->tx.clearRuntimeProfiles();
@@ -750,9 +752,9 @@ bool Application::pumpHistoryRebuild()
         return true;
     }
     if (!task.parser) {
-        dockStore_.clearTransferFrameRows();
-        pendingTransferFrameRows_.clear();
+        // 防御失效任务：保留完整缓存和 pending，不以不可解析冒充成功的空结果。
         historyRebuild_.reset();
+        dockStore_.waveState().statusMessage = "历史重建已取消：当前来源没有可用 stream schema";
         return true;
     }
     const auto started = std::chrono::steady_clock::now();
@@ -909,6 +911,22 @@ bool Application::pumpHistoryRebuild()
     flushPendingTransferFrameRows(transferFrameRowsPerPump());
     return true;
 }
+std::string Application::parsedTransferUnavailableReason() const
+{
+    // 显式解析时间轴只认其独立 worker；实时和 BrowseRaw 使用当前有效 Runtime。
+    const bool offline = rawCaptureReplay_.loaded &&
+        rawCaptureReplay_.processing != OfflineReplayProcessing::BrowseRaw;
+    const auto snapshot = offline
+        ? (offlineScriptWorker_ ? offlineScriptWorker_->snapshot() : scripting::ScriptRuntimeSnapshot{})
+        : scriptWorker_.snapshot();
+    // 最近一次加载失败不会抹掉旧有效 Runtime，不能只用 lastError 判断能力。
+    if (snapshot.streamBuffer && !snapshot.streamFrames.empty()) return {};
+    if (!snapshot.scriptPath.empty()) return "当前协议没有 stream schema，无法生成逐帧记录";
+    if (!snapshot.lastError.empty() || (offline && !rawCaptureReplay_.error.empty()))
+        return "协议加载失败，当前没有可用协议，无法生成逐帧记录";
+    return "尚未加载协议，无法生成逐帧记录";
+}
+
 void Application::requestParsedHistorySwitch()
 {
     auto& receive = dockStore_.receiveState();
@@ -919,6 +937,10 @@ void Application::requestParsedHistorySwitch()
         return;
     }
     const bool hasHistory = historySourceAvailable();
+    if (!parsedTransferUnavailableReason().empty() || !hasHistory) {
+        receive.displayMode = dock::TransferLogDisplayMode::ParsedFrames;
+        return;
+    }
     switch (runtimeConfig_.gui.historyOnParsedSwitch) {
         case config::TransferLogHistoryOnParsedSwitch::Ask:
             if (!hasHistory) {
@@ -958,6 +980,11 @@ void Application::resolveHistorySwitch(const config::TransferLogHistoryOnParsedS
     if (!historySwitchConfirmationOpen_) return;
     historySwitchConfirmationOpen_ = false;
     auto& receive = dockStore_.receiveState();
+    // 弹窗期间协议/历史可能变化，选择生效时再次检查，不创建无效重建任务。
+    if (!parsedTransferUnavailableReason().empty() || !historySourceAvailable()) {
+        receive.displayMode = dock::TransferLogDisplayMode::ParsedFrames;
+        return;
+    }
     if (decision == config::TransferLogHistoryOnParsedSwitch::UseHistory) {
         // 询问上界在用户选择生效时固定。
         const auto upperBound =

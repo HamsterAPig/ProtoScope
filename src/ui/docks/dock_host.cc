@@ -890,12 +890,16 @@ void GuiRuntime::drawTransferLogSection(float logHeight)
         const auto& filteredRows =
             filteredLogRowsCached(transferLogRowsCache_, visibleRows, visibleRowsVersion, receive.filter, true);
 
-        const bool hasStreamSchema = application_.rawCaptureReplayStatus().hasStreamSchema;
+        const auto unavailableReason = application_.parsedTransferUnavailableReason();
+        const bool hasStreamSchema = unavailableReason.empty();
+        // 旧帧仍可浏览，但不能掩盖当前来源无法生成新帧的原因。
+        if (receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames && !hasStreamSchema)
+            ImGui::TextWrapped("%s", unavailableReason.c_str());
         // 原始数据/帧仍存在时，空结果来自筛选，不能误提示暂无数据或修改用户筛选偏好。
         const char* emptyMessage = !visibleRows.empty() && filteredRows.rows.empty()
                                        ? "没有匹配当前筛选条件的记录"
                                        : (receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames
-                                              ? (hasStreamSchema ? "暂无已解析帧" : "当前协议没有 stream schema，无法生成逐帧记录")
+                                              ? (hasStreamSchema ? "暂无已解析帧" : unavailableReason.c_str())
                                               : "暂无 TX/RX 原始数据");
         drawTransferLogRows("transfer_rows",
                             filteredRows.rows,

@@ -8,6 +8,7 @@
 #include <atomic>
 #include <algorithm>
 #include <iostream>
+#include <fstream>
 #include <thread>
 #ifdef _WIN32
 #include <windows.h>
@@ -78,6 +79,26 @@ struct ApplicationBackpressureTestAccess {
         return application.scriptWorker_.snapshot().runtimeGeneration;
     }
     static void restoreBrowseSchema(Application& application) { application.resetTransferFrameParser(); }
+    static void replaceHistoryProtocol(Application& application, const std::string& directory) {
+        const auto result = application.scriptWorker_.loadProtocolDirectory(directory);
+        if (!result.ok) throw std::runtime_error("确认期间协议替换失败");
+        application.resetTransferFrameParser();
+    }
+    static void verifyMissingParserPreservesCache(Application& application) {
+        application.transferFrameParser_.reset();
+        application.pendingTransferFrameRows_.push_back({.message = "pending-without-schema"});
+        const auto frames = application.dockStore_.receiveState().frameRows.size();
+        const auto pending = application.pendingTransferFrameRows_.size();
+        if (application.beginHistoryRebuild(config::TransferLogHistoryScope::RetainedRows,
+                application.historySwitchGeneration(), application.dockStore_.receiveState().rows.size()))
+            throw std::runtime_error("无 schema 不得创建历史任务");
+        application.historyRebuild_ = Application::HistoryRebuildTask{};
+        application.historyRebuild_->generation = application.historySwitchGeneration();
+        application.pumpHistoryRebuild();
+        if (application.dockStore_.receiveState().frameRows.size() != frames ||
+            application.pendingTransferFrameRows_.size() != pending)
+            throw std::runtime_error("无 parser 的防御分支不得清缓存");
+    }
     static bool historyActive(const Application& application) { return application.historyRebuild_.has_value(); }
     static bool historyOutputPending(const Application& application) { return !application.pendingTransferFrameRows_.empty(); }
     static void verifyReloadHistoryDeferred(const Application& application, bool beforePump)
@@ -493,6 +514,49 @@ static void testParsedHistorySwitchTriState()
     require(app2.docks().receiveState().rows.empty() && app2.docks().receiveState().frameRows.empty(),
             "清空必须同时清原始行与逐帧展示");
     app2.shutdown();
+}
+
+static void testParsedSwitchWithoutSchema()
+{
+    app::Application application;
+    require(application.initialize(), "无 schema 切换初始化失败");
+    const auto fixtures = std::filesystem::path(__FILE__).parent_path() / "fixtures/protocols";
+    require(application.reloadProtocolDirectory((fixtures / "import_source_label").generic_string(), true, false),
+            "无 stream 协议加载失败");
+    plot::RawCaptureFileData capture;
+    capture.events = {{.type = plot::RawCaptureEventType::RxBytes, .bytes = {11}}};
+    std::string error;
+    require(application.importRawRecords(capture, error), error);
+    auto& receive = application.docks().receiveState();
+    receive.pauseScroll = false;
+    receive.frameRows.push_back({.message = "cached-frame"});
+    application.requestParsedHistorySwitch();
+    require(!application.historySwitchConfirmationPending() &&
+            receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames &&
+            !app::ApplicationBackpressureTestAccess::historyActive(application),
+            "无 schema 应直接进入提示视图，不询问不创建任务");
+    require(application.parsedTransferUnavailableReason().find("没有 stream schema") != std::string::npos,
+            "有效无 stream 协议必须与未加载区分");
+    app::ApplicationBackpressureTestAccess::verifyMissingParserPreservesCache(application);
+    application.requestParsedHistorySwitch();
+    app::ApplicationBackpressureTestAccess::replaceHistoryProtocol(application,
+        (fixtures / "stream_frame_only").generic_string());
+    application.requestParsedHistorySwitch();
+    require(application.historySwitchConfirmationPending(), "非暂停且非时间轴历史同样必须询问");
+    app::ApplicationBackpressureTestAccess::replaceHistoryProtocol(application,
+        (fixtures / "import_source_label").generic_string());
+    application.resolveHistorySwitch(config::TransferLogHistoryOnParsedSwitch::UseHistory);
+    require(!app::ApplicationBackpressureTestAccess::historyActive(application) &&
+            !receive.frameRows.empty(), "确认生效需重查 schema 并保留旧帧");
+    app::ApplicationBackpressureTestAccess::replaceHistoryProtocol(application,
+        (fixtures / "stream_frame_only").generic_string());
+    tests::ScopedTempPath brokenProtocol(tests::makeUniqueTempDir("protoscope-invalid-schema-switch"));
+    const auto brokenScript = brokenProtocol.path() / "main.lua";
+    std::ofstream(brokenScript) << "function stream(\n";
+    require(!application.reloadProtocolDirectory(brokenProtocol.path().generic_string(), true, false),
+            "存在但损坏的协议应加载失败");
+    require(application.parsedTransferUnavailableReason().empty(), "最近失败不得误判仍有效的旧 stream 协议");
+    application.shutdown();
 }
 
 static void testProtocolReloadDefersLargeHistory()
@@ -1305,6 +1369,7 @@ int main(int argc, char**)
         testImportedLuaBitToggle();
         testImportedRawRecordsVisibleAndTxBytesPreserved();
         testParsedHistorySwitchTriState();
+        testParsedSwitchWithoutSchema();
         testPackageHistoryUsesOfflineSchema();
         testProtocolReloadDefersLargeHistory();
         {
