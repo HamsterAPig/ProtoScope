@@ -86,7 +86,7 @@ bool Application::initialize()
     return true;
 }
 
-bool Application::applyConfig(const config::AppConfig& config)
+bool Application::applyConfig(const config::AppConfig& config, const bool reloadProtocol)
 {
     if (pendingSettingsConfig_ || (dataTransferStatus().active && !applyingImportContext_)) return false;
     captureProtocolConfigOverride_.reset();
@@ -94,6 +94,20 @@ bool Application::applyConfig(const config::AppConfig& config)
     adaptivePerformance_.configure(config.performance.adaptive);
     loggedAdaptivePerformanceStatus_.reset();
     resetStreamBufferAlertState();
+    configureScriptWorker(config);
+    applyHistoryLimits(config.gui.logHistory);
+    dockStore_.waveState().buffer.setMaxTotalSamples(config.gui.wave.maxTotalSamples);
+    dockStore_.waveState().buffer.setResetHistoryOnTimeReset(config.gui.wave.resetHistoryOnTimeReset);
+    configStore_.applyToDock(config, dockStore_);
+    applyAdaptiveWaveBudget();
+    loggingFacade_.applyConfig(config.logging);
+    // 配置重载后立即刷新状态，避免通讯面板在下一次 pump 前显示上一次的模式。
+    syncAdaptivePerformanceStatus();
+    return !reloadProtocol || reloadProtocolDirectory(dockStore_.luaState().protocolDir, false);
+}
+
+void Application::configureScriptWorker(const config::AppConfig& config)
+{
     const auto postprocessWorkerThreads = scripting::resolvePipelineWorkerThreads(
         config.scripting.pipeline.workerThreads, std::thread::hardware_concurrency());
     scriptWorker_.configure(scripting::ScriptRuntimeWorkerConfig{
@@ -114,15 +128,6 @@ bool Application::applyConfig(const config::AppConfig& config)
         .backpressureLowWatermark = config.scripting.workerBackpressureLowWatermark,
     });
     scriptWorker_.setFileIoConfig(config.scripting.fileIo);
-    applyHistoryLimits(config.gui.logHistory);
-    dockStore_.waveState().buffer.setMaxTotalSamples(config.gui.wave.maxTotalSamples);
-    dockStore_.waveState().buffer.setResetHistoryOnTimeReset(config.gui.wave.resetHistoryOnTimeReset);
-    configStore_.applyToDock(config, dockStore_);
-    applyAdaptiveWaveBudget();
-    loggingFacade_.applyConfig(config.logging);
-    // 配置重载后立即刷新状态，避免通讯面板在下一次 pump 前显示上一次的模式。
-    syncAdaptivePerformanceStatus();
-    return reloadProtocolDirectory(dockStore_.luaState().protocolDir);
 }
 
 void Application::setLogLevel(const config::LogLevel level)
@@ -160,6 +165,7 @@ config::AppConfig Application::captureConfig() const
     captured.gui.rawCapture = runtimeConfig_.gui.rawCapture;
     captured.gui.lastDataExport = runtimeConfig_.gui.lastDataExport;
     captured.gui.fileDialogs = runtimeConfig_.gui.fileDialogs;
+    captured.gui.importProtocolSource = runtimeConfig_.gui.importProtocolSource;
     captured.gui.realtimeBacklog = runtimeConfig_.gui.realtimeBacklog;
     captured.gui.elfSymbolCombo = runtimeConfig_.gui.elfSymbolCombo;
     captured.gui.interactionFeedback = runtimeConfig_.gui.interactionFeedback;
@@ -331,6 +337,17 @@ void Application::refreshTransferFrameDisplayAfterProtocolReload()
 bool Application::pumpOnce()
 {
     if (dataImportActive_) return pumpDataImport();
+    if (retiringImportProtocolLoad_.valid()) {
+        static_cast<void>(scriptWorker_.drainOutputs());
+        if (retiringImportProtocolLoad_.wait_for(std::chrono::seconds(0)) != std::future_status::ready ||
+            !scriptWorker_.inputIdle()) return true;
+        const auto result = retiringImportProtocolLoad_.get();
+        retiringImportProtocolLoad_ = {};
+        static_cast<void>(scriptWorker_.drainOutputs());
+        if (result.ok) applyLuaScriptSnapshot(result.snapshot);
+        else dockStore_.luaState().lastError = "取消导入后的协议恢复失败: " + result.lastError;
+        return true;
+    }
     bool changed = false;
     const bool hadPendingScriptPlotAppends = !pendingScriptPlotAppends_.empty();
     // 先让transport pump非阻塞投递RX；若worker达到高水位则保留输入，

@@ -569,6 +569,34 @@ static void testTransferHistorySwitchConfig()
             "现场包恢复不得覆盖本机历史切换偏好");
     application.shutdown();
 }
+static void testImportProtocolPreference()
+{
+    using namespace protoscope;
+    config::ConfigStore store;
+    require(config::AppConfig{}.gui.importProtocolSource == config::ImportProtocolSource::PreferPackage,
+            "导入默认必须优先包内协议");
+    const auto invalid = store.loadText("gui:\n  data_import:\n    protocol_source: invalid\n");
+    require(invalid.error.empty() && invalid.config.gui.importProtocolSource == config::ImportProtocolSource::PreferPackage,
+            "非法导入来源必须回退默认");
+    app::Application application;
+    require(application.initialize(), "导入偏好测试初始化失败");
+    const auto before = application.captureConfig();
+    auto draft = before;
+    draft.gui.importProtocolSource = config::ImportProtocolSource::CurrentProtocol;
+    const auto applied = application.applySettingsChanges(before, draft);
+    require(applied.status == app::SettingsApplyStatus::Applied &&
+        application.captureConfig().gui.importProtocolSource == config::ImportProtocolSource::CurrentProtocol,
+        "设置字段必须合并、应用并捕获导入偏好");
+    std::string yaml, error;
+    require(store.saveText(application.captureConfig(), yaml, error), error.c_str());
+    require(store.loadText(yaml).config.gui.importProtocolSource == config::ImportProtocolSource::CurrentProtocol,
+            "导入偏好持久往返失败");
+    auto bad = application.captureConfig();
+    bad.gui.importProtocolSource = static_cast<config::ImportProtocolSource>(99);
+    require(application.applySettingsChanges(application.captureConfig(), bad).status == app::SettingsApplyStatus::Failed,
+            "设置必须拒绝非法导入枚举");
+    application.shutdown();
+}
 } // namespace
 
 int main()
@@ -577,7 +605,7 @@ int main()
         const auto root = std::filesystem::temp_directory_path() /
             ("protoscope-settings-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         std::filesystem::create_directories(root);
-        testCaptureAndAtomicLoad(); testSafeSave(root); testLoggerCandidate(root); testDraftAndMerge(); testScale(); testAsyncFailures(root); testApplication(root); testTransferHistorySwitchConfig();
+        testCaptureAndAtomicLoad(); testSafeSave(root); testLoggerCandidate(root); testDraftAndMerge(); testScale(); testAsyncFailures(root); testApplication(root); testTransferHistorySwitchConfig(); testImportProtocolPreference();
         std::cout << "[PASS] 应用设置核心回归\n";
         return 0;
     } catch (const std::exception& ex) {

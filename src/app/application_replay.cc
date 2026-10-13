@@ -99,6 +99,26 @@ namespace {
 
 } // namespace
 
+bool Application::selectSessionImportProtocol(const session::SessionPackageData& package, std::string& directory,
+                                               std::filesystem::path& extractedDirectory, std::string& error)
+{
+    directory = dockStore_.luaState().protocolDir;
+    extractedDirectory.clear();
+    const auto entries = collectSessionProtocolEntries(package);
+    if (runtimeConfig_.gui.importProtocolSource == config::ImportProtocolSource::CurrentProtocol || entries.empty())
+        return true;
+    // 调用方先校验所有条目名称；存在但缺 main.lua 的包协议不能伪装成“缺失”回退。
+    if (std::none_of(entries.begin(), entries.end(), [](const auto* entry) { return entry->name == "protocol/main.lua"; })) {
+        error = "现场包协议损坏：缺少 protocol/main.lua";
+        return false;
+    }
+    extractedDirectory = std::filesystem::temp_directory_path() /
+        ("ProtoScope-import-protocol-" + std::to_string(nowUs()));
+    if (!releaseSessionProtocolEntries(entries, extractedDirectory, error)) return false;
+    directory = extractedDirectory.generic_string();
+    return true;
+}
+
 bool Application::validateOfflineReplayTransport(std::string& error) const
 {
     if (!transport_) {

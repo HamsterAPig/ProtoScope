@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <thread>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -690,9 +691,12 @@ bool Application::exportWaveCsv(const std::filesystem::path& path,
 
 void Application::confirmDataImport(const OfflineReplayProcessing processing, const OfflineReplayPacing pacing)
 {
-    dataImportProcessing_ = processing;
+    // 持久来源偏好对初始化与可选历史解析一致生效，使用当前时绝不执行包内 Lua。
+    dataImportProcessing_ = processing == OfflineReplayProcessing::PackageProtocol &&
+        (runtimeConfig_.gui.importProtocolSource == config::ImportProtocolSource::CurrentProtocol ||
+         !dataTransfer_.status().hasPackageProtocol) ? OfflineReplayProcessing::CurrentProtocol : processing;
     dataImportPacing_ = pacing;
-    parseImportedWave_ = processing != OfflineReplayProcessing::BrowseRaw;
+    parseImportedWave_ = dataImportProcessing_ != OfflineReplayProcessing::BrowseRaw;
     dataTransfer_.confirm();
 }
 
@@ -701,6 +705,21 @@ void Application::resetDataImportGenerationState(const bool cleanupReplayResourc
 {
     importReset_.reset();
     importProfile_.reset();
+    if (importProtocolLoad_.valid()) {
+        // 取消无法中断已执行初始化；串行排入旧协议恢复，期间不发布过期输出。
+        const auto previousProtocol = dockStore_.luaState().protocolDir;
+        retiringImportProtocolLoad_ = previousProtocol.empty() ? importProtocolLoad_
+            : scriptWorker_.loadProtocolDirectoryAsync(previousProtocol).share();
+        if (pendingImportPreviousConfig_) {
+            configureScriptWorker(*pendingImportPreviousConfig_);
+        }
+    }
+    importProtocolLoad_ = {};
+    pendingImportMetadata_.reset();
+    importProtocolPrepared_ = false;
+    pendingImportPreviousConfig_.reset();
+    pendingImportProtocol_.clear();
+    pendingImportProtocolDirectory_.clear();
     pendingImportSession_.reset();
     pendingImportMarkers_.clear();
     pendingImportedCapture_ = {};
@@ -725,6 +744,19 @@ void Application::cancelDataTransfer()
 bool Application::startDataImport(const std::filesystem::path& path, std::string& error)
 {
     if (dataTransferStatus().active) { error = "已有数据任务正在执行"; return false; }
+    if (retiringImportProtocolLoad_.valid()) {
+        static_cast<void>(scriptWorker_.drainOutputs());
+        if (retiringImportProtocolLoad_.wait_for(std::chrono::seconds(0)) != std::future_status::ready ||
+            !scriptWorker_.inputIdle()) {
+            error = "已取消的协议准备尚未结束，请稍后重新导入";
+            return false;
+        }
+        const auto result = retiringImportProtocolLoad_.get();
+        retiringImportProtocolLoad_ = {};
+        static_cast<void>(scriptWorker_.drainOutputs());
+        // 被取消的准备不得提交旧代次路径、波形或记录；下一次导入会显式加载其所选协议。
+        if (!result.ok) loggingFacade_.warn("session", result.lastError);
+    }
     if (!validateOfflineReplayTransport(error)) return false;
     if (rawCaptureRecording_.isOpen()) { error = "请先停止原始录制"; return false; }
     if (rawCaptureReplay_.loaded) unloadRawCaptureReplayTimeline();
@@ -759,6 +791,31 @@ bool Application::pumpDataImport()
     std::size_t samples = 0;
     std::size_t bytes = 0;
     try {
+        if (importProtocolLoad_.valid()) {
+            // 加载期间只消费旧 worker 输出以解除背压，不把初始化波形写入旧快照。
+            static_cast<void>(scriptWorker_.drainOutputs());
+            if (importProtocolLoad_.wait_for(std::chrono::seconds(0)) != std::future_status::ready ||
+                !scriptWorker_.inputIdle()) return true;
+            const auto result = importProtocolLoad_.get();
+            importProtocolLoad_ = {};
+            if (!result.ok) {
+                if (pendingImportPreviousConfig_) {
+                    configureScriptWorker(*pendingImportPreviousConfig_);
+                }
+                throw std::runtime_error("所选导入协议加载失败: " + result.lastError);
+            }
+            // 加载成功才更新协议面板；不走 reload 的历史刷新/波形初始化输出提交。
+            auto& lua = dockStore_.luaState();
+            lua.protocolDir = pendingImportProtocol_;
+            lua.protocolName = configStore_.protocolName(pendingImportProtocol_);
+            lua.scriptPath = configStore_.mainLuaPath(pendingImportProtocol_).generic_string();
+            lua.loaded = true;
+            lua.lastError.clear();
+            applyLuaScriptSnapshot(result.snapshot);
+            static_cast<void>(scriptWorker_.drainOutputs());
+            resetTransferFrameParser();
+            importProtocolPrepared_ = true;
+        }
         // 协议加载和状态重置都由脚本线程执行；UI 只轮询，不能 runSync 等待。
         if (rawCaptureReplay_.phase == OfflineReplayPhase::Preparing && rawCaptureReplay_.preparation.valid()) {
             if (rawCaptureReplay_.preparation.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return true;
@@ -787,7 +844,9 @@ bool Application::pumpDataImport()
                std::chrono::steady_clock::now() - started < std::chrono::milliseconds(4)) {
             if (parseImportedWave_ &&
                 (importReset_ || importProfile_ || (offlineScriptWorker_ && !offlineScriptWorker_->inputIdle()))) break;
-            auto batch = dataTransfer_.take(8192 - samples, 65536 - bytes);
+            auto batch = pendingImportMetadata_ ? std::move(pendingImportMetadata_)
+                                                : dataTransfer_.take(8192 - samples, 65536 - bytes);
+            pendingImportMetadata_.reset();
             if (!batch) break;
             if (batch->id != status.id) continue;
             samples += batch->samples.size();
@@ -799,16 +858,27 @@ bool Application::pumpDataImport()
             if (batch->metadata) {
                 std::string error;
                 pendingImportSession_ = batch->session;
-                if (batch->session) {
-                    std::vector<plot::WaveAnalysisMarker> markers;
-                    if (!restoreSessionPackageContext(*batch->session,
-                                                      batch->metadata->waveform.has_value(),
-                                                      markers,
-                                                      error)) {
+                if (batch->session && !importProtocolPrepared_) {
+                    pendingImportPreviousConfig_ = runtimeConfig_;
+                    pendingImportPreviousConfig_->protocol.selectedDir = dockStore_.luaState().protocolDir;
+                    if (!validateSessionPackageEntries(*batch->session, error) ||
+                        !selectSessionImportProtocol(*batch->session, pendingImportProtocol_,
+                                                     pendingImportProtocolDirectory_, error))
                         throw std::runtime_error(error);
+                    if (!pendingImportProtocolDirectory_.empty())
+                        importedProtocolDirectories_.push_back(pendingImportProtocolDirectory_);
+                    if (!prepareSessionScriptConfig(*batch->session, error))
+                        throw std::runtime_error(error);
+                    if (!pendingImportProtocol_.empty()) {
+                        importProtocolLoad_ = scriptWorker_.loadProtocolDirectoryAsync(pendingImportProtocol_).share();
+                        pendingImportMetadata_ = std::move(batch);
+                        return true;
                     }
-                    pendingImportMarkers_ = std::move(markers);
+                    // 无当前协议且无包协议时允许浏览快照/原始记录，不制造无效加载任务。
                 }
+                if (batch->session && !restoreSessionPackageContext(*batch->session,
+                        batch->metadata->waveform.has_value(), pendingImportMarkers_, error))
+                    throw std::runtime_error(error);
                 if (dataImportProcessing_ == OfflineReplayProcessing::PackageProtocol && !batch->session) {
                     throw std::runtime_error("当前导入文件不包含现场包协议");
                 }
@@ -871,7 +941,8 @@ bool Application::pumpDataImport()
     } catch (const std::exception& ex) {
         applyingImportContext_ = false;
         resetDataImportGenerationState(true);
-        dataTransfer_.fail(std::string("导入提交失败，已保留部分数据: ") + ex.what());
+        dataTransfer_.fail(std::string(importReplacedWave_ || importReplacedRecords_
+            ? "导入提交失败，已保留部分数据: " : "导入准备失败，已保留原有数据: ") + ex.what());
     }
     const auto current = dataTransfer_.status();
     if (!current.active && current.complete) {
@@ -1149,6 +1220,17 @@ bool Application::importSessionPackage(const std::filesystem::path& path, std::s
 }
 
 
+bool Application::prepareSessionScriptConfig(const session::SessionPackageData& package, std::string& error)
+{
+    const auto* entry = session::findSessionPackageEntry(package, "config.yaml");
+    if (!entry) { error = "现场包缺少 config.yaml"; return false; }
+    const auto loaded = configStore_.loadText(stringFromBytes(entry->bytes));
+    if (!loaded.error.empty()) { error = loaded.error; return false; }
+    // 准备只配置 worker，不应用会不可逆裁剪旧波形/记录的展示限制。
+    configureScriptWorker(loaded.config);
+    return true;
+}
+
 bool Application::restoreSessionPackageContext(const session::SessionPackageData& package,
                                                const bool allowMissingProtocol,
                                                std::vector<plot::WaveAnalysisMarker>& markers,
@@ -1160,7 +1242,8 @@ bool Application::restoreSessionPackageContext(const session::SessionPackageData
         error = "现场包缺少 config.yaml";
         return false;
     }
-    const auto previousConfig = runtimeConfig_;
+    auto previousConfig = runtimeConfig_;
+    previousConfig.protocol.selectedDir = dockStore_.luaState().protocolDir;
     auto loaded = configStore_.loadText(stringFromBytes(configEntry->bytes));
     if (!loaded.error.empty()) {
         error = loaded.error;
@@ -1172,11 +1255,14 @@ bool Application::restoreSessionPackageContext(const session::SessionPackageData
     // 历史切换策略/范围是本机展示偏好，现场包恢复不得覆盖。
     loaded.config.gui.historyOnParsedSwitch = previousConfig.gui.historyOnParsedSwitch;
     loaded.config.gui.historyScope = previousConfig.gui.historyScope;
-    // BrowseRaw/CurrentProtocol 不允许包内配置替换当前协议；只恢复其余现场配置。
+    loaded.config.gui.importProtocolSource = previousConfig.gui.importProtocolSource;
+    loaded.config.gui.replayRawHistoryOnSchemaSwitch = previousConfig.gui.replayRawHistoryOnSchemaSwitch;
+    // 不使用包内 config.yaml 的机器路径；所选协议由安全提取和显式加载决定。
     const auto persistentProtocolConfig = loaded.config.protocol;
     loaded.config.protocol = previousConfig.protocol;
     applyingImportContext_ = true;
-    const bool applied = applyConfig(loaded.config);
+    // 协议由导入准备阶段显式加载；配置应用不能按已更新的 UI 路径误判 unchanged。
+    const bool applied = applyConfig(loaded.config, false);
     applyingImportContext_ = false;
     if (!applied && !allowMissingProtocol) {
         error = "应用现场包配置失败";
@@ -1195,7 +1281,49 @@ bool Application::applySessionPackage(const session::SessionPackageData& package
 {
     const auto* package = &packageData;
     if (!validateOfflineReplayTransport(error)) return false;
+    if (dataTransferStatus().active || retiringImportProtocolLoad_.valid()) {
+        error = "导入或已取消的协议准备尚未完成";
+        return false;
+    }
+    if (!validateSessionPackageEntries(*package, error)) return false;
+    std::string selectedProtocol;
+    std::filesystem::path extractedProtocol;
+    if (!selectSessionImportProtocol(*package, selectedProtocol, extractedProtocol, error)) return false;
+    if (!extractedProtocol.empty()) importedProtocolDirectories_.push_back(extractedProtocol);
+    auto previousConfig = runtimeConfig_;
+    previousConfig.protocol.selectedDir = dockStore_.luaState().protocolDir;
     std::vector<plot::WaveAnalysisMarker> importedMarkers;
+    if (!prepareSessionScriptConfig(*package, error)) return false;
+    if (!selectedProtocol.empty()) {
+        // 同步入口与 GUI 使用同一选择规则；强制实际加载，绝不依赖 applyConfig 的 unchanged 判断。
+        const auto result = scriptWorker_.loadProtocolDirectory(selectedProtocol);
+        // 同步入口也须等发布完成再丢弃初始化绘图，load future 先于 outputs 发布就绪。
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        while (!scriptWorker_.inputIdle()) {
+            static_cast<void>(scriptWorker_.drainOutputs());
+            if (std::chrono::steady_clock::now() >= deadline) {
+                configureScriptWorker(previousConfig);
+                error = "所选导入协议初始化输出等待超时，未提交导入数据";
+                return false;
+            }
+            std::this_thread::yield();
+        }
+        static_cast<void>(scriptWorker_.drainOutputs());
+        if (!result.ok) {
+            configureScriptWorker(previousConfig);
+            error = "所选导入协议加载失败: " + result.lastError;
+            return false;
+        }
+        auto& lua = dockStore_.luaState();
+        lua.protocolDir = selectedProtocol;
+        lua.protocolName = configStore_.protocolName(selectedProtocol);
+        lua.scriptPath = configStore_.mainLuaPath(selectedProtocol).generic_string();
+        lua.loaded = true;
+        lua.lastError.clear();
+        applyLuaScriptSnapshot(result.snapshot);
+        static_cast<void>(scriptWorker_.drainOutputs());
+        resetTransferFrameParser();
+    }
     if (!restoreSessionPackageContext(*package, allowMissingProtocol, importedMarkers, error)) return false;
     std::optional<plot::RawCaptureFileData> rawCapture;
     if (restoreCapture && !decodeSessionRawCaptureEntry(*package, std::nullopt, rawCapture, error)) return false;
@@ -1211,7 +1339,7 @@ bool Application::applySessionPackage(const session::SessionPackageData& package
         }
     }
     dockStore_.waveState().analysisMarkers = std::move(importedMarkers);
-    setStatusMessage("现场包已载入，默认仅浏览原始记录；执行包内 Lua 前必须明确选择");
+    setStatusMessage("现场包已载入，已初始化所选协议；默认仅浏览原始记录，不重算快照");
     loggingFacade_.info("session", "session loaded in browse-raw mode");
     return true;
 }

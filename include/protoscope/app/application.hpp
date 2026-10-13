@@ -51,7 +51,7 @@ public:
     Application();
 
     bool initialize();
-    bool applyConfig(const config::AppConfig& config);
+    bool applyConfig(const config::AppConfig& config, bool reloadProtocol = true);
     config::AppConfig captureConfig() const;
     SettingsApplyResult applySettingsChanges(const config::AppConfig& baseline, const config::AppConfig& draft,
                                              SettingsApplyOptions options = {});
@@ -441,7 +441,11 @@ private:
                          std::uint64_t finishedAtMs);
     void cancelPendingTxRequests(const std::string& reason, std::uint64_t finishedAtMs);
     void cancelAllTxRequests(const std::string& reason);
+    void configureScriptWorker(const config::AppConfig& config);
+    bool prepareSessionScriptConfig(const session::SessionPackageData& package, std::string& error);
     void resetDataImportGenerationState(bool cleanupReplayResources);
+    bool selectSessionImportProtocol(const session::SessionPackageData& package, std::string& directory,
+                                     std::filesystem::path& extractedDirectory, std::string& error);
     bool restoreSessionPackageContext(const session::SessionPackageData& package,
                                       bool allowMissingProtocol,
                                       std::vector<plot::WaveAnalysisMarker>& markers,
@@ -584,6 +588,15 @@ private:
     bool dataImportActive_{false};
     OfflineReplayProcessing dataImportProcessing_{OfflineReplayProcessing::BrowseRaw};
     OfflineReplayPacing dataImportPacing_{OfflineReplayPacing::FastBatchParse};
+    // 已载入包协议独立于离线 timeline；卸载原始浏览不能使协议面板的目录失效。
+    std::vector<std::filesystem::path> importedProtocolDirectories_;
+    std::filesystem::path pendingImportProtocolDirectory_;
+    std::string pendingImportProtocol_;
+    std::optional<DataImportBatch> pendingImportMetadata_;
+    bool importProtocolPrepared_{false};
+    std::optional<config::AppConfig> pendingImportPreviousConfig_;
+    std::shared_future<scripting::ScriptRuntimeLoadResult> importProtocolLoad_;
+    std::shared_future<scripting::ScriptRuntimeLoadResult> retiringImportProtocolLoad_;
     std::shared_ptr<session::SessionPackageData> pendingImportSession_;
     std::vector<plot::WaveAnalysisMarker> pendingImportMarkers_;
     bool importedWaveIncomplete_{false};

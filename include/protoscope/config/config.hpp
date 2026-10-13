@@ -229,7 +229,14 @@ enum class TransferLogHistoryScope {
     RetainedCapture,
 };
 
+// 导入协议来源是本机偏好，不随现场包配置恢复。
+enum class ImportProtocolSource {
+    PreferPackage,
+    CurrentProtocol,
+};
+
 struct GuiConfig {
+    ImportProtocolSource importProtocolSource{ImportProtocolSource::PreferPackage};
     GuiFileDialogConfig fileDialogs{};
     DataExportConfig lastDataExport{};
     std::string theme{"professional_dark"};

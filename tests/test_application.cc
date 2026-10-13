@@ -3119,14 +3119,23 @@ void test_application_session_package_import_invalid_protocol_rolls_back_runtime
     require(importer.initialize(), "导入应用初始化失败");
     const auto beforeLua = importer.docks().luaState();
     const auto beforeConfig = importer.captureConfig();
-    require(importer.importSessionPackage(invalidPackagePath, error),
-            "默认 BrowseRaw 不执行无效包内协议，因此仍应可载入原始记录");
+    require(!importer.importSessionPackage(invalidPackagePath, error) && !error.empty(),
+            "默认优先包协议：所选包 Lua 损坏必须失败，不能按缺失回退");
     const auto& afterLua = importer.docks().luaState();
     const auto afterConfig = importer.captureConfig();
-    require(afterLua.protocolDir == beforeLua.protocolDir, "BrowseRaw 不应替换运行协议目录");
-    require(afterLua.scriptPath == beforeLua.scriptPath, "BrowseRaw 不应替换运行脚本路径");
+    require(afterLua.protocolDir == beforeLua.protocolDir, "准备失败不应替换运行协议目录");
+    require(afterLua.scriptPath == beforeLua.scriptPath, "准备失败不应替换运行脚本路径");
     require(afterConfig.protocol.selectedDir == beforeConfig.protocol.selectedDir,
-            "BrowseRaw 保存配置不应指向临时协议目录");
+            "准备失败保存配置不应指向临时协议目录");
+    auto currentConfig = importer.captureConfig();
+    currentConfig.gui.importProtocolSource = protoscope::config::ImportProtocolSource::CurrentProtocol;
+    require(importer.applyConfig(currentConfig, false), "当前协议偏好应可应用");
+    error.clear();
+    require(importer.importSessionPackage(invalidPackagePath, error),
+            "明确选择当前协议时应忽略损坏包 Lua 并允许原始浏览");
+    require(importer.docks().luaState().protocolDir == beforeLua.protocolDir &&
+            importer.docks().luaState().scriptPath == beforeLua.scriptPath,
+            "当前协议偏好不得加载包 Lua 或替换运行目录");
     importer.shutdown();
 }
 

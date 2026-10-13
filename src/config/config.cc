@@ -881,6 +881,11 @@ namespace {
     {
         const auto gui = root["gui"];
         config.gui.theme = readScalar<std::string>(gui, "theme", config.gui.theme);
+        const auto importSource = readScalar<std::string>(childNode(gui, "data_import"), "protocol_source", "prefer_package");
+        config.gui.importProtocolSource = importSource == "current_protocol"
+            ? ImportProtocolSource::CurrentProtocol : ImportProtocolSource::PreferPackage;
+        if (importSource != "prefer_package" && importSource != "current_protocol")
+            std::fprintf(stderr, "[config] 非法导入协议来源 '%s'，已回退 prefer_package\n", importSource.c_str());
         const auto rendererBackendText =
             readScalar<std::string>(gui, "renderer_backend", toRendererBackendText(config.gui.rendererBackend));
         config.gui.rendererBackend = parseGuiRendererBackend(rendererBackendText).value_or(GuiRendererBackend::OpenGL);
@@ -1280,6 +1285,8 @@ namespace {
         gui["last_data_export"]["record_range"] = last.recordRange;
         gui["last_data_export"]["csv_shape"] = last.csvShape;
         gui["last_data_export"]["directory"] = last.directory;
+        gui["data_import"]["protocol_source"] = config.gui.importProtocolSource == ImportProtocolSource::CurrentProtocol
+            ? "current_protocol" : "prefer_package";
         gui["file_dialogs"]["last_import_directory"] = config.gui.fileDialogs.lastImportDirectory;
         gui["file_dialogs"]["last_export_directory"] = config.gui.fileDialogs.lastExportDirectory;
         gui["raw_capture"]["live_limit_bytes"] = config.gui.rawCapture.liveLimitBytes;

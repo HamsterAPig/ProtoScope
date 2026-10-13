@@ -56,6 +56,9 @@ static void require(bool value, const std::string& message)
 namespace protoscope::app {
 // 复用已有测试友元；验证独立离线 parser 不被切换入口替换，不调用 Lua。
 struct ApplicationBackpressureTestAccess {
+    static std::uint64_t runtimeGeneration(const Application& application) {
+        return application.scriptWorker_.snapshot().runtimeGeneration;
+    }
     static void restoreBrowseSchema(Application& application) { application.resetTransferFrameParser(); }
     static bool historyActive(const Application& application) { return application.historyRebuild_.has_value(); }
     static bool historyOutputPending(const Application& application) { return !application.pendingTransferFrameRows_.empty(); }
@@ -1010,9 +1013,140 @@ static void testImportedLuaBitToggle()
     application.shutdown();
 }
 
+// 同步/异步必须实际加载选定协议，而非仅把 UI 的目录指向包内路径。
+static void testSessionImportProtocolSelection()
+{
+    config::ConfigStore store;
+    std::string yaml, error;
+    require(store.saveText(config::AppConfig{}, yaml, error), error);
+    session::SessionPackageData package;
+    package.entries.push_back({"config.yaml", {yaml.begin(), yaml.end()}});
+    const std::string script = "local marker = 'package-initialized'\n";
+    package.entries.push_back({"protocol/main.lua", {script.begin(), script.end()}});
+    plot::RawCaptureFileData capture;
+    capture.source = "导入协议测试";
+    capture.events.push_back({.type = plot::RawCaptureEventType::RxBytes, .timestampMs = 1, .bytes = {42}});
+    plot::WaveCsvData waveform;
+    waveform.channels.resize(1);
+    waveform.channels[0].label = "包快照";
+    waveform.channels[0].samples = {{0, 321}};
+    capture.waveform = waveform;
+    std::vector<std::uint8_t> raw;
+    require(plot::encodeRawCaptureFile(capture, raw, error), error);
+    package.entries.push_back({"raw_capture.psraw", raw});
+    tests::ScopedTempPath path(tests::makeUniqueTempFile("protoscope-import-protocol-choice", ".pssession"));
+    require(session::writeSessionPackage(path.path(), package, error), error);
+    for (const bool asynchronous : {false, true}) {
+        app::Application application;
+        require(application.initialize(), "协议选择测试初始化失败");
+        const auto oldDirectory = application.docks().luaState().protocolDir;
+        const auto oldGeneration = app::ApplicationBackpressureTestAccess::runtimeGeneration(application);
+        if (asynchronous) {
+            require(application.startDataImport(path.path(), error), error);
+            waitFor(application, [&] { return application.dataTransferStatus().awaitingConfirmation; });
+            application.confirmDataImport();
+            waitFor(application, [&] { const auto status = application.dataTransferStatus(); return status.complete && !status.active; });
+        } else require(application.importSessionPackage(path.path(), error), error);
+        const auto selected = application.docks().luaState().protocolDir;
+        require(app::ApplicationBackpressureTestAccess::runtimeGeneration(application) > oldGeneration,
+            "必须真正加载 worker 协议，不能只改路径");
+        require(selected != oldDirectory && application.docks().luaState().loaded &&
+            std::filesystem::is_regular_file(std::filesystem::path(selected) / "main.lua"),
+            "默认必须实际加载包内协议并保留提取目录");
+        const auto data = application.captureWaveData({}, error);
+        require(data && data->channels[0].samples.size() == 1 && data->channels[0].samples[0].value == 321,
+            "协议初始化不得重算包内波形快照");
+        require(application.docks().receiveState().displayMode == dock::TransferLogDisplayMode::RawChunks,
+            "初次导入必须原始浏览");
+        application.unloadRawCaptureReplayTimeline();
+        require(std::filesystem::is_regular_file(std::filesystem::path(selected) / "main.lua"),
+            "卸载离线 timeline 不得删除当前包协议目录");
+        application.shutdown();
+    }
+    app::Application current;
+    require(current.initialize(), "当前来源测试初始化失败");
+    const auto baseline = current.captureConfig();
+    auto draft = baseline;
+    draft.gui.importProtocolSource = config::ImportProtocolSource::CurrentProtocol;
+    require(current.applySettingsChanges(baseline, draft).status == app::SettingsApplyStatus::Applied,
+        "应用当前协议偏好失败");
+    // 包内坏 Lua：选择当前必须完全忽略它，默认选包则必须失败且保留已显示的数据。
+    const std::string broken = "this is not valid lua !!!";
+    package.entries[1].bytes.assign(broken.begin(), broken.end());
+    require(session::writeSessionPackage(path.path(), package, error), error);
+    require(current.importSessionPackage(path.path(), error), error);
+    require(current.captureConfig().gui.importProtocolSource == config::ImportProtocolSource::CurrentProtocol &&
+        current.docks().luaState().protocolDir == baseline.protocol.selectedDir,
+        "导入不得覆盖本机偏好或执行坏包 Lua");
+    auto prefer = current.captureConfig();
+    prefer.gui.importProtocolSource = config::ImportProtocolSource::PreferPackage;
+    require(current.applySettingsChanges(current.captureConfig(), prefer).status == app::SettingsApplyStatus::Applied,
+        "应用优先包偏好失败");
+    // 包上限小于旧数据，坏 Lua 准备失败不得提前裁剪任何旧展示数据。
+    auto restrictive = config::AppConfig{};
+    restrictive.gui.logHistory.transferRawLimit = 0;
+    restrictive.gui.logHistory.transferFrameLimit = 0;
+    restrictive.gui.logHistory.scriptLimit = 0;
+    restrictive.gui.logHistory.hostLimit = 0;
+    restrictive.gui.wave.maxTotalSamples = 1;
+    require(store.saveText(restrictive, yaml, error), error);
+    package.entries[0].bytes.assign(yaml.begin(), yaml.end());
+    require(session::writeSessionPackage(path.path(), package, error), error);
+    auto& oldReceive = current.docks().receiveState();
+    oldReceive.frameRows.push_back({.message = "保留旧帧"});
+    auto oldWave = waveform;
+    oldWave.channels[0].samples = {{0, 321}, {1, 654}, {2, 987}};
+    require(current.importWaveCsvData(oldWave, error), error);
+    const auto oldRows = oldReceive.rows;
+    const auto oldFrames = oldReceive.frameRows;
+    const auto requirePreserved = [&] {
+        const auto data = current.captureWaveData({}, error);
+        require(data && data->channels[0].samples.size() == 3 &&
+                data->channels[0].samples[0].value == 321 && data->channels[0].samples[1].value == 654 &&
+                data->channels[0].samples[2].value == 987, "坏包小上限不得裁剪旧波形");
+        require(oldReceive.rows.size() == oldRows.size() && oldReceive.frameRows.size() == oldFrames.size(),
+                "坏包小上限不得裁剪旧原始行/帧");
+        for (std::size_t i = 0; i < oldRows.size(); ++i)
+            require(oldReceive.rows[i].bytes == oldRows[i].bytes && oldReceive.rows[i].message == oldRows[i].message,
+                    "坏包失败原始内容必须不变");
+        require(oldReceive.frameRows.back().message == "保留旧帧", "坏包失败帧内容必须不变");
+    };
+    error.clear();
+    require(!current.importSessionPackage(path.path(), error) && !error.empty(), "坏包协议不得按缺失回退");
+    requirePreserved();
+    const auto retained = current.captureWaveData({}, error);
+    require(retained && retained->channels[0].samples[0].value == 321, "协议加载失败必须保留旧波形");
+    error.clear();
+    require(current.startDataImport(path.path(), error), error);
+    waitFor(current, [&] { return current.dataTransferStatus().awaitingConfirmation; });
+    current.confirmDataImport();
+    const auto deadline = Clock::now() + std::chrono::seconds(40);
+    while (current.dataTransferStatus().active) {
+        require(Clock::now() < deadline, "异步坏协议任务超时");
+        current.pumpOnce();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    current.pumpOnce();
+    require(!current.dataTransferStatus().error.empty() &&
+        current.captureWaveData({}, error)->channels[0].samples[0].value == 321,
+        "异步坏包协议必须明确失败且不提交新波形");
+    requirePreserved();
+    // 存在协议条目但缺少 main.lua 也属于损坏，不得回退。
+    package.entries[1].name = "protocol/other.lua";
+    require(!current.applySessionPackage(package, true, error), "缺 main.lua 的所选包协议不得回退");
+    package.entries[1].name = "protocol/../main.lua";
+    require(!current.applySessionPackage(package, true, error), "协议提取必须保留路径穿越校验");
+    // 无协议条目才允许使用当前协议。
+    package.entries.erase(package.entries.begin() + 1);
+    require(session::writeSessionPackage(path.path(), package, error), error);
+    require(current.importSessionPackage(path.path(), error), error);
+    current.shutdown();
+}
+
 int main(int argc, char**)
 {
     try {
+        testSessionImportProtocolSelection();
         testImportedSourceLabelsAfterReplay();
         testImportedLuaBitToggle();
         testImportedRawRecordsVisibleAndTxBytesPreserved();

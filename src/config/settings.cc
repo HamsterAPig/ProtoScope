@@ -38,7 +38,7 @@ template<class F> void loggingFields(AppConfig& out, const AppConfig& source, F&
     FIELD(gui.logHistory.transferRawLimit); FIELD(gui.logHistory.transferFrameLimit);
     FIELD(gui.logHistory.hostLimit); FIELD(gui.logHistory.scriptLimit); FIELD(gui.logHistory.requestTraceLimit);
     FIELD(gui.sendHistoryLimit);
-    FIELD(gui.historyOnParsedSwitch); FIELD(gui.historyScope);
+    FIELD(gui.historyOnParsedSwitch); FIELD(gui.historyScope); FIELD(gui.importProtocolSource);
 #undef FIELD
 }
 template<class F> void performanceFields(AppConfig& out, const AppConfig& source, F&& field)
@@ -92,6 +92,7 @@ bool validateChanged(const AppConfig& value, const std::vector<std::string>& cha
         check(name, static_cast<int>(current) >= 0 && static_cast<int>(current) <= static_cast<int>(last));
     };
     enumCheck("logging.level", value.logging.level, LogLevel::Error);
+    enumCheck("gui.importProtocolSource", value.gui.importProtocolSource, ImportProtocolSource::CurrentProtocol);
     enumCheck("gui.historyOnParsedSwitch", value.gui.historyOnParsedSwitch,
               TransferLogHistoryOnParsedSwitch::SkipHistory);
     enumCheck("gui.historyScope", value.gui.historyScope, TransferLogHistoryScope::RetainedCapture);
