@@ -1359,6 +1359,14 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
         if (smartSnap.has_value()) {
             best = smartSnap;
         }
+        if (!held && cursor.channelIndex < snapshot.channels.size() &&
+            bitDisplayEnabled(snapshot.channels[cursor.channelIndex].bitDisplay)) {
+            best = findSplitBitCursorReadout(snapshot, displayData, cursor.channelIndex, cursor.time,
+                                            timeSnapDistance, cursorReadouts[cursorIndex]);
+        } else if (!best && !held) {
+            // 游标离开视口后仍从完整原始视图读取，缩放不应使固定区间失效。
+            best = findMeasurementCursorReadoutByTimeRefresh(displayData, view, cursor, timeSnapDistance);
+        }
         if (!best.has_value()) {
             cursorReadouts[cursorIndex].reset();
             continue;
@@ -1621,65 +1629,135 @@ std::optional<plot::MeasurementReadout> requestWaveMeasurement(plot::WaveDockSta
 {
     auto& view = wave.view;
     if (channel >= display.channels.size() || !std::isfinite(begin) || !std::isfinite(end)) {
-        ++wave.measurementRequestGeneration;
         wave.measurementKeyValid = false;
-        wave.measurementRequestActive = false;
         wave.cachedMeasurement.reset();
+        wave.measurementCompletedKey.reset();
+        view.measurementSnapshotRange.reset();
         view.measurementUpdatePending = false;
         return std::nullopt;
     }
     if (end < begin) std::swap(begin, end);
+    if (view.measurementVisibleWindowOnly) {
+        begin = (std::max)(begin, view.viewMinTime);
+        end = (std::min)(end, view.viewMaxTime);
+    }
     const auto ratio = [&](std::size_t i) {
         return i < display.channels.size() && display.channels[i].source ? display.channels[i].source->ratio : 1.0;
     };
-    const plot::WaveDockState::MeasurementKey key{channel, begin, end, reference, manual,
+    plot::WaveDockState::MeasurementKey key{channel, begin, end, reference, manual,
         view.sampleFrequencyHz, ratio(channel), reference ? ratio(*reference) : 1.0};
-    // 区间或通道变化后立即作废缓存和在途结果，拖动期间只保留轻量读数。
-    // 同一区间的持续采集仍沿用原有刷新调度，避免每帧追加数据使后台结果永久失效。
-    if (!wave.measurementKeyValid || !(wave.measurementKey == key)) {
-        wave.measurementKey = key;
-        wave.measurementKeyValid = true;
-        ++wave.measurementRequestGeneration;
-        wave.measurementRequestActive = false;
-        wave.measurementDataRevision = (std::numeric_limits<std::uint64_t>::max)();
+    const auto signature = [&](std::size_t index, bool guards) {
+        plot::WaveDockState::MeasurementKey::InputRange result;
+        if (index >= display.channels.size()) return result;
+        const auto& c = display.channels[index];
+        result.axis = c.axis;
+        result.frequency = c.frequency;
+        if (c.source) {
+            const plot::WaveQueryView query(*c.source, c.axis, c.frequency, c.formula);
+            const auto range = begin <= end ? query.range(begin, end, guards) : std::pair<std::size_t, std::size_t>{};
+            result.generation = c.source->dataGeneration;
+            result.first = c.source->sampleIndexOffset + range.first;
+            result.last = c.source->sampleIndexOffset + range.second;
+        } else {
+            // 无借用视图的独立数据仅用于兼容入口，版本号保守地阻止误用缓存。
+            result.generation = wave.buffer.analysisRevision();
+            const auto first = std::lower_bound(c.samples.begin(), c.samples.end(), begin,
+                [](const auto& sample, double time) { return sample.time < time; });
+            const auto last = begin <= end ? std::upper_bound(first, c.samples.end(), end,
+                [](double time, const auto& sample) { return time < sample.time; }) : first;
+            result.first = static_cast<std::size_t>(first - c.samples.begin());
+            result.last = static_cast<std::size_t>(last - c.samples.begin());
+        }
+        return result;
+    };
+    // 稳定帧只二分查询边界；区间外追加和裁剪不改变全局样本范围。
+    key.input = signature(channel, false);
+    key.visibleWindowOnly = view.measurementVisibleWindowOnly;
+    if (reference && !manual) key.referenceInput = signature(*reference, true);
+    const bool moving = wave.measurementKeyValid &&
+        (wave.measurementKey.begin != begin || wave.measurementKey.end != end);
+    const bool following = view.autoFollowLatest && view.followMeasurementCursorsOnScroll;
+    wave.measurementKey = key;
+    wave.measurementKeyValid = true;
+    if (wave.measurementCompletedKey &&
+        (!wave.measurementCompletedKey->sameContext(key) ||
+         (!following && !(*wave.measurementCompletedKey == key)))) {
         wave.cachedMeasurement.reset();
+        wave.measurementCompletedKey.reset();
+        view.measurementSnapshotRange.reset();
     }
     if (wave.analysisWorker) {
         if (auto output = wave.analysisWorker->takeMeasurement();
-            output && output->generation == wave.measurementRequestGeneration) {
-            wave.cachedMeasurement = std::move(output->result);
+            output && wave.measurementRequestActive && output->generation == wave.measurementRequestGeneration) {
             wave.measurementRequestActive = false;
+            // 固定游标严格匹配输入；跟随滚动可展示同上下文的最近完成快照。
+            if (wave.measurementRequestedKey == key ||
+                (following && wave.measurementRequestedKey.sameContext(key))) {
+                wave.cachedMeasurement = std::move(output->result);
+                wave.measurementCompletedKey = wave.measurementRequestedKey;
+                view.measurementSnapshotRange = std::pair{wave.measurementRequestedKey.begin,
+                    wave.measurementRequestedKey.end};
+            }
         }
     }
-    view.measurementUpdatePending = wave.measurementRequestActive || !wave.cachedMeasurement.has_value() ||
-        wave.measurementDataRevision != wave.buffer.analysisRevision();
-    const bool interacting = view.interactionActive || ImGui::IsMouseDown(ImGuiMouseButton_Left) ||
-        ImGui::IsMouseDown(ImGuiMouseButton_Middle) || ImGui::IsMouseDown(ImGuiMouseButton_Right);
-    if (view.measurementUpdatePending && !interacting && !wave.measurementRequestActive) {
-        const auto exact = plot::extractDisplayWindow(display.channels[channel], begin, end);
-        plot::WaveMeasurementInput input{wave.measurementRequestGeneration, channel, {}, {}, {}};
-        for (std::size_t i = 0; i < exact.samples.size(); ++i) {
-            if (exact.samples[i].time < begin || exact.samples[i].time > end) continue;
-            input.times.push_back(exact.samples[i].time);
-            input.values.push_back(i < exact.actualValues.size() ? exact.actualValues[i] : exact.samples[i].value);
+    view.measurementUpdatePending = !wave.measurementCompletedKey || !(*wave.measurementCompletedKey == key);
+    const bool interacting = view.interactionActive || (ImGui::GetCurrentContext() &&
+        (ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsMouseDown(ImGuiMouseButton_Middle) ||
+         ImGui::IsMouseDown(ImGuiMouseButton_Right)));
+    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    const bool throttled = following && moving && wave.measurementLastSubmitTime >= 0 &&
+        (now - wave.measurementLastSubmitTime) * 1000 < static_cast<double>(view.measurementFollowRefreshIntervalMs);
+    if (view.measurementUpdatePending && !interacting && !throttled && !wave.measurementRequestActive) {
+        plot::WaveMeasurementInput input{++wave.measurementRequestGeneration, channel, {}, {}, {}};
+        const auto& measured = display.channels[channel];
+        if (measured.source && begin <= end) {
+            const plot::WaveQueryView query(*measured.source, measured.axis, measured.frequency, measured.formula);
+            const auto [first, last] = query.range(begin, end, false);
+            input.times.reserve(last - first);
+            input.values.reserve(last - first);
+            for (auto i = first; i < last; ++i) {
+                input.times.push_back(query.time(i));
+                input.values.push_back(query.actual(i));
+            }
+        } else if (begin <= end) {
+            for (auto i = key.input.first; i < key.input.last; ++i) {
+                input.times.push_back(measured.samples[i].time);
+                input.values.push_back(i < measured.actualValues.size() ? measured.actualValues[i] : measured.samples[i].value);
+            }
         }
         if (manual) input.reference.assign(input.values.size(), *manual);
         else if (reference && *reference < display.channels.size()) {
-            const auto ref = plot::extractDisplayWindow(display.channels[*reference], begin, end);
-            std::size_t i = 0;
-            for (const auto time : input.times) {
-                while (i < ref.samples.size() && ref.samples[i].time < time) ++i;
-                if (i == ref.samples.size() || std::abs(ref.samples[i].time - time) > 1e-9) {
-                    input.reference.clear();
-                    break;
+            const auto& ref = display.channels[*reference];
+            input.reference.reserve(input.times.size());
+            if (ref.source) {
+                const plot::WaveQueryView query(*ref.source, ref.axis, ref.frequency, ref.formula);
+                auto i = query.range(begin, end, true).first;
+                for (const auto time : input.times) {
+                    while (i < query.size() && query.time(i) < time) ++i;
+                    if (i == query.size() || std::abs(query.time(i) - time) > 1e-9) {
+                        input.reference.clear();
+                        break;
+                    }
+                    input.reference.push_back(query.actual(i));
                 }
-                input.reference.push_back(i < ref.actualValues.size() ? ref.actualValues[i] : ref.samples[i].value);
+            } else {
+                std::size_t i = 0;
+                for (const auto time : input.times) {
+                    while (i < ref.samples.size() && ref.samples[i].time < time) ++i;
+                    if (i == ref.samples.size() || std::abs(ref.samples[i].time - time) > 1e-9) {
+                        input.reference.clear();
+                        break;
+                    }
+                    input.reference.push_back(i < ref.actualValues.size() ? ref.actualValues[i] : ref.samples[i].value);
+                }
             }
         }
         if (!wave.analysisWorker) wave.analysisWorker = std::make_shared<plot::WaveAnalysisWorker>();
         wave.analysisWorker->submit(std::move(input));
         ++wave.measurementSubmittedCount;
         wave.measurementRequestActive = true;
+        wave.measurementRequestedKey = key;
+        wave.measurementLastSubmitTime = now;
         wave.measurementDataRevision = wave.buffer.analysisRevision();
     }
     return wave.cachedMeasurement;
@@ -1741,7 +1819,7 @@ void updateSplitCursorReadoutsForChannel(const plot::WaveSnapshot& snapshot,
                 preferredReadout);
         } else {
             result.cursorReadouts[cursorIndex] = plot::findNearestDisplayByTime(
-                displayData, channelIndex, view.cursors[cursorIndex].time, maxTimeDistance);
+                displayData, channelIndex, view.cursors[cursorIndex].time, maxTimeDistance, true);
         }
     }
 }
@@ -2073,7 +2151,7 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave,
                     preferredReadout);
             } else if (channelIndex < displayData.channels.size()) {
                 result.cursorReadouts[cursorIndex] = plot::findNearestDisplayByTime(
-                    displayData, channelIndex, view.cursors[cursorIndex].time, maxDistance);
+                    displayData, channelIndex, view.cursors[cursorIndex].time, maxDistance, true);
             }
         }
         updateSplitMeasurementResult(wave, displayData, result);

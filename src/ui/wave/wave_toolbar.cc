@@ -1118,6 +1118,9 @@ void drawWaveCursorSection(plot::WaveViewState& view)
                                   true)) {
         view.followMeasurementCursorsOnScroll = !view.followMeasurementCursorsOnScroll;
     }
+    if (ImGui::Checkbox("仅可视窗口测量", &view.measurementVisibleWindowOnly)) {
+        view.measurementUpdatePending = true;
+    }
     const bool smartSnapMode = view.cursorSnapMode == plot::WaveCursorSnapMode::SmartSnap;
     if (drawAdaptiveToolbarButton(smartSnapMode ? "智能吸附" : "按键吸附",
                                   smartSnapMode ? "智能" : "按键",

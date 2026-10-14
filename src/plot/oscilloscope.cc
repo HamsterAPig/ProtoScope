@@ -1,6 +1,7 @@
 #include "protoscope/plot/oscilloscope.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <limits>
 #include <numeric>
@@ -11,6 +12,13 @@ namespace protoscope::plot {
 namespace {
 
     constexpr double kEpsilon = 1e-12;
+
+    std::uint64_t nextDataGeneration()
+    {
+        // 全进程唯一代际，缓冲替换及删除后重建均不能复用旧统计身份。
+        static std::atomic<std::uint64_t> generation{0};
+        return ++generation;
+    }
 
     double safeFrequency(double deltaTime)
     {
@@ -318,6 +326,8 @@ void OscilloscopeBuffer::configureChannels(std::size_t channelCount)
 {
     const auto previousCount = channels_.size();
     channels_.resize(channelCount);
+    for (auto index = previousCount; index < channels_.size(); ++index)
+        channels_[index].dataGeneration = nextDataGeneration();
     for (std::size_t index = 0; index < channels_.size(); ++index) {
         if (channels_[index].spec.label.empty()) {
             channels_[index].spec.label = "CH" + std::to_string(index + 1);
@@ -506,6 +516,7 @@ bool OscilloscopeBuffer::appendAfterHistoryReset(std::size_t channelIndex, const
     // 核心流程：脚本二次运行常从 t=0 重新输出，默认把它视为新一轮采集，避免旧历史挡住新样本。
     for (auto& existingChannel : channels_) {
         existingChannel.samples.clear();
+        existingChannel.dataGeneration = nextDataGeneration();
         existingChannel.sampleIndexOffset = 0;
         existingChannel.summary.clear();
     }
@@ -550,6 +561,7 @@ WaveSnapshot OscilloscopeBuffer::snapshot(double visibleMinTime, double visibleM
         view.bitDisplay = channel.spec.bitDisplay;
         view.totalSamples = channel.samples.size();
         view.sampleIndexOffset = channel.sampleIndexOffset;
+        view.dataGeneration = channel.dataGeneration;
         view.samples = channel.samples.data();
         view.summaryIndex = &channel.summary;
         view.visibleBegin = lowerBoundByTime(channel.samples, visibleMinTime);

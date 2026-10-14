@@ -56,12 +56,16 @@ void testCaptureAndAtomicLoad()
     value.gui.wave.maxTotalSamples = 4321;
     value.gui.window.title = "保留标题";
     value.gui.wave.overviewShowBitChannels = true;
+    value.gui.wave.measurementVisibleWindowOnly = true;
+    value.gui.wave.measurementFollowRefreshIntervalMs = 0;
     value.app.language = "保留语言";
     require(application.applyConfig(value), "配置应用失败");
     const auto captured = application.captureConfig();
     require(captured.gui.font.chineseGlyphRange == value.gui.font.chineseGlyphRange, "capture 丢失字形配置");
     require(captured.gui.wave.fullscreenMode == value.gui.wave.fullscreenMode, "capture 丢失全屏策略");
     require(captured.gui.wave.maxTotalSamples == 4321, "capture 丢失历史上限");
+    require(captured.gui.wave.measurementVisibleWindowOnly &&
+            captured.gui.wave.measurementFollowRefreshIntervalMs == 0, "capture 丢失测量配置");
     require(captured.gui.window.title == value.gui.window.title && captured.app.language == value.app.language,
             "capture 丢失未展示配置");
     protoscope::config::ConfigStore store;
@@ -72,6 +76,11 @@ void testCaptureAndAtomicLoad()
             loaded.config.gui.font.chineseGlyphRange == value.gui.font.chineseGlyphRange &&
             loaded.config.gui.wave.fullscreenMode == value.gui.wave.fullscreenMode &&
             loaded.config.gui.wave.overviewShowBitChannels, "未展示字段往返丢失");
+    require(loaded.config.gui.wave.measurementVisibleWindowOnly &&
+            loaded.config.gui.wave.measurementFollowRefreshIntervalMs == 0, "测量配置往返丢失");
+    const auto defaults = store.loadText("{}");
+    require(!defaults.config.gui.wave.measurementVisibleWindowOnly &&
+            defaults.config.gui.wave.measurementFollowRefreshIntervalMs == 200, "测量默认配置错误");
     const auto bad = store.loadText("app: {fps_limit: 144}\nlogging: {max_files: invalid}\n");
     require(!bad.error.empty() && !bad.loadedFromDisk && bad.config.app.fpsLimit == 60,
             "坏 YAML 暴露了部分加载结果");

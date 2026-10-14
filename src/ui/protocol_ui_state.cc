@@ -564,6 +564,7 @@ namespace {
         node["bit_display_readout_policy"] = bitDisplayReadoutPolicyName(view.bitDisplayReadoutPolicy);
         node["show_cursors"] = view.showCursors;
         node["follow_measurement_cursors_on_scroll"] = view.followMeasurementCursorsOnScroll;
+        node["measurement_visible_window_only"] = view.measurementVisibleWindowOnly;
         node["show_measurement_overlay"] = view.showMeasurementOverlay;
         node["glow_enabled"] = view.glowEnabled;
         node["phosphor_enabled"] = view.phosphorEnabled;
@@ -760,6 +761,8 @@ namespace {
         view.showCursors = node["show_cursors"].as<bool>(view.showCursors);
         view.followMeasurementCursorsOnScroll =
             node["follow_measurement_cursors_on_scroll"].as<bool>(view.followMeasurementCursorsOnScroll);
+        view.measurementVisibleWindowOnly =
+            node["measurement_visible_window_only"].as<bool>(view.measurementVisibleWindowOnly);
         view.showMeasurementOverlay = node["show_measurement_overlay"].as<bool>(view.showMeasurementOverlay);
         if (node["glow_enabled"]) {
             view.glowEnabled = node["glow_enabled"].as<bool>(view.glowEnabled);

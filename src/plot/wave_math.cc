@@ -496,7 +496,8 @@ void applySampleFrequencyVisibleRange(WaveSnapshot& snapshot, double minTime, do
 std::optional<CursorReadout> findNearestDisplayByTime(const WaveDisplayData& displayData,
                                                       std::size_t channelIndex,
                                                       double time,
-                                                      double maxTimeDistance)
+                                                      double maxTimeDistance,
+                                                      bool fullHistory)
 {
     if (channelIndex >= displayData.channels.size()) {
         return std::nullopt;
@@ -508,13 +509,15 @@ std::optional<CursorReadout> findNearestDisplayByTime(const WaveDisplayData& dis
         const auto [begin, end] = query.range(time, time);
         std::optional<CursorReadout> result;
         double distance = maxTimeDistance;
-        for (auto i = (std::max)(begin, source.visibleBegin); i < (std::min)(end, source.visibleEnd); ++i) {
+        const auto first = fullHistory ? begin : (std::max)(begin, source.visibleBegin);
+        const auto last = fullHistory ? end : (std::min)(end, source.visibleEnd);
+        for (auto i = first; i < last; ++i) {
             const auto point = query.sample(i);
             const auto d = std::abs(point.time - time);
             if (d <= distance && (!result || d < distance)) {
                 distance = d;
                 result = CursorReadout{.valid = true, .channelIndex = channelIndex,
-                    .sampleIndex = i - source.visibleBegin, .time = point.time,
+                    .sampleIndex = fullHistory ? i : i - source.visibleBegin, .time = point.time,
                     .value = query.actual(i), .displayValue = point.value};
             }
         }

@@ -194,6 +194,8 @@ struct WaveViewState {
     mutable std::vector<std::size_t> cursorHiddenFftChannels;
     bool cursorFftPhaseVisible{true};
     bool followMeasurementCursorsOnScroll{false};
+    bool measurementVisibleWindowOnly{false};
+    std::uint64_t measurementFollowRefreshIntervalMs{200};
     bool measurementCursorReadoutRefreshPending{false};
     bool showMeasurementOverlay{true};
     bool glowEnabled{true};
@@ -221,6 +223,7 @@ struct WaveViewState {
     bool interactionActive{false};
     bool fftUpdatePending{false};
     bool measurementUpdatePending{false};
+    std::optional<std::pair<double, double>> measurementSnapshotRange;
     mutable bool statusOverlayPositionValid{false};
     mutable std::array<float, 2> statusOverlayOffset{};
     WaveBitDenseRenderMode bitDenseRenderMode{WaveBitDenseRenderMode::CompressedSteps};
@@ -584,9 +587,33 @@ struct WaveDockState {
         double frequency{0};
         double ratio{1};
         double referenceRatio{1};
-        bool operator==(const MeasurementKey&) const = default;
+        struct InputRange {
+            std::uint64_t generation{0};
+            std::size_t first{0}, last{0};
+            WaveTimeAxisSource axis{WaveTimeAxisSource::SampleIndex};
+            double frequency{0};
+            bool operator==(const InputRange&) const = default;
+        };
+        InputRange input{}, referenceInput{};
+        bool visibleWindowOnly{false};
+        bool sameContext(const MeasurementKey& other) const {
+            return channel == other.channel && reference == other.reference && manual == other.manual &&
+                visibleWindowOnly == other.visibleWindowOnly &&
+                frequency == other.frequency && ratio == other.ratio && referenceRatio == other.referenceRatio &&
+                input.generation == other.input.generation && input.axis == other.input.axis &&
+                input.frequency == other.input.frequency &&
+                referenceInput.generation == other.referenceInput.generation &&
+                referenceInput.axis == other.referenceInput.axis &&
+                referenceInput.frequency == other.referenceInput.frequency;
+        }
+        bool operator==(const MeasurementKey& other) const {
+            return sameContext(other) && input == other.input && referenceInput == other.referenceInput;
+        }
     };
     MeasurementKey measurementKey{};
+    MeasurementKey measurementRequestedKey{};
+    std::optional<MeasurementKey> measurementCompletedKey;
+    double measurementLastSubmitTime{-1.0};
     std::uint64_t measurementRequestGeneration{0};
     std::uint64_t measurementDataRevision{0};
     bool measurementRequestActive{false};

@@ -604,6 +604,12 @@ std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveSnapsh
                                                           const ImPlotRect& limits,
                                                           double maxTimeDistance,
                                                           std::optional<std::size_t> forcedChannelIndex = std::nullopt);
+std::optional<plot::MeasurementReadout> requestWaveMeasurement(plot::WaveDockState& wave,
+    const plot::WaveDisplayData& display, std::size_t channel, double begin, double end,
+    std::optional<std::size_t> reference = std::nullopt, std::optional<double> manual = std::nullopt);
+std::optional<plot::CursorReadout> findSplitBitCursorReadout(const plot::WaveSnapshot& snapshot,
+    const plot::WaveDisplayData& displayData, std::size_t channelIndex, double time, double maxTimeDistance,
+    const std::optional<plot::CursorReadout>& preferredReadout);
 plot::MeasurementReadout measureDisplayWindow(const plot::WaveDisplayData& displayData,
                                               std::size_t channelIndex,
                                               double beginTime,

@@ -165,6 +165,8 @@ gui:
     show_fft_legend: true
     # 默认 false；开启后视口做等宽平移时测量游标随之移动，保持与数据的相对时间偏移，工具栏可在“游标跟随滚动”和“游标固定时间”之间切换。
     follow_measurement_cursors_on_scroll: false
+    measurement_visible_window_only: false
+    measurement_follow_refresh_interval_ms: 200
     # 游标分屏模式下主波形 C1~C2 FFT 输入窗口的高亮色，按 [r, g, b, a] 四个浮点数写入；数组长度不是 4 时整组回退默认值。
     cursor_fft_highlight_rgba: [0.20, 0.55, 1.00, 0.16]
     # 各类波形重置触发时应用的默认视口策略；本节点缺失时下面各项保持源码默认值。
