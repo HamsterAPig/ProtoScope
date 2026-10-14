@@ -712,13 +712,17 @@ void GuiRuntime::drawProtocolDock()
 #if defined(_WIN32)
     if (drawUiButton("浏览...")) {
         std::string dialogError;
+        const auto directory = resolveFileDialogDirectory(
+            fileDialogHistory(application_.runtimeConfig().gui.fileDialogs.directories, "protocol.root"),
+            std::filesystem::u8path(lua.protocolRootDir), executableDir_);
         const auto selectedDir =
-            nativeDirectoryDialog(window_, L"选择协议根目录", std::filesystem::path(lua.protocolRootDir), dialogError);
+            nativeDirectoryDialog(window_, L"选择协议根目录", directory, dialogError);
         if (!dialogError.empty()) {
             application_.setStatusMessage(dialogError);
         }
         if (selectedDir.has_value()) {
-            lua.protocolRootDir = selectedDir->generic_string();
+            rememberFileDialogPath(*selectedDir, "protocol.root", true);
+            lua.protocolRootDir = fileDialogPathText(*selectedDir);
             refreshProtocolRoot(configStore_, lua, protocolDirDraft_, protocolDirDraftModel_);
             application_.markProtocolEdited();
             application_.setStatusMessage("协议根目录已更新");

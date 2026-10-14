@@ -696,25 +696,39 @@ struct GuiRuntimeTestAccess {
         state.dirty = false;
         runtime.importCsvDataFromPath(importDir / "missing.csv");
         require(!runtime.csvDataImportError_.empty(), "import fixture must fail");
-        require(application.runtimeConfig().gui.fileDialogs.lastImportDirectory == fileDialogPathText(importDir),
+        require(application.runtimeConfig().gui.fileDialogs.directories.at("csv.import") == fileDialogPathText(importDir),
                 "confirmed directory survives import failure");
-        require(store.load(configPath).config.gui.fileDialogs.lastImportDirectory == fileDialogPathText(importDir),
+        require(store.load(configPath).config.gui.fileDialogs.directories.at("csv.import") == fileDialogPathText(importDir),
                 "confirmed directory survives restart");
         require(!state.dirty, "directory persistence must not mark other settings dirty");
+        runtime.rememberFileDialogPath(root / "elf.elf", "elf.open");
+        runtime.rememberFileDialogPath(root / "recording" / "capture.psraw", "recording");
+        runtime.rememberFileDialogPath(root / "host" / "log.txt", "log.host");
+        runtime.rememberFileDialogPath(root / "script" / "log.txt", "log.script");
+        runtime.rememberFileDialogPath(root / "transfer" / "log.txt", "log.transfer");
+        runtime.rememberFileDialogPath(importDir, "lua.directory", true);
+        const auto restored = store.load(configPath).config.gui.fileDialogs;
+        require(restored.directories.at("csv.import") == fileDialogPathText(importDir) &&
+                restored.directories.at("elf.open") == fileDialogPathText(root) &&
+                restored.directories.at("recording") == fileDialogPathText(root / "recording") &&
+                restored.directories.at("log.host") != restored.directories.at("log.script") &&
+                restored.directories.at("log.transfer") != restored.directories.at("log.script") &&
+                restored.directories.at("lua.directory") == fileDialogPathText(importDir),
+                "内置及 Lua 用途目录必须隔离且持久化");
         const auto beforeCancel = application.runtimeConfig().gui.fileDialogs;
         runtime.deferBuiltinFileOperation([] {});
         runtime.prepareBuiltinFileOperation();
         beginFrame();
         endFrame();
         runtime.dispatchBuiltinFileOperation();
-        require(application.runtimeConfig().gui.fileDialogs.lastImportDirectory == beforeCancel.lastImportDirectory,
+        require(application.runtimeConfig().gui.fileDialogs.directories == beforeCancel.directories,
                 "canceled operation does not remember browsing");
         // 损坏配置保存失败仍允许继续读取用户确认的文件，并保留本次会话目录。
         { std::ofstream output(configPath); output << "gui: ["; }
         runtime.importCsvDataFromPath(root / "missing-again.csv");
         require(!runtime.fileDialogPreferenceError_.empty() && !runtime.csvDataImportError_.empty(),
                 "preference save failure does not block file operation");
-        require(application.runtimeConfig().gui.fileDialogs.lastImportDirectory == fileDialogPathText(root),
+        require(application.runtimeConfig().gui.fileDialogs.directories.at("csv.import") == fileDialogPathText(root),
                 "save failure preserves in-memory preference");
         require(!state.dirty, "save error must not mark configuration dirty");
         std::ifstream input(configPath);

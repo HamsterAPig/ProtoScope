@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -216,6 +217,7 @@ struct DataExportConfig {
 struct GuiFileDialogConfig {
     std::string lastImportDirectory;
     std::string lastExportDirectory;
+    std::map<std::string, std::string> directories;
 };
 
 // 收发面板原始->逐帧切换的历史策略：ask 每次询问，use_history 按范围重建，skip_history 只清半帧。

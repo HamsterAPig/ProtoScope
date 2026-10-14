@@ -903,6 +903,11 @@ namespace {
             readScalar<std::string>(dialogs, "last_import_directory", "");
         config.gui.fileDialogs.lastExportDirectory = readScalar<std::string>(
             dialogs, "last_export_directory", readScalar<std::string>(lastExport, "directory", ""));
+        if (const auto directories = childNode(dialogs, "directories"); directories && !directories.IsNull()) {
+            if (!directories.IsMap()) throw std::runtime_error("file_dialogs.directories 必须为映射");
+            for (const auto& entry : directories)
+                config.gui.fileDialogs.directories[entry.first.as<std::string>()] = entry.second.as<std::string>();
+        }
         if (lastExport) {
             auto& value = config.gui.lastDataExport;
             value.valid = readScalar<bool>(lastExport, "valid", false);
@@ -1295,6 +1300,7 @@ namespace {
             ? "current_protocol" : "prefer_package";
         gui["file_dialogs"]["last_import_directory"] = config.gui.fileDialogs.lastImportDirectory;
         gui["file_dialogs"]["last_export_directory"] = config.gui.fileDialogs.lastExportDirectory;
+        gui["file_dialogs"]["directories"] = config.gui.fileDialogs.directories;
         gui["raw_capture"]["live_limit_bytes"] = config.gui.rawCapture.liveLimitBytes;
         gui["raw_capture"]["recording_queue_limit_bytes"] = config.gui.rawCapture.recordingQueueLimitBytes;
         gui["transfer_log"]["replay_raw_history_on_schema_switch"] = config.gui.replayRawHistoryOnSchemaSwitch;
@@ -1792,6 +1798,7 @@ bool ConfigStore::saveFileDialogPreferences(const std::filesystem::path& path,
         }
         root["gui"]["file_dialogs"]["last_import_directory"] = preferences.lastImportDirectory;
         root["gui"]["file_dialogs"]["last_export_directory"] = preferences.lastExportDirectory;
+        root["gui"]["file_dialogs"]["directories"] = preferences.directories;
         if (lastExport) {
             auto last = root["gui"]["last_data_export"];
             last["valid"] = lastExport->valid;
