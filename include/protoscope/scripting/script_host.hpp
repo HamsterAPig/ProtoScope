@@ -440,6 +440,8 @@ struct FileDialogRequest {
     std::vector<FileDialogFilter> filters{};
     std::uint64_t createdAtMs{0};
     std::uint64_t runtimeGeneration{0};
+    std::string protocolDirectory{};
+    std::string historyKey{};
 };
 
 struct FileDialogEvent {

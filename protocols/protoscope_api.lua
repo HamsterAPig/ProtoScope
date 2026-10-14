@@ -399,11 +399,13 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field mode? 'open'|'save'
 ---@field title? string
 ---@field default_path? string
+---@field history_key? string
 ---@field filters? ProtoFileDialogFilter[]
 
 ---@class ProtoDirDialogOptions
 ---@field title? string
 ---@field default_path? string
+---@field history_key? string
 
 ---@class ProtoFileOpenOptions
 ---@field mode? 'read'|'write'|'append'

@@ -901,18 +901,26 @@ std::optional<plot::CursorReadout> findMeasurementCursorReadoutByTimeRefresh(
     std::optional<std::size_t> forcedChannelIndex)
 {
     if (forcedChannelIndex.has_value()) {
-        return plot::findNearestDisplayByTime(displayData, *forcedChannelIndex, cursor.time, maxTimeDistance);
+        return plot::findNearestDisplayByTime(displayData, *forcedChannelIndex, cursor.time, maxTimeDistance, true);
     }
 
     if (cursor.channelIndex < displayData.channels.size()) {
         const auto currentChannel =
-            plot::findNearestDisplayByTime(displayData, cursor.channelIndex, cursor.time, maxTimeDistance);
+            plot::findNearestDisplayByTime(displayData, cursor.channelIndex, cursor.time, maxTimeDistance, true);
         if (currentChannel.has_value()) {
             return currentChannel;
         }
     }
 
-    return findNearestDisplayByScope(displayData, view, cursor.time, maxTimeDistance);
+    if (view.cursorSnapScope == plot::WaveCursorSnapScope::ActiveChannel)
+        return plot::findNearestDisplayByTime(displayData, view.measurementChannelIndex, cursor.time, maxTimeDistance, true);
+    std::optional<plot::CursorReadout> best;
+    for (std::size_t index = 0; index < displayData.channels.size(); ++index) {
+        const auto candidate = plot::findNearestDisplayByTime(displayData, index, cursor.time, maxTimeDistance, true);
+        if (candidate && (!best || std::abs(candidate->time - cursor.time) < std::abs(best->time - cursor.time)))
+            best = candidate;
+    }
+    return best;
 }
 
 std::vector<std::size_t> waveformCursorChannelsByScope(const plot::WaveSnapshot& snapshot,

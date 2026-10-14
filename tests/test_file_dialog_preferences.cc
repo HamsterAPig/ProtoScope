@@ -30,12 +30,20 @@ int main()
         const auto path = root / "config.yaml";
         { std::ofstream out(path); out << "app:\n  fps_limit: 37\ncustom: keep\n"; }
         config::GuiFileDialogConfig preferences{ui::fileDialogPathText(unicodeDir), "export space"};
+        preferences.directories = {{"elf.open", ui::fileDialogPathText(unicodeDir)},
+                                   {"recording", "record space"}, {"log.host", "host space"},
+                                   {"lua:protocol:open:title", "lua space"}};
         std::string error;
         require(store.saveFileDialogPreferences(path, preferences, error), error.c_str());
         const auto loaded = store.load(path);
         require(loaded.loadedFromDisk, "reload");
         require(loaded.config.gui.fileDialogs.lastImportDirectory == preferences.lastImportDirectory, "unicode reload");
         require(loaded.config.gui.fileDialogs.lastExportDirectory == "export space", "separate export");
+        require(loaded.config.gui.fileDialogs.directories == preferences.directories, "用途目录重启恢复");
+        std::string roundtrip;
+        require(store.saveText(loaded.config, roundtrip, error) &&
+                store.loadText(roundtrip).config.gui.fileDialogs.directories == preferences.directories,
+                "用途目录整份配置往返");
         require(loaded.config.app.fpsLimit == 37, "preserve saved settings");
         std::ifstream input(path);
         const std::string text((std::istreambuf_iterator<char>(input)), {});
@@ -86,6 +94,20 @@ int main()
         require(ui::resolveFileDialogDirectory("?:/missing", unicodeDir, root) == unicodeDir, "invalid drive fallback");
         require(ui::resolveFileDialogDirectory("", root / "missing" / "nested", {}) == root, "default parents");
         require(ui::resolveFileDialogDirectory("", {}, root) == root, "executable fallback");
+        require(ui::fileDialogHistory(preferences.directories, "elf.open", "legacy") ==
+                    ui::fileDialogPathText(unicodeDir), "用途历史优先旧目录");
+        require(ui::fileDialogHistory(preferences.directories, "unknown", "legacy") == "legacy",
+                "未记录用途兼容回退");
+        const auto key = ui::luaFileDialogHistoryKey("protocol-a", 0, "Title", "");
+        require(key != ui::luaFileDialogHistoryKey("protocol-b", 0, "Title", "") &&
+                key != ui::luaFileDialogHistoryKey("protocol-a", 1, "Title", "") &&
+                key != ui::luaFileDialogHistoryKey("protocol-a", 0, "Other", ""), "Lua 默认分组隔离");
+        require(ui::luaFileDialogHistoryKey("protocol-a", 0, "Title", "explicit") ==
+                ui::luaFileDialogHistoryKey("protocol-a", 0, "Other", "explicit"), "Lua 显式历史键");
+        require(ui::luaFileDialogInitialPath(ui::fileDialogPathText(unicodeDir), "script.csv", false, root) ==
+                unicodeDir / "script.csv", "Lua 历史目录优先且保留文件名");
+        require(ui::luaFileDialogInitialPath(ui::fileDialogPathText(unicodeDir), "missing", true, root) ==
+                unicodeDir, "Lua 目录选择历史优先");
         { std::ofstream out(path); out << "gui: [broken"; }
         require(!store.saveFileDialogPreferences(path, preferences, error), "reject corrupt config");
         std::ifstream broken(path);

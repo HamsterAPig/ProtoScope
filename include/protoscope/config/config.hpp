@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -151,6 +152,8 @@ struct GuiWaveConfig {
     bool showChannelLegend{true};
     bool showFftLegend{true};
     bool followMeasurementCursorsOnScroll{false};
+    bool measurementVisibleWindowOnly{false};
+    std::uint64_t measurementFollowRefreshIntervalMs{200};
     std::array<float, 4> cursorFftHighlightRgba{0.20F, 0.55F, 1.00F, 0.16F};
     GuiWaveFullscreenMode fullscreenMode{GuiWaveFullscreenMode::Overlay};
     GuiWaveResetViewportConfig resetViewport{};
@@ -214,6 +217,7 @@ struct DataExportConfig {
 struct GuiFileDialogConfig {
     std::string lastImportDirectory;
     std::string lastExportDirectory;
+    std::map<std::string, std::string> directories;
 };
 
 // 收发面板原始->逐帧切换的历史策略：ask 每次询问，use_history 按范围重建，skip_history 只清半帧。

@@ -44,6 +44,136 @@ void captureFrame(const std::filesystem::path& directory, const std::string& nam
     if (!output) throw std::runtime_error("framebuffer capture write failed");
 }
 
+void verifyMeasurementInputs()
+{
+    const auto check = [](bool ok, const char* message) {
+        if (!ok) throw std::runtime_error(message);
+    };
+    plot::WaveDockState wave;
+    wave.view.autoFollowLatest = false;
+    std::vector<plot::WaveSample> samples(1000000);
+    for (std::size_t i = 0; i < samples.size(); ++i)
+        samples[i] = {1.0 + i * 0.001, std::sin(i * 0.013)};
+    wave.buffer.append(0, {{}, samples});
+    plot::WaveDisplayData display;
+    const auto refresh = [&] {
+        const auto snapshot = wave.buffer.snapshot(-1e20, 1e20, false);
+        plot::buildQueryDisplayDataInto(snapshot, wave.view.sampleFrequencyHz, 1200, display);
+    };
+    double begin = 2, end = 900;
+    std::optional<std::size_t> reference;
+    std::optional<double> manual;
+    const auto tick = [&] { return ui::requestWaveMeasurement(wave, display, 0, begin, end, reference, manual); };
+    const auto settle = [&] {
+        const auto deadline = Clock::now() + std::chrono::seconds(10);
+        do {
+            tick();
+            if (!wave.view.measurementUpdatePending && !wave.measurementRequestActive) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } while (Clock::now() < deadline);
+        check(wave.cachedMeasurement && !wave.view.measurementUpdatePending && !wave.measurementRequestActive,
+              "measurement did not converge");
+    };
+    refresh();
+    const auto initialStart = Clock::now();
+    const auto extractionStart = Clock::now();
+    tick();
+    const double extractionMs = std::chrono::duration<double, std::milli>(Clock::now() - extractionStart).count();
+    // 首次任务在途时区间外追加，不应漏收或重复提交同一输入。
+    wave.buffer.append(0, {.samples = {{1002, 99}}});
+    refresh();
+    settle();
+    const double initialMs = std::chrono::duration<double, std::milli>(Clock::now() - initialStart).count();
+    auto submitted = wave.measurementSubmittedCount;
+    const auto stableStart = Clock::now();
+    for (int i = 0; i < 1000; ++i) tick();
+    const double stableUs = std::chrono::duration<double, std::micro>(Clock::now() - stableStart).count() / 1000;
+    check(wave.measurementSubmittedCount == submitted, "stable million input resubmitted");
+    wave.buffer.setMaxTotalSamples(999500);
+    refresh();
+    settle();
+    check(wave.measurementSubmittedCount == submitted, "outside trim resubmitted");
+    begin += 0.0001; end += 0.0001;
+    settle();
+    check(wave.measurementSubmittedCount == submitted + 1, "boundary sample change not measured");
+    submitted = wave.measurementSubmittedCount;
+    begin += 0.0001; end += 0.0001;
+    settle();
+    check(wave.measurementSubmittedCount == submitted, "same sample set resubmitted");
+    const auto synchronousStart = Clock::now();
+    const auto synchronous = wave.buffer.measureWindow(0, 2, 900);
+    const double synchronousMs = std::chrono::duration<double, std::milli>(Clock::now() - synchronousStart).count();
+    check(synchronous.valid, "million synchronous benchmark invalid");
+    std::cout << "measurement million: extract_ms=" << extractionMs << " first_result_ms=" << initialMs
+              << " stable_signature_us=" << stableUs << " synchronous_ms=" << synchronousMs << '\n';
+    begin = 4; end = 5; settle();
+    submitted = wave.measurementSubmittedCount;
+    begin = 5; end = 6; settle();
+    check(wave.measurementSubmittedCount == submitted + 1, "same span different interval reused");
+    wave.view.viewMinTime = 7; wave.view.viewMaxTime = 8;
+    settle();
+    submitted = wave.measurementSubmittedCount;
+    check(wave.cachedMeasurement->valid, "fixed interval outside view lost");
+    wave.view.measurementVisibleWindowOnly = true;
+    settle();
+    check(!wave.cachedMeasurement->valid && wave.measurementSubmittedCount == submitted + 1,
+          "visible-only empty intersection not measured");
+    wave.view.measurementVisibleWindowOnly = false;
+    // 在途追加区间内的新样本必须补算最终输入。
+    begin = 1002; end = 1003;
+    tick();
+    wave.buffer.append(0, {.samples = {{1003, 101}}}); refresh();
+    settle();
+    check(wave.cachedMeasurement->sampleCount == 2, "inflight append lost");
+    // 同数量同时间重新导入内容必须换代，旧结果不能填回。
+    begin = 1; end = 2; tick();
+    wave.buffer.clear();
+    wave.buffer.append(0, {.samples = {{1, 7}, {2, 9}}}); refresh();
+    settle();
+    check(wave.cachedMeasurement->meanValue == 8, "clear reused stale data");
+    wave.buffer.configureChannels(0);
+    wave.buffer.append(0, {.samples = {{1, 20}, {2, 30}}}); refresh(); settle();
+    check(wave.cachedMeasurement->meanValue == 25, "recreated channel reused stale data");
+    manual = 10; settle();
+    check(wave.cachedMeasurement->meanError == 15, "manual reference not measured");
+    manual = 20; settle();
+    check(wave.cachedMeasurement->meanError == 5, "manual reference change reused");
+    manual.reset();
+    wave.buffer.append(1, {.samples = {{1, 1}, {2, 2}}}); reference = 1; refresh(); settle();
+    check(wave.cachedMeasurement->meanError == 23.5, "channel reference incorrect");
+    wave.buffer.configureChannels(1);
+    wave.buffer.append(1, {.samples = {{1, 10}, {2, 10}}}); refresh(); settle();
+    check(wave.cachedMeasurement->meanError == 15, "reference generation reused");
+    auto spec = *wave.buffer.channelSpec(0); spec.ratio = 2;
+    wave.buffer.setChannelSpec(0, spec); refresh(); settle();
+    check(wave.cachedMeasurement->meanValue == 50, "ratio change reused");
+    wave.view.sampleFrequencyHz = 2000; refresh(); settle();
+    check(!wave.cachedMeasurement->valid, "time axis change reused script interval");
+    wave.view.sampleFrequencyHz = 0; refresh(); settle();
+    reference.reset();
+    // 连续滚动允许同上下文快照，间隔 0 时依然只保留一个在途任务。
+    wave.view.autoFollowLatest = true; wave.view.followMeasurementCursorsOnScroll = true;
+    for (const auto interval : {200ULL, 0ULL}) {
+        wave.view.measurementFollowRefreshIntervalMs = interval;
+        const auto count = wave.measurementSubmittedCount;
+        const auto deadline = Clock::now() + std::chrono::milliseconds(450);
+        std::size_t frames = 0;
+        while (Clock::now() < deadline) {
+            begin = 1.0 + (frames % 5) * 0.1; end = begin + 0.5;
+            tick();
+            ++frames;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        check(wave.measurementSubmittedCount > count && wave.cachedMeasurement,
+              "continuous follow starved measurements");
+        if (interval) check(wave.measurementSubmittedCount <= count + 4, "follow interval ignored");
+        begin = 1; end = 2;
+        settle();
+        check(wave.measurementCompletedKey && *wave.measurementCompletedKey == wave.measurementKey,
+              "follow stop missed final interval");
+    }
+}
+
 int main(int argc, char** argv)
 {
     const bool verify = argc > 1 && std::string_view(argv[1]) == "--verify";
@@ -82,6 +212,7 @@ int main(int argc, char** argv)
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
     int exitCode = 0;
     try {
+        if (verify) verifyMeasurementInputs();
         {
             // 与生产入口相同的多帧输入，不直接写拖动状态；覆盖整框而非旧中心 8x8。
             plot::WaveDockState wave;
@@ -953,8 +1084,8 @@ int main(int argc, char** argv)
                         throw std::runtime_error("drag retained stale statistics or submitted work");
                     }
                 }
-                if (wave.measurementRequestGeneration <= generation)
-                    throw std::runtime_error("measurement query generation unchanged");
+                if (wave.measurementRequestActive)
+                    throw std::runtime_error("measurement submitted during drag");
                 // 在新代次等待期间注入旧任务，不能将旧区间结果填回当前窗口。
                 wave.analysisWorker->submit(plot::WaveMeasurementInput{generation, 0, {1, 2}, {999, 999}, {}});
                 for (int i = 0; i < 8; ++i) {
@@ -985,6 +1116,35 @@ int main(int argc, char** argv)
                 drawMeasurementFrame();
                 wave.view.showCursors = true;
                 measurementCapture.clear();
+            }
+            // 缩放出窗后普通和分屏读数仍绑定全历史，完整 A/B 统计保持可用。
+            for (const auto mode : {plot::WaveViewMode::Overlay, plot::WaveViewMode::Split}) {
+                wave.view.viewMode = mode;
+                wave.view.autoFollowLatest = false;
+                wave.view.viewMinTime = 6;
+                wave.view.viewMaxTime = 7;
+                wave.view.visibleDuration = 1;
+                wave.view.forceNextMainPlotLimits = true;
+                wave.view.cursors[0].time = 1;
+                wave.view.cursors[1].time = 2;
+                wave.view.lastCursorReadouts = {};
+                const auto deadline = Clock::now() + std::chrono::seconds(5);
+                do {
+                    drawMeasurementFrame();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                } while (wave.view.measurementUpdatePending && Clock::now() < deadline);
+                if (!wave.view.lastCursorReadouts[0] || !wave.view.lastCursorReadouts[1] ||
+                    !wave.cachedMeasurement || !wave.cachedMeasurement->valid ||
+                    wave.cachedMeasurement->sampleCount != reference.sampleCount) {
+                    std::cerr << "offscreen mode=" << static_cast<int>(mode) << " A=" << wave.view.cursors[0].time
+                        << " B=" << wave.view.cursors[1].time << " readouts="
+                        << wave.view.lastCursorReadouts[0].has_value() << ',' << wave.view.lastCursorReadouts[1].has_value()
+                        << " cached=" << wave.cachedMeasurement.has_value() << " count="
+                        << (wave.cachedMeasurement ? wave.cachedMeasurement->sampleCount : 0)
+                        << " expected=" << reference.sampleCount << " key=" << wave.measurementKey.begin << ','
+                        << wave.measurementKey.end << '\n';
+                    throw std::runtime_error("offscreen fixed cursor measurement lost");
+                }
             }
             // bit 模式仍只显示游标与时间项目，取消全部适用项应隐藏悬浮窗。
             wave.view.viewMode = plot::WaveViewMode::Overlay;

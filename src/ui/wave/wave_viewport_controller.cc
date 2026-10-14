@@ -352,12 +352,12 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
         view.cursorHiddenFftChannels.clear();
         wave.analysisEpoch = wave.buffer.historyEpoch();
         ++wave.fftRequestGeneration;
-        ++wave.measurementRequestGeneration;
         wave.fftTargetKeyValid = false;
         view.fftSourceWindowValid = false;
-        wave.measurementRequestActive = false;
         wave.measurementKeyValid = false;
         wave.cachedMeasurement.reset();
+        wave.measurementCompletedKey.reset();
+        view.measurementSnapshotRange.reset();
         wave.cachedFftKeyValid = false;
         wave.cachedFftFrame = {};
         wave.fftDisplayError.clear();

@@ -58,6 +58,19 @@ void endFrame(const std::string& name = {})
 }
 }
 
+namespace protoscope::app {
+struct ApplicationBackpressureTestAccess {
+    static void setHistoryStatus(Application& application, Application::TransferHistoryStatus status)
+    {
+        // 展示测试固定阶段快照，实际解析与队列推进由应用层回归测试覆盖。
+        status.sourceGeneration = application.historySwitchGeneration();
+        status.loadedTimeline = application.rawCaptureReplay_.loaded;
+        status.startedAt = std::chrono::steady_clock::now() - std::chrono::seconds(2);
+        application.transferHistoryStatus_ = std::move(status);
+    }
+};
+}
+
 namespace protoscope::ui {
 struct GuiRuntimeTestAccess {
     static void require(bool value, const char* message)
@@ -220,6 +233,59 @@ struct GuiRuntimeTestAccess {
         runtime.settingsOpen_ = false;
         application.applyConfig(original);
     }
+    static void verifySettingsHelp(GuiRuntime& runtime)
+    {
+        runtime.openApplicationSettings();
+        auto& io = ImGui::GetIO();
+        io.DisplaySize = ImVec2(1000, 800);
+        auto frame = [&](std::string* text = nullptr) {
+            beginFrame();
+            if (text) ImGui::LogToBuffer();
+            runtime.drawApplicationSettings();
+            if (text) { *text = GImGui->LogBuffer.c_str(); ImGui::LogFinish(); }
+            endFrame();
+        };
+        frame();
+        auto* settings = ImGui::FindWindowByName("应用设置");
+        ImGui::SetWindowSize(settings, ImVec2(820, 760));
+        ImGui::SetWindowPos(settings, ImVec2(10, 10));
+        struct HelpCase { config::SettingsPage page; const char* label; const char* meaning; const char* impact; };
+        for (const auto& test : {
+            HelpCase{config::SettingsPage::General, "启动宽度", "重启", "宽"},
+            HelpCase{config::SettingsPage::Wave, "操作模式", "交互", "示波器"},
+            HelpCase{config::SettingsPage::Logging, "日志等级", "日志", "Debug"},
+            HelpCase{config::SettingsPage::Performance, "静态通道点数", "绘制", "0"}}) {
+            runtime.settingsPage_ = test.page;
+            frame(); frame();
+            ImGuiWindow* form = nullptr;
+            for (auto* window : GImGui->Windows)
+                if (window->Active && std::strstr(window->Name, "/表单_")) form = window;
+            require(form != nullptr, "settings form must render");
+            ImGui::SetScrollY(form, 0);
+            GImGui->NavWindow = form;
+            ImGui::SetNavID(form->GetID(test.label), ImGuiNavLayer_Main, form->NavRootFocusScopeId, ImRect());
+            frame();
+            require(GImGui->NavIdIsAlive, "help target setting must be submitted");
+            auto rect = ImGui::WindowRectRelToAbs(form, form->NavRectRel[ImGuiNavLayer_Main]);
+            ImGui::ScrollToRect(form, rect);
+            frame(); frame();
+            rect = ImGui::WindowRectRelToAbs(form, form->NavRectRel[ImGuiNavLayer_Main]);
+            const auto& style = ImGui::GetStyle();
+            const ImVec2 marker(rect.Max.x + style.ItemInnerSpacing.x + ImGui::CalcTextSize(test.label).x +
+                style.ItemSpacing.x + ImGui::CalcTextSize("(?)").x * 0.5F, rect.GetCenter().y);
+            io.AddMousePosEvent(marker.x, marker.y);
+            std::string text;
+            for (int n = 0; n < 60; ++n) frame(&text);
+            const auto* tooltip = ImGui::FindWindowByName("##Tooltip_00");
+            require(tooltip && tooltip->Active, "setting question mark must open by real hover");
+            require(text.find(test.meaning) != std::string::npos && text.find(test.impact) != std::string::npos &&
+                text.find("内建默认") != std::string::npos, "setting help must explain use, impact and default");
+            require(text.find("存储范围") == std::string::npos && text.find("安全转float") == std::string::npos &&
+                text.find("更严格边界") == std::string::npos, "setting help must omit implementation range boilerplate");
+        }
+        runtime.settingsOpen_ = false;
+        io.AddMousePosEvent(-100, -100);
+    }
     // 真实鼠标路径验证三态历史切换：原始->逐帧按钮打开宿主确认 modal，
     // 使用历史/不使用历史/取消（Escape）分别走通 Application 状态机与分批重建。
     static void verifyTransferHistorySwitchModal(app::Application& application, GuiRuntime& runtime)
@@ -246,7 +312,7 @@ struct GuiRuntimeTestAccess {
 
         auto& io = ImGui::GetIO();
         io.DisplaySize = ImVec2(1280, 700);
-        auto frame = [&](std::string* renderedText = nullptr) {
+        auto frame = [&](std::string* renderedText = nullptr, const std::string& captureName = {}) {
             application.pumpOnce();
             beginFrame();
             ImGui::SetNextWindowPos(ImVec2(0, 0));
@@ -259,7 +325,7 @@ struct GuiRuntimeTestAccess {
                 ImGui::LogFinish();
             }
             ImGui::End();
-            endFrame();
+            endFrame(captureName);
         };
         // 通过鼠标坐标点击指定矩形中心：位置与按下同一帧输入，释放再一帧。
         auto clickRect = [&frame](const ImRect& rect) {
@@ -295,11 +361,14 @@ struct GuiRuntimeTestAccess {
             const bool popupOpen = historyPopupOpen();
             const bool confirmationPending = application.historySwitchConfirmationPending();
             if (toolbar && (popupOpen || confirmationPending)) return false;
-            if (std::strcmp(label, "关闭转换状态") == 0) {
+            if (std::strcmp(label, "关闭转换状态") == 0 || std::strcmp(label, "转换详情") == 0) {
                 for (int n = 0; n < GImGui->Windows.Size; ++n) {
                     auto* window = GImGui->Windows[n];
                     if (window->WasActive && std::strstr(window->Name, "##transfer_history_status")) {
-                        clickRect(itemRect(window, window->GetID(label)));
+                        const auto idLabel = std::strcmp(label, "转换详情") == 0 ?
+                            "转换详情##history_" + std::to_string(application.transferHistoryStatus()->taskId) :
+                            std::string(label);
+                        clickRect(itemRect(window, window->GetID(idLabel.c_str())));
                         return true;
                     }
                 }
@@ -360,6 +429,11 @@ struct GuiRuntimeTestAccess {
                 "confirmation must keep raw mode before resolve");
         require(ImGui::FindWindowByName("##transfer_history_switch") != nullptr,
                 "history switch modal must be visible");
+        frame(&renderedText);
+        require(renderedText.find("当前历史范围：面板保留") != std::string::npos &&
+                renderedText.find("使用历史：重新解析") != std::string::npos &&
+                renderedText.find("不使用历史：保留已有") != std::string::npos,
+                "confirmation must explain current scope and both choices");
         // 打开状态下直接点“原始”不得重复入队或关闭 modal。
         require(!clickItem("原始"), "background toolbar click must not reach while modal is open");
         require(application.historySwitchConfirmationPending(), "modal must stay open after background click");
@@ -420,30 +494,51 @@ struct GuiRuntimeTestAccess {
         require(!application.historySwitchConfirmationPending(), "cancel button must close confirmation");
 
         // 小视口仍通过真实鼠标打开/关闭 modal，尺寸基于实际工作区而非固定像素。
-        for (const auto size : {ImVec2(1280, 700), ImVec2(480, 360), ImVec2(320, 240)}) {
-            io.DisplaySize = size;
-            frame(); frame();
-            require(clickItem("原始"), "small viewport toolbar must open modal by mouse");
-            frame(); frame();
-            auto* modal = ImGui::FindWindowByName("##transfer_history_switch");
-            require(modal && modal->Active && historyPopupOpen(), "small viewport modal must be visible");
-            const auto* viewport = ImGui::GetMainViewport();
-            require(modal->Size.x <= viewport->WorkSize.x * 0.90F + 1.0F &&
-                    modal->Size.y <= viewport->WorkSize.y * 0.80F + 1.0F,
-                    "history modal must fit viewport work-area constraints");
-            require((modal->Flags & ImGuiWindowFlags_AlwaysAutoResize) != 0,
-                    "history modal must use local auto resize");
-            for (const auto* label : {"使用历史", "不使用历史", "取消"}) {
-                const auto rect = itemRect(modal, modal->GetID(label));
-                require(rect.Min.x >= viewport->WorkPos.x && rect.Min.y >= viewport->WorkPos.y &&
-                        rect.Max.x <= viewport->WorkPos.x + viewport->WorkSize.x &&
-                        rect.Max.y <= viewport->WorkPos.y + viewport->WorkSize.y,
-                        "history modal buttons must remain inside viewport");
+        const auto originalFontScale = ImGui::GetStyle().FontScaleMain;
+        for (const auto fontScale : {1.0F, 1.5F}) {
+            ImGui::GetStyle().FontScaleMain = fontScale;
+            for (const auto size : {ImVec2(1280, 700), ImVec2(480, 360), ImVec2(320, 240)}) {
+                io.DisplaySize = size;
+                frame(); frame();
+                require(clickItem("原始"), "small viewport toolbar must open modal by mouse");
+                frame(); frame();
+                auto* modal = ImGui::FindWindowByName("##transfer_history_switch");
+                require(modal && modal->Active && historyPopupOpen(), "small viewport modal must be visible");
+                const auto* viewport = ImGui::GetMainViewport();
+                require(modal->Size.x <= viewport->WorkSize.x * 0.90F + 1.0F &&
+                        modal->Size.y <= viewport->WorkSize.y * 0.80F + 1.0F,
+                        "history modal must fit viewport work-area constraints");
+                require((modal->Flags & ImGuiWindowFlags_AlwaysAutoResize) != 0,
+                        "history modal must use local auto resize");
+                for (const auto* label : {"使用历史", "不使用历史", "取消"}) {
+                    const auto rect = itemRect(modal, modal->GetID(label));
+                    require(rect.Min.x >= modal->ClipRect.Min.x && rect.Min.y >= modal->ClipRect.Min.y &&
+                            rect.Max.x <= modal->ClipRect.Max.x + 1 && rect.Max.y <= modal->ClipRect.Max.y + 1 &&
+                            rect.Min.x >= viewport->WorkPos.x && rect.Min.y >= viewport->WorkPos.y &&
+                            rect.Max.x <= viewport->WorkPos.x + viewport->WorkSize.x &&
+                            rect.Max.y <= viewport->WorkPos.y + viewport->WorkSize.y,
+                            "history modal buttons must remain inside viewport");
+                }
+                frame(nullptr, "history-modal-" + std::to_string(static_cast<int>(size.x)) + "-" +
+                    std::to_string(static_cast<int>(fontScale * 100)));
+                require(clickItem("取消"), "small viewport cancel button must accept a real mouse click");
+                require(!application.historySwitchConfirmationPending(), "small viewport click must resolve cancellation");
             }
-            require(clickItem("取消"), "small viewport cancel button must accept a real mouse click");
-            require(!application.historySwitchConfirmationPending(), "small viewport click must resolve cancellation");
         }
+        ImGui::GetStyle().FontScaleMain = originalFontScale;
         io.DisplaySize = ImVec2(1280, 700);
+        frame(); frame();
+        auto fullScopeConfig = application.captureConfig();
+        fullScopeConfig.gui.historyScope = config::TransferLogHistoryScope::RetainedCapture;
+        application.applyConfig(fullScopeConfig);
+        require(clickItem("原始"), "full capture scope must open confirmation");
+        frame(&renderedText);
+        require(renderedText.find("当前历史范围：底层保留") != std::string::npos &&
+            renderedText.find("已裁剪字节无法恢复") != std::string::npos,
+            "full capture confirmation must expose scope and recovery limitation");
+        require(clickItem("取消"), "full capture scope must remain cancellable");
+        fullScopeConfig.gui.historyScope = config::TransferLogHistoryScope::RetainedRows;
+        application.applyConfig(fullScopeConfig);
         frame(); frame();
 
         // modal 已显示时来源失效，不能只检查 Application 标记：必须关闭 ImGui 自身弹窗栈。
@@ -541,8 +636,14 @@ struct GuiRuntimeTestAccess {
         io.DisplaySize = ImVec2(360, 480);
         frame(&renderedText);
         require(renderedText.find("转换状态：解析历史") != std::string::npos &&
-            renderedText.find("上次结果") != std::string::npos && renderedText.find("当前记录字节") != std::string::npos,
-            "small viewport must render phase, previous results and byte progress");
+            renderedText.find("上次结果") != std::string::npos && renderedText.find("历史阶段") != std::string::npos &&
+            renderedText.find("当前记录字节") == std::string::npos,
+            "compact status must show phase and previous results with byte details collapsed");
+        require(clickItem("转换详情"), "details must expand with a real mouse click");
+        frame(&renderedText, "history-expanded-360");
+        require(renderedText.find("当前记录字节") != std::string::npos &&
+            renderedText.find("列表保留") != std::string::npos, "expanded details must show bytes and retention");
+        require(clickItem("转换详情"), "details must collapse with a real mouse click");
         const auto bytesBefore = application.transferHistoryStatus()->currentBytesDone;
         frame(&renderedText);
         require(receive.pauseScroll && application.transferHistoryStatus()->currentBytesDone > bytesBefore,
@@ -579,6 +680,130 @@ struct GuiRuntimeTestAccess {
         receive.pauseScroll = false;
         receive.filter = originalFilter;
         application.shutdown();
+    }
+    static void verifyHistoryStatusLayout(app::Application& application, GuiRuntime& runtime)
+    {
+        using Phase = app::Application::TransferHistoryPhase;
+        auto& io = ImGui::GetIO();
+        auto& receive = application.docks().receiveState();
+        receive.frameRows.push_back({.message = "preserved-result"});
+        const auto oldScale = ImGui::GetStyle().FontScaleMain;
+        std::uint64_t taskId = 10000;
+        std::string text;
+        auto frame = [&](const std::string& capture = {}) {
+            beginFrame();
+            ImGui::SetNextWindowPos(ImVec2(0, 0));
+            ImGui::SetNextWindowSize(io.DisplaySize);
+            ImGui::Begin("HistoryLayoutTest", nullptr, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoResize);
+            ImGui::LogToBuffer();
+            runtime.drawTransferLogSection(io.DisplaySize.y - 40);
+            text = GImGui->LogBuffer.c_str();
+            ImGui::LogFinish();
+            ImGui::End();
+            endFrame(capture);
+        };
+        for (const float scale : {1.0F, 1.5F}) {
+            ImGui::GetStyle().FontScaleMain = scale;
+            for (const auto size : {ImVec2(1280, 700), ImVec2(360, 600)}) {
+                io.DisplaySize = size;
+                for (const auto phase : {Phase::History, Phase::Following, Phase::Display,
+                        Phase::Completed, Phase::Cancelled, Phase::Failed}) {
+                    app::Application::TransferHistoryStatus status;
+                    status.taskId = ++taskId;
+                    status.phase = phase;
+                    status.elapsedSeconds = 2;
+                    status.historyTotal = 8; status.historyDone = 4;
+                    status.currentBytesTotal = 100; status.currentBytesDone = 50;
+                    status.followingDone = 9; status.followingPending = 3;
+                    status.followingBytesDone = 90; status.followingBytesPending = 30;
+                    status.validFrames = 5; status.fallbackRows = 2;
+                    status.displayTotal = 7; status.displayPending = 3;
+                    if (phase == Phase::Completed) {
+                        status.displayPending = 0;
+                        status.displaySubmitted = 7;
+                    }
+                    status.previousResults = phase == Phase::History || phase == Phase::Failed;
+                    if (phase == Phase::Failed) status.reason = "协议解析失败";
+                    if (phase == Phase::Cancelled) status.reason = "切回原始";
+                    app::ApplicationBackpressureTestAccess::setHistoryStatus(application, status);
+                    frame(); frame();
+                    require(text.find("当前记录字节") == std::string::npos &&
+                        text.find("回退展示行") == std::string::npos && text.find("列表保留") == std::string::npos,
+                        "new task must start with collapsed details");
+                    if (phase == Phase::History)
+                        require(text.find("历史阶段 4 / 8（50.0%）") != std::string::npos,
+                            "history percentage must be scoped to historical stage");
+                    if (phase == Phase::Following)
+                        require(text.find("新增待处理 3 条") != std::string::npos &&
+                            text.find("%") == std::string::npos && text.find("已处理") == std::string::npos,
+                            "following summary must show pending work without total percentage");
+                    if (phase == Phase::Display)
+                        require(text.find("本次列表更新 4 / 7 行") != std::string::npos &&
+                            text.find("%") == std::string::npos, "display summary must show this submission only");
+                    if (phase == Phase::Failed)
+                        require(text.find("协议解析失败") != std::string::npos &&
+                            text.find("当前列表为上次结果") != std::string::npos, "failure must stay visible when collapsed");
+                    ImGuiWindow* child = nullptr;
+                    for (auto* window : GImGui->Windows)
+                        if (window->Active && std::strstr(window->Name, "##transfer_history_status")) child = window;
+                    require(child && child->DC.CursorMaxPos.x <= child->ClipRect.Max.x + 1 &&
+                        child->DC.CursorMaxPos.y <= child->ClipRect.Max.y + 1,
+                        "compact status must fit at narrow width and large font");
+                    if (phase == Phase::Completed) {
+                        frame("history-summary-" + std::to_string(static_cast<int>(size.x)) + "-" +
+                            std::to_string(static_cast<int>(scale * 100)));
+                        const auto first = child->DC.CursorStartPos;
+                        const auto detailId = child->GetID(("转换详情##history_" + std::to_string(status.taskId)).c_str());
+                        GImGui->NavWindow = child;
+                        ImGui::SetNavID(detailId, ImGuiNavLayer_Main, child->NavRootFocusScopeId, ImRect());
+                        frame();
+                        const auto rect = ImGui::WindowRectRelToAbs(child, child->NavRectRel[ImGuiNavLayer_Main]);
+                        if (size.x > 1000)
+                            require(rect.Min.y - first.y < ImGui::GetTextLineHeightWithSpacing() * 1.5F,
+                                "wide completed result must occupy one summary text line");
+                        const auto toggleDetails = [&] {
+                            io.AddMousePosEvent(rect.GetCenter().x, rect.GetCenter().y); frame();
+                            io.AddMouseButtonEvent(0, true); frame();
+                            io.AddMouseButtonEvent(0, false); frame();
+                        };
+                        toggleDetails();
+                        require(text.find("当前记录字节 50 / 100") != std::string::npos &&
+                            text.find("回退展示行 2") != std::string::npos,
+                            "terminal details must expand at each width and font size");
+                        require(child->DC.CursorMaxPos.x <= child->ClipRect.Max.x + 1 &&
+                            child->DC.CursorMaxPos.y <= child->ClipRect.Max.y + 1,
+                            "expanded terminal details must fit at narrow width and large font");
+                        frame("history-details-" + std::to_string(static_cast<int>(size.x)) + "-" +
+                            std::to_string(static_cast<int>(scale * 100)));
+                        toggleDetails();
+                        require(text.find("当前记录字节") == std::string::npos,
+                            "terminal details must collapse without dismissing summary");
+                    }
+                }
+            }
+        }
+        ImGui::GetStyle().FontScaleMain = oldScale;
+        io.DisplaySize = ImVec2(1280, 700);
+        app::Application::TransferHistoryStatus final;
+        final.taskId = ++taskId; final.phase = Phase::Completed;
+        final.discardedRows = 4; final.reason = "转换完成，没有匹配协议的有效帧";
+        app::ApplicationBackpressureTestAccess::setHistoryStatus(application, final);
+        frame(); frame();
+        require(text.find("本次裁剪 4 行") != std::string::npos &&
+            text.find("没有匹配协议的有效帧") != std::string::npos, "zero frames and trimming must stay visible");
+        ImGuiWindow* child = nullptr;
+        for (auto* window : GImGui->Windows)
+            if (window->Active && std::strstr(window->Name, "##transfer_history_status")) child = window;
+        require(child != nullptr, "terminal summary must remain visible until dismissed");
+        GImGui->NavWindow = child;
+        ImGui::SetNavID(child->GetID("关闭转换状态"), ImGuiNavLayer_Main, child->NavRootFocusScopeId, ImRect());
+        frame();
+        const auto close = ImGui::WindowRectRelToAbs(child, child->NavRectRel[ImGuiNavLayer_Main]).GetCenter();
+        io.AddMousePosEvent(close.x, close.y); frame();
+        io.AddMouseButtonEvent(0, true); frame();
+        io.AddMouseButtonEvent(0, false); frame();
+        require(!application.transferHistoryStatus() && !receive.frameRows.empty() &&
+            receive.frameRows.back().message == "preserved-result", "dismiss summary must preserve frame data");
     }
     static void verify(app::Application& application, GuiRuntime& runtime)
     {
@@ -696,25 +921,39 @@ struct GuiRuntimeTestAccess {
         state.dirty = false;
         runtime.importCsvDataFromPath(importDir / "missing.csv");
         require(!runtime.csvDataImportError_.empty(), "import fixture must fail");
-        require(application.runtimeConfig().gui.fileDialogs.lastImportDirectory == fileDialogPathText(importDir),
+        require(application.runtimeConfig().gui.fileDialogs.directories.at("csv.import") == fileDialogPathText(importDir),
                 "confirmed directory survives import failure");
-        require(store.load(configPath).config.gui.fileDialogs.lastImportDirectory == fileDialogPathText(importDir),
+        require(store.load(configPath).config.gui.fileDialogs.directories.at("csv.import") == fileDialogPathText(importDir),
                 "confirmed directory survives restart");
         require(!state.dirty, "directory persistence must not mark other settings dirty");
+        runtime.rememberFileDialogPath(root / "elf.elf", "elf.open");
+        runtime.rememberFileDialogPath(root / "recording" / "capture.psraw", "recording");
+        runtime.rememberFileDialogPath(root / "host" / "log.txt", "log.host");
+        runtime.rememberFileDialogPath(root / "script" / "log.txt", "log.script");
+        runtime.rememberFileDialogPath(root / "transfer" / "log.txt", "log.transfer");
+        runtime.rememberFileDialogPath(importDir, "lua.directory", true);
+        const auto restored = store.load(configPath).config.gui.fileDialogs;
+        require(restored.directories.at("csv.import") == fileDialogPathText(importDir) &&
+                restored.directories.at("elf.open") == fileDialogPathText(root) &&
+                restored.directories.at("recording") == fileDialogPathText(root / "recording") &&
+                restored.directories.at("log.host") != restored.directories.at("log.script") &&
+                restored.directories.at("log.transfer") != restored.directories.at("log.script") &&
+                restored.directories.at("lua.directory") == fileDialogPathText(importDir),
+                "内置及 Lua 用途目录必须隔离且持久化");
         const auto beforeCancel = application.runtimeConfig().gui.fileDialogs;
         runtime.deferBuiltinFileOperation([] {});
         runtime.prepareBuiltinFileOperation();
         beginFrame();
         endFrame();
         runtime.dispatchBuiltinFileOperation();
-        require(application.runtimeConfig().gui.fileDialogs.lastImportDirectory == beforeCancel.lastImportDirectory,
+        require(application.runtimeConfig().gui.fileDialogs.directories == beforeCancel.directories,
                 "canceled operation does not remember browsing");
         // 损坏配置保存失败仍允许继续读取用户确认的文件，并保留本次会话目录。
         { std::ofstream output(configPath); output << "gui: ["; }
         runtime.importCsvDataFromPath(root / "missing-again.csv");
         require(!runtime.fileDialogPreferenceError_.empty() && !runtime.csvDataImportError_.empty(),
                 "preference save failure does not block file operation");
-        require(application.runtimeConfig().gui.fileDialogs.lastImportDirectory == fileDialogPathText(root),
+        require(application.runtimeConfig().gui.fileDialogs.directories.at("csv.import") == fileDialogPathText(root),
                 "save failure preserves in-memory preference");
         require(!state.dirty, "save error must not mark configuration dirty");
         std::ifstream input(configPath);
@@ -834,6 +1073,8 @@ int main(int argc, char** argv)
           protoscope::ui::GuiRuntimeTestAccess::verifyFullscreenFft(app, runtime);
           protoscope::ui::GuiRuntimeTestAccess::verifyTransferHistorySwitchModal(app, runtime);
           protoscope::ui::GuiRuntimeTestAccess::verifyLoggingHistorySwitchSettings(app, runtime);
+          protoscope::ui::GuiRuntimeTestAccess::verifySettingsHelp(runtime);
+          protoscope::ui::GuiRuntimeTestAccess::verifyHistoryStatusLayout(app, runtime);
         std::cout << "file operation frame boundary and focus passed\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

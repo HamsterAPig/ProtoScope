@@ -4644,6 +4644,9 @@ std::optional<FileDialogRequest> ScriptHost::protoFileDialog(FileDialogKind kind
                                                             std::move(*filters),
                                                             createdAtMs);
     request.runtimeGeneration = scriptLoaded_ ? runtimeGeneration_ : runtimeGeneration_ + 1;
+    // 创建时固定协议归属，排队期间切换协议不改变目录记忆分组。
+    request.protocolDirectory = protocolDirectory_;
+    request.historyKey = luaStringField(table, "history_key").value_or("");
     fileDialogRequests_.push_back(request);
     return request;
 }

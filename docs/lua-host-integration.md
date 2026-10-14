@@ -102,10 +102,14 @@ proto.ui.alert({
 
 - `title`
 - `default_path`
+- `history_key`：可选目录历史分组名，仍按所属协议和对话框类型隔离。
 - `filters`
 - `mode`：`open_file_dialog` 支持 `open` 和 `save`
 
 像宽高、位置、是否允许拖动这类窗口行为，暂不承诺由 Lua 控制。
+
+目录历史默认按请求创建时的协议目录、类型及标题分组，优先于 `default_path` 的目录；
+脚本指定的文件名保留。确认后记录，取消不更新，目录选择记录所选目录。
 
 文件读写和文件发送的稳定字段：
 

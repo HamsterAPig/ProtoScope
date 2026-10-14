@@ -1,4 +1,5 @@
 #pragma once
+#include "protoscope/ui/file_dialog_paths.hpp"
 
 #include "protoscope/app/application.hpp"
 #include "protoscope/build/version.hpp"
@@ -1164,11 +1165,11 @@ namespace {
             const auto selected = nativeDirectoryDialog(
                 window,
                 title.c_str(),
-                request.defaultPath.empty() ? std::filesystem::path{} : std::filesystem::path(request.defaultPath),
+                std::filesystem::u8path(request.defaultPath),
                 error);
             if (selected.has_value()) {
                 event.state = "selected";
-                event.path = selected->generic_string();
+                event.path = fileDialogPathText(*selected);
             } else if (!error.empty()) {
                 event.state = "error";
                 event.error = error;
@@ -1185,13 +1186,13 @@ namespace {
             window,
             title.c_str(),
             filters.c_str(),
-            request.defaultPath.empty() ? std::filesystem::path{} : std::filesystem::path(request.defaultPath),
+            std::filesystem::u8path(request.defaultPath),
             request.kind == scripting::FileDialogKind::SaveFile,
             nullptr,
             error);
         if (selected.has_value()) {
             event.state = "selected";
-            event.path = selected->generic_string();
+            event.path = fileDialogPathText(*selected);
         } else if (!error.empty()) {
             event.state = "error";
             event.error = error;

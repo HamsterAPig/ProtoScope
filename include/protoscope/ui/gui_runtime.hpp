@@ -160,8 +160,9 @@ private:
     std::optional<std::filesystem::path> builtinFileDialog(
         GLFWwindow* window, const wchar_t* title, const wchar_t* filter,
         const std::filesystem::path& initialDirectory, const std::filesystem::path& suggestedFileName, bool saveDialog,
-        const wchar_t* extension, std::string& error, bool remember = true);
-    void rememberFileDialogPath(const std::filesystem::path& path, bool exporting);
+        const wchar_t* extension, std::string& error, const std::string& purpose);
+    void rememberFileDialogPath(const std::filesystem::path& path, const std::string& purpose,
+                                bool selectedDirectory = false);
     void saveFileDialogPreferences(const config::DataExportConfig* lastExport = nullptr);
     std::string fileDialogPreferenceError_;
     void drawRawCaptureFileDialogs();

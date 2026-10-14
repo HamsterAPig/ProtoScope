@@ -447,6 +447,28 @@ void recordExport()
     require(f.host.drainEvents().size()==1,"record export obeys file I/O disable");
     require(!std::filesystem::exists(f.directory.path()/"disabled.psrec"),"disabled export creates no file");
 }
+
+void fileDialogHistory()
+{
+    Fixture f;
+    require(f.load(R"(
+        function on_open(ctx)
+            assert(proto.fs.open_file_dialog{title="Import",default_path="source.csv",history_key="telemetry"})
+            assert(proto.fs.open_file_dialog{title="Export",mode="save",default_path="result.csv"})
+            assert(proto.fs.open_dir_dialog{title="Directory"})
+        end
+    )"), "Lua 目录历史脚本加载");
+    f.open();
+    const auto dialogs = f.host.drainFileDialogRequests();
+    require(dialogs.size() == 3, "Lua 对话框请求数量");
+    const auto protocol = f.host.protocolDirectory();
+    require(dialogs[0].protocolDirectory == protocol && dialogs[0].historyKey == "telemetry" &&
+            dialogs[0].defaultPath == "source.csv", "Lua 显式历史键及创建时协议");
+    require(dialogs[1].historyKey.empty() && dialogs[1].kind == scripting::FileDialogKind::SaveFile &&
+            dialogs[2].kind == scripting::FileDialogKind::OpenDir, "Lua 默认历史类型");
+    require(f.load("function on_open(ctx) end"), "Lua 重载");
+    require(dialogs[0].protocolDirectory == protocol, "已创建请求归属不随重载改变");
+}
 }
 
 int main()
@@ -456,7 +478,7 @@ int main()
              {"recording",recording},{"kv_reload",kvAndReload},{"validation",validation},
              {"declarations",declarations},{"worker_callbacks",workerCallbacks},{"field_bindings",fieldBindings},
              {"binding_failures",bindingFailures},{"query_fields",queryFields},{"record_export",recordExport},
-             {"record_import",recordImport}}) {
+             {"record_import",recordImport},{"file_dialog_history",fileDialogHistory}}) {
         try { std::cout << "[RUN] " << name << std::endl; run(); std::cout << "[PASS] " << name << std::endl; }
         catch (const std::exception& error) { ++failed; std::cerr << "[FAIL] " << name << ": " << error.what() << '\n'; }
     }

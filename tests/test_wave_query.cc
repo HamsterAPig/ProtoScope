@@ -69,6 +69,33 @@ void testDigitalFidelity()
             "disabling digital display releases count storage");
 }
 
+void testDataGeneration()
+{
+    OscilloscopeBuffer buffer;
+    const auto generation = [&] { return buffer.snapshot(-1e20, 1e20, false).channels[0].dataGeneration; };
+    buffer.append(0, {.samples = {{1, 1}, {2, 2}}});
+    const auto original = generation();
+    buffer.append(0, {.samples = {{3, 3}}});
+    require(generation() == original, "append preserves channel generation");
+    buffer.setMaxTotalSamples(2);
+    require(generation() == original, "trim preserves channel generation");
+    buffer.configureChannels(0);
+    buffer.append(0, {.samples = {{1, 10}, {2, 20}}});
+    require(generation() != original, "recreated channel changes generation");
+    const auto rebuilt = generation();
+    buffer.clear();
+    buffer.append(0, {.samples = {{1, 10}, {2, 20}}});
+    require(generation() != rebuilt, "clear changes generation");
+    const auto cleared = generation();
+    buffer.append(0, {.samples = {{0, 4}, {1, 5}}});
+    require(generation() != cleared, "time reset changes generation");
+    OscilloscopeBuffer replacement;
+    replacement.append(0, {.samples = {{0, 99}, {1, 99}}});
+    const auto previous = generation();
+    buffer = std::move(replacement);
+    require(generation() != previous, "buffer replacement changes generation");
+}
+
 void testDigitalCounts()
 {
     OscilloscopeBuffer buffer;
@@ -527,6 +554,7 @@ int main()
         testAnalogEdgeStability();
         testIrregularAnalogEdges();
         testDigitalFidelity();
+        testDataGeneration();
         testDigitalCounts();
         testDigitalActivity();
         testTimeEnvelope();

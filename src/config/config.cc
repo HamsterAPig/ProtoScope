@@ -772,6 +772,10 @@ namespace {
         config.gui.wave.showFftLegend = readScalar<bool>(wave, "show_fft_legend", config.gui.wave.showFftLegend);
         config.gui.wave.followMeasurementCursorsOnScroll = readScalar<bool>(
             wave, "follow_measurement_cursors_on_scroll", config.gui.wave.followMeasurementCursorsOnScroll);
+        config.gui.wave.measurementVisibleWindowOnly = readScalar<bool>(
+            wave, "measurement_visible_window_only", config.gui.wave.measurementVisibleWindowOnly);
+        config.gui.wave.measurementFollowRefreshIntervalMs = readScalar<std::uint64_t>(
+            wave, "measurement_follow_refresh_interval_ms", config.gui.wave.measurementFollowRefreshIntervalMs);
         config.gui.wave.cursorFftHighlightRgba =
             readFloat4(wave, "cursor_fft_highlight_rgba", config.gui.wave.cursorFftHighlightRgba);
         config.gui.wave.fullscreenMode = parseWaveFullscreenMode(
@@ -899,6 +903,11 @@ namespace {
             readScalar<std::string>(dialogs, "last_import_directory", "");
         config.gui.fileDialogs.lastExportDirectory = readScalar<std::string>(
             dialogs, "last_export_directory", readScalar<std::string>(lastExport, "directory", ""));
+        if (const auto directories = childNode(dialogs, "directories"); directories && !directories.IsNull()) {
+            if (!directories.IsMap()) throw std::runtime_error("file_dialogs.directories 必须为映射");
+            for (const auto& entry : directories)
+                config.gui.fileDialogs.directories[entry.first.as<std::string>()] = entry.second.as<std::string>();
+        }
         if (lastExport) {
             auto& value = config.gui.lastDataExport;
             value.valid = readScalar<bool>(lastExport, "valid", false);
@@ -1250,6 +1259,8 @@ namespace {
         gui["wave"]["show_channel_legend"] = config.gui.wave.showChannelLegend;
         gui["wave"]["show_fft_legend"] = config.gui.wave.showFftLegend;
         gui["wave"]["follow_measurement_cursors_on_scroll"] = config.gui.wave.followMeasurementCursorsOnScroll;
+        gui["wave"]["measurement_visible_window_only"] = config.gui.wave.measurementVisibleWindowOnly;
+        gui["wave"]["measurement_follow_refresh_interval_ms"] = config.gui.wave.measurementFollowRefreshIntervalMs;
         gui["wave"]["cursor_fft_highlight_rgba"] = makeFloat4Node(config.gui.wave.cursorFftHighlightRgba);
         gui["wave"]["fullscreen_mode"] = toWaveFullscreenModeText(config.gui.wave.fullscreenMode);
         gui["wave"]["reset_viewport"]["apply_on_plot_setup_reset"] =
@@ -1289,6 +1300,7 @@ namespace {
             ? "current_protocol" : "prefer_package";
         gui["file_dialogs"]["last_import_directory"] = config.gui.fileDialogs.lastImportDirectory;
         gui["file_dialogs"]["last_export_directory"] = config.gui.fileDialogs.lastExportDirectory;
+        gui["file_dialogs"]["directories"] = config.gui.fileDialogs.directories;
         gui["raw_capture"]["live_limit_bytes"] = config.gui.rawCapture.liveLimitBytes;
         gui["raw_capture"]["recording_queue_limit_bytes"] = config.gui.rawCapture.recordingQueueLimitBytes;
         gui["transfer_log"]["replay_raw_history_on_schema_switch"] = config.gui.replayRawHistoryOnSchemaSwitch;
@@ -1786,6 +1798,7 @@ bool ConfigStore::saveFileDialogPreferences(const std::filesystem::path& path,
         }
         root["gui"]["file_dialogs"]["last_import_directory"] = preferences.lastImportDirectory;
         root["gui"]["file_dialogs"]["last_export_directory"] = preferences.lastExportDirectory;
+        root["gui"]["file_dialogs"]["directories"] = preferences.directories;
         if (lastExport) {
             auto last = root["gui"]["last_data_export"];
             last["valid"] = lastExport->valid;
@@ -1993,6 +2006,8 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.showChannelLegend = config.gui.wave.showChannelLegend;
     wave.showFftLegend = config.gui.wave.showFftLegend;
     wave.followMeasurementCursorsOnScroll = config.gui.wave.followMeasurementCursorsOnScroll;
+    wave.measurementVisibleWindowOnly = config.gui.wave.measurementVisibleWindowOnly;
+    wave.measurementFollowRefreshIntervalMs = config.gui.wave.measurementFollowRefreshIntervalMs;
     wave.cursorFftHighlightRgba = config.gui.wave.cursorFftHighlightRgba;
     wave.resetViewportApplyOnPlotSetupReset = config.gui.wave.resetViewport.applyOnPlotSetupReset;
     wave.resetViewportApplyOnManualClear = config.gui.wave.resetViewport.applyOnManualClear;
@@ -2068,6 +2083,8 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore, AppConf
     config.gui.wave.showChannelLegend = dockStore.waveState().view.showChannelLegend;
     config.gui.wave.showFftLegend = dockStore.waveState().view.showFftLegend;
     config.gui.wave.followMeasurementCursorsOnScroll = dockStore.waveState().view.followMeasurementCursorsOnScroll;
+    config.gui.wave.measurementVisibleWindowOnly = dockStore.waveState().view.measurementVisibleWindowOnly;
+    config.gui.wave.measurementFollowRefreshIntervalMs = dockStore.waveState().view.measurementFollowRefreshIntervalMs;
     config.gui.wave.cursorFftHighlightRgba = dockStore.waveState().view.cursorFftHighlightRgba;
     config.gui.wave.resetViewport.applyOnPlotSetupReset = dockStore.waveState().view.resetViewportApplyOnPlotSetupReset;
     config.gui.wave.resetViewport.applyOnManualClear = dockStore.waveState().view.resetViewportApplyOnManualClear;

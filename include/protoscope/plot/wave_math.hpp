@@ -203,7 +203,8 @@ WaveChannelScaleWheelResult stepWaveChannelValuePerDivision(double currentValueP
 std::optional<CursorReadout> findNearestDisplayByTime(const WaveDisplayData& displayData,
                                                       std::size_t channelIndex,
                                                       double time,
-                                                      double maxTimeDistance);
+                                                      double maxTimeDistance,
+                                                      bool fullHistory = false);
 std::optional<CursorReadout> findNearestDisplayByTimeAcrossChannels(const WaveDisplayData& displayData,
                                                                     double time,
                                                                     double maxTimeDistance);

@@ -349,6 +349,11 @@ namespace {
         if (!available) {
             for (auto i = firstMeasurementChip; i < chips.size(); ++i) chips[i].value = "N/A";
         }
+        if (available && chips.size() > firstMeasurementChip && view.measurementSnapshotRange) {
+            addMetricChip(chips, "统计 A", view.measurementSnapshotRange->first, displayData.timeUnit.c_str());
+            addMetricChip(chips, "统计 B", view.measurementSnapshotRange->second, displayData.timeUnit.c_str());
+            if (view.measurementUpdatePending) addChip(chips, "统计", "待更新");
+        }
         return channel ? channel->label : std::string{};
     }
 

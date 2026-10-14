@@ -119,14 +119,26 @@ gui:
 
 ### gui.file_dialogs
 
-- `last_import_directory`：内置导入及回放载入共用的历史目录。
-- `last_export_directory`：内置导出、报告、日志、请求追踪和录制共用的历史目录。
+- `directories`：稳定用途标识到目录的映射；只保存目录，不保存文件名。
+  内置用途包括 `data.import/export`、`raw.import/export`、`csv.import`、
+  `wave.csv.export`、`raw.csv.export`、`replay.import`、`session.import/export`、
+  `recording`、`analysis.export`、`elf.open`、`trace.export`、`protocol.root`、
+  `log.transfer`、`log.host`、`log.script`，每种用途独立保存。
+- `last_import_directory` / `last_export_directory`：旧配置兼容回退；新选择只更新对应用途。
 
 文件对话框确认后立即保存，取消浏览不更新；目录失效时逐级回退，不创建目录、不改写历史。
 未配置新导出字段时从 `gui.last_data_export.directory` 迁移；目录偏好保存不提交其他未保存设置。
-ELF 文件继续按协议记忆，Lua 自定义文件对话框与协议根目录选择不使用这两个字段。
+ELF 文件目录独立记录；协议 ELF 加载文件状态仍保留原规则。
+Lua 默认按创建请求时的协议目录、对话框类型和标题分组，可用 `history_key` 替换标题分组。
+历史目录优先于脚本 `default_path`，文件名仍来自脚本；选文件记父目录，选目录记所选目录。
 
 ### gui.wave
+
+- `measurement_visible_window_only`：默认 `false`，测量完整 A/B 区间，即使游标离开视口。
+  开启后只统计 A/B 与可视窗口的交集，与“游标跟随滚动”独立。
+- `measurement_follow_refresh_interval_ms`：默认 `200`，只限制跟随持续自动滚动的统计提交频率。
+  `0` 不额外限频，仍最多一个在途任务；人工拖动只更新轻量读数，释放后统计最终区间。
+  跟随滚动时可显示最近完成快照，浮层标注实际统计 A/B 和待更新状态；停止后立即请求最终区间。
 
 波形状态统一显示在底部状态栏，独立于连接信息和通用操作结果。
 普通状态最多每 500ms 更新一次；等待不足 300ms 不显示，已显示的等待至少保留 1000ms。

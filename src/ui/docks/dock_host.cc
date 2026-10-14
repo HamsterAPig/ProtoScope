@@ -712,13 +712,17 @@ void GuiRuntime::drawProtocolDock()
 #if defined(_WIN32)
     if (drawUiButton("浏览...")) {
         std::string dialogError;
+        const auto directory = resolveFileDialogDirectory(
+            fileDialogHistory(application_.runtimeConfig().gui.fileDialogs.directories, "protocol.root"),
+            std::filesystem::u8path(lua.protocolRootDir), executableDir_);
         const auto selectedDir =
-            nativeDirectoryDialog(window_, L"选择协议根目录", std::filesystem::path(lua.protocolRootDir), dialogError);
+            nativeDirectoryDialog(window_, L"选择协议根目录", directory, dialogError);
         if (!dialogError.empty()) {
             application_.setStatusMessage(dialogError);
         }
         if (selectedDir.has_value()) {
-            lua.protocolRootDir = selectedDir->generic_string();
+            rememberFileDialogPath(*selectedDir, "protocol.root", true);
+            lua.protocolRootDir = fileDialogPathText(*selectedDir);
             refreshProtocolRoot(configStore_, lua, protocolDirDraft_, protocolDirDraftModel_);
             application_.markProtocolEdited();
             application_.setStatusMessage("协议根目录已更新");
@@ -909,33 +913,52 @@ void GuiRuntime::drawTransferLogSection(float logHeight)
                 case Phase::Cancelled: phase = "取消"; break;
                 case Phase::Failed: phase = "失败"; break;
             }
-            ImGui::TextWrapped("转换状态：%s · 已用 %.1f 秒%s", phase, status.elapsedSeconds,
-                status.previousResults ? " · 列表为上次结果" : "");
+            std::string progress;
             if (status.phase == Phase::History) {
                 const auto percent = status.historyTotal ?
                     100.0 * static_cast<double>(status.historyDone) / static_cast<double>(status.historyTotal) : 0.0;
-                ImGui::TextWrapped("历史记录 %zu / %zu（历史阶段 %.1f%%，非总进度）",
+                char text[160];
+                std::snprintf(text, sizeof(text), "历史阶段 %zu / %zu（%.1f%%）",
                     status.historyDone, status.historyTotal, percent);
+                progress = text;
             } else if (status.phase == Phase::Following) {
-                ImGui::TextWrapped("历史记录 %zu / %zu；新增已处理 %zu 条 / %zu 字节，待处理 %zu 条 / %zu 字节（含边界 profile）",
-                    status.historyDone, status.historyTotal, status.followingDone, status.followingBytesDone,
-                    status.followingPending, status.followingBytesPending);
+                progress = "新增待处理 " + std::to_string(status.followingPending) + " 条";
             } else if (status.phase == Phase::Display) {
-                ImGui::TextWrapped("本次列表更新 %zu / %zu 行，待结算 %zu 行；后续实时队列不计入本次完成条件",
-                    status.displayTotal - status.displayPending, status.displayTotal, status.displayPending);
+                progress = "本次列表更新 " +
+                    std::to_string(status.displayTotal - (std::min)(status.displayPending, status.displayTotal)) +
+                    " / " + std::to_string(status.displayTotal) + " 行";
             }
-            if (status.phase == Phase::History && status.followingPending > 0)
+            if (!progress.empty()) progress += "；";
+            ImGui::TextWrapped("转换状态：%s · %.1f 秒 · %s有效帧 %zu",
+                phase, status.elapsedSeconds, progress.c_str(), status.validFrames);
+            // 关键结果始终可见；折叠详情不能遮住失败、裁剪或旧列表提示。
+            if (status.previousResults) ImGui::TextWrapped("当前列表为上次结果");
+            if (status.discardedRows > 0) ImGui::TextWrapped("本次裁剪 %zu 行，部分结果未保留", status.discardedRows);
+            if (!status.reason.empty() && (status.phase != Phase::Completed || status.validFrames == 0 ||
+                    status.discardedRows > 0))
+                ImGui::TextWrapped("原因：%s", status.reason.c_str());
+            // 按任务隔离展开状态，新一轮转换默认收起；记录测试日志也不能自动展开。
+            const auto detailsLabel = "转换详情##history_" + std::to_string(status.taskId);
+            const bool detailsOpen = ImGui::TreeNodeEx(detailsLabel.c_str(),
+                ImGuiTreeNodeFlags_NoTreePushOnOpen | ImGuiTreeNodeFlags_NoAutoOpenOnLog);
+            if (!status.running()) {
+                const float closeWidth = ImGui::CalcTextSize("关闭转换状态").x + 2.0F * ImGui::GetStyle().FramePadding.x;
+                if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + closeWidth <=
+                        ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x)
+                    ImGui::SameLine();
+                if (ImGui::SmallButton("关闭转换状态")) application_.dismissTransferHistoryStatus();
+            }
+            if (detailsOpen) {
+                ImGui::TextWrapped("历史记录 %zu / %zu；新增已处理 %zu 条 / %zu 字节",
+                    status.historyDone, status.historyTotal, status.followingDone, status.followingBytesDone);
                 ImGui::TextWrapped("新增待处理 %zu 条 / %zu 字节", status.followingPending, status.followingBytesPending);
-            if (status.running() && status.currentBytesTotal > 0)
-                ImGui::TextWrapped("当前记录字节 %zu / %zu", status.currentBytesDone, status.currentBytesTotal);
-            ImGui::TextWrapped("有效帧 %zu；回退展示行 %zu\n本次提交 %zu 行，裁剪 %zu 行\n列表保留 %zu 行，上限 %zu；不保证保留全部结果",
-                status.validFrames, status.fallbackRows, status.displaySubmitted, status.discardedRows,
-                receive.frameRows.size(), application_.captureConfig().gui.logHistory.transferFrameLimit);
-            if (!status.running() && (status.displayPending || status.followingPending))
-                ImGui::TextWrapped("终止时待处理新增 %zu 条 / %zu 字节，待更新列表 %zu 行",
-                    status.followingPending, status.followingBytesPending, status.displayPending);
-            if (!status.reason.empty()) ImGui::TextWrapped("原因：%s", status.reason.c_str());
-            if (!status.running() && ImGui::SmallButton("关闭转换状态")) application_.dismissTransferHistoryStatus();
+                if (status.currentBytesTotal > 0)
+                    ImGui::TextWrapped("当前记录字节 %zu / %zu", status.currentBytesDone, status.currentBytesTotal);
+                ImGui::TextWrapped("回退展示行 %zu；本次提交 %zu 行，待更新 %zu 行",
+                    status.fallbackRows, status.displaySubmitted, status.displayPending);
+                ImGui::TextWrapped("列表保留 %zu 行，上限 %zu；超限结果可能裁剪",
+                    receive.frameRows.size(), application_.captureConfig().gui.logHistory.transferFrameLimit);
+            }
             ImGui::EndChild();
             ImGui::Separator();
         }
@@ -991,7 +1014,8 @@ void GuiRuntime::drawTransferLogSection(float logHeight)
                                  viewport->WorkPos.y + viewport->WorkSize.y * 0.5F),
                             ImGuiCond_Appearing, ImVec2(0.5F, 0.5F));
     if (ImGui::BeginPopupModal("##transfer_history_switch", nullptr,
-                              ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize)) {
+                              ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize |
+                              ImGuiWindowFlags_NoTitleBar)) {
         // Application 失效不等于 ImGui 弹窗关闭；旧窗口不得操作后来同帧产生的新请求。
         if (!confirmationPending || transferHistoryModalId_ != confirmationId) {
             ImGui::CloseCurrentPopup();
@@ -1000,15 +1024,29 @@ void GuiRuntime::drawTransferLogSection(float logHeight)
         }
         const bool scopeFull = application_.historySwitchScope() == config::TransferLogHistoryScope::RetainedCapture;
         // 文本独立滚动，按钮留在固定页脚；窄窗口允许按钮换行，避免被裁到屏幕外。
-        const float footerHeight = 3.0F * (ImGui::GetFrameHeightWithSpacing()) +
-            2.0F * ImGui::GetStyle().WindowPadding.y + ImGui::GetFrameHeight();
+        // 按实际按钮换行数预留页脚，避免大字体下空白页脚挤掉历史范围。
+        int buttonRows = 1;
+        float rowWidth = 0.0F;
+        for (const char* label : {"使用历史", "不使用历史", "取消"}) {
+            const float buttonWidth = ImGui::CalcTextSize(label).x + 2.0F * ImGui::GetStyle().FramePadding.x;
+            const float spacing = rowWidth > 0.0F ? ImGui::GetStyle().ItemSpacing.x : 0.0F;
+            if (rowWidth > 0.0F && rowWidth + spacing + buttonWidth > ImGui::GetContentRegionAvail().x) {
+                ++buttonRows;
+                rowWidth = buttonWidth;
+            } else rowWidth += spacing + buttonWidth;
+        }
+        const float footerHeight = buttonRows * ImGui::GetFrameHeightWithSpacing() +
+            2.0F * ImGui::GetStyle().WindowPadding.y + ImGui::GetStyle().ItemSpacing.y;
         ImGui::BeginChild("##history_switch_text", ImVec2(0.0F, (std::max)(1.0F,
-            (std::min)(150.0F * scale, modalMax.y - footerHeight))));
+            (std::min)(180.0F * scale, modalMax.y - footerHeight))));
         ImGui::TextUnformatted("切换为逐帧视图");
-        ImGui::TextWrapped("是否使用已有原始历史重建逐帧记录？范围：%s。",
-                           scopeFull ? "底层完整采集/导入历史（不保证找回已裁剪字节、不自动重读文件）"
-                                     : "收发面板当前保留的原始 RX/TX 行");
-        ImGui::TextWrapped("清空面板不删除底层仍保留的采集记录；选择底层范围并同意后可恢复其逐帧展示。已裁剪的字节无法恢复。");
+        ImGui::Spacing();
+        ImGui::TextWrapped("当前历史范围：%s", scopeFull ? "底层保留的采集 / 导入历史" : "面板保留的原始 RX / TX 行");
+        ImGui::Separator();
+        ImGui::TextWrapped("使用历史：重新解析所选范围，更新逐帧列表。");
+        ImGui::TextWrapped("不使用历史：保留已有逐帧结果，只解析后续新数据。");
+        if (scopeFull)
+            ImGui::TextWrapped("清空面板后仍可使用底层保留数据；已裁剪字节无法恢复，不会重新读取文件。");
         ImGui::EndChild();
         const auto nextButton = [](const char* label) {
             const float width = ImGui::CalcTextSize(label).x + 2.0F * ImGui::GetStyle().FramePadding.x;

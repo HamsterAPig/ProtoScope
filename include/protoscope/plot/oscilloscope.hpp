@@ -171,6 +171,7 @@ struct ChannelView {
     const WaveSample* samples{nullptr};
     WaveStats stats{};
     const WaveSummaryIndex* summaryIndex{nullptr};
+    std::uint64_t dataGeneration{0};
 };
 
 float resolveChannelLineWidth(const ChannelView& channel);
@@ -247,6 +248,7 @@ private:
         std::vector<WaveSample> samples;
         std::size_t sampleIndexOffset{0};
         WaveSummaryIndex summary;
+        std::uint64_t dataGeneration{0};
     };
 
     ChannelBuffer& ensureChannel(std::size_t channelIndex);
